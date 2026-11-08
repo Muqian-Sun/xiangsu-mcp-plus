@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './tmp.mjs';
 import assert from 'node:assert/strict';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { OfficialMcp } from '../src/official.mjs';
