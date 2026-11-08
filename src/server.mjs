@@ -1121,7 +1121,7 @@ export function createServer(deps = {}) {
     {
       name: 'ar_video_import',
       description:
-        '把一个 succeeded 的 AR 视频任务导入目标工程并放进场景，等同面板上勾选它后点「导入素材」（只导这一个，面板里其它勾选的结果不受影响）：视频（和原声）导入为工程资源，场景里建 AR 平面上的视频贴片对象。返回 added_objects（新对象名和 object_path）、package_folders 和 plane_guid（编辑器选中的平面对象）。之后用 scene_tree / inspect_many 看建了哪些对象和组件，capture_preview 看位置和大小，save_project。',
+        '把一个 succeeded 的 AR 视频任务导入目标工程并放进场景，等同面板上勾选它后点「导入素材」（只导这一个，面板里其它勾选的结果不受影响）：视频「混合透明.mp4」、它的视频纹理「混合透明 MP4 播放器」（Mp4Texture，.mp4Tex）和原声「原声.mp3」导入为工程资源；场景里建渲染组「AR跟踪」，其下「AR平面跟踪」（AR 平面，MeshRenderer）上挂「AR 视频主体 N」，以及「AR摄像机」；场景原来是空的时还会建「通用」组（摄像机和灯光）。「AR 视频主体」上：Image 的 texture 是那张视频纹理（播放由它负责，loopCount=-1 无限循环）；AudioComponent 播原声；ARVideoAudioController（编辑器内置组件，参数 playOriginalAudio_target、originalVolume_target、videoTexture_target）让原声跟着视频播。脚本里控制播放：texture.getControl() 的 play() / pause() / resume() / stop()，事件用 APJS.EventManager.getObjectEmitter(texture) 监听 APJS.Mp4Event.PlayBegin / PlayEnd 等；可视化脚本用内置节点「视频纹理播放器」。返回 added_objects（新对象名和 object_path）、package_folders（这次导入新建的资源）和 plane_guid（编辑器选中的「AR平面跟踪」）。之后 capture_preview 看位置和大小，save_project。',
       shape: { ...target, task_id: z.string().min(1).describe('ar_video_submit / ar_video_tasks 返回的 task_id（须 status=succeeded）。') },
       run: plugin('ar_video_import', AR_VIDEO_IMPORT_TIMEOUT_MS),
     },
