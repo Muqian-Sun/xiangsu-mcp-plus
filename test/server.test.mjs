@@ -14,8 +14,6 @@ const OWN = [
   'ai_combine_apply',
   'ai_combine_new',
   'effect_check',
-  'effect_reviews',
-  'effects_mine',
   'ext_status',
   'face_warp_list',
   'face_warp_set_intensity',
@@ -28,30 +26,26 @@ const OWN = [
   'inspiration_collect',
   'inspiration_detail',
   'inspiration_list',
-  'inspiration_nav',
   'library_apply',
   'library_images',
   'library_list',
-  'library_nav',
   'library_search',
   'makeup_layers',
   'menu_add',
   'menu_list',
-  'menu_preview',
   'mobile_preview',
   'music_apply',
-  'music_categories',
   'music_list',
+  'my_effect_reviews',
+  'my_effects',
   'object_remove',
   'preview_frames',
   'project_close',
   'project_new',
   'project_open',
-  'rank_creators_month',
   'rank_hotspots',
-  'rank_innovation_picks',
+  'rank_innovation',
   'rank_list',
-  'rank_nav',
   'rank_subjects',
   'resource_delete_unused',
   'scene_tree',
@@ -64,7 +58,6 @@ const OWN = [
   'works_cleanup',
   'works_download',
   'works_list',
-  'works_nav',
   'works_open',
   'works_search',
 ];
@@ -203,16 +196,18 @@ test('image_view stops before the stdio message limit and lists what it left out
   assert.deepEqual(JSON.parse(one.content.at(-1).text).not_returned, ['https://g/4.gif']);
 });
 
-test('menu_preview and library_images return image addresses without fetching them', async () => {
+test('menu_list details and library_images return image addresses without fetching them', async () => {
   const rows = [
     { menu_id: 'smokey', name: '烟熏妆', description: '一键烟熏妆', image_url: null, image_file: '/hover/smokey.png' },
     { menu_id: 'x', name: '无图项', description: '', image_url: null, image_file: null },
   ];
   const fetchImage = async () => assert.fail('no image may be fetched');
+  const sent = [];
   const { client } = await connect({
     official: fakeOfficial(),
-    callPlugin: async (method) => {
-      if (method === 'menu_preview') return rows;
+    callPlugin: async (method, params) => {
+      sent.push({ method, params });
+      if (method === 'menu_list') return { total: 300, items: rows };
       if (method === 'library_search') return { items: [{ template_id: '901', title: '萌猫造型帽子', kind: 'ai_image' }], raw: [{ templateId: '901' }] };
       if (method === 'library_images') return [{ image_index: 0, url: 'https://img/0.png' }];
       throw Error(`unexpected ${method}`);
@@ -221,12 +216,31 @@ test('menu_preview and library_images return image addresses without fetching th
     fetchImage,
     readImageFile: fetchImage,
   });
-  const menu = await client.callTool({ name: 'menu_preview', arguments: { menu_ids: ['smokey', 'x'] } });
-  assert.deepEqual(JSON.parse(menu.content[0].text), rows);
+  const menu = await client.callTool({ name: 'menu_list', arguments: { query: '妆', details: true } });
+  assert.deepEqual(sent[0], { method: 'menu_list', params: { query: '妆', details: true } });
+  assert.deepEqual(JSON.parse(menu.content[0].text), { total: 300, items: rows });
   assert.equal(menu.content.length, 1);
   await client.callTool({ name: 'library_search', arguments: { query: '猫' } });
   const lib = await client.callTool({ name: 'library_images', arguments: { template_id: '901' } });
   assert.deepEqual(JSON.parse(lib.content[0].text), { template_id: '901', title: '萌猫造型帽子', images: [{ image_index: 0, url: 'https://img/0.png' }] });
+});
+
+test('library_list without panel_key lists the panels instead of a panel page', async () => {
+  const sent = [];
+  const panels = { panels: [{ panel_key: '3d_makeup', name: '美妆', kind: 'general' }] };
+  const { client } = await connect({
+    official: fakeOfficial(),
+    callPlugin: async (method, params, opts) => (sent.push({ method, params, opts }), method === 'library_nav' ? panels : { items: [], raw: [] }),
+  });
+  assert.deepEqual(JSON.parse((await client.callTool({ name: 'library_list', arguments: { project_path: '/proj/A' } })).content[0].text), panels);
+  await client.callTool({ name: 'library_list', arguments: { project_path: '/proj/A', panel_key: '3d_makeup' } });
+  assert.deepEqual(
+    sent.map((c) => [c.method, c.params, c.opts.projectPath]),
+    [
+      ['library_nav', {}, '/proj/A'],
+      ['library_list', { panel_key: '3d_makeup' }, '/proj/A'],
+    ],
+  );
 });
 
 test('ext_status reports the official connection and each window with instance id and self check', async () => {

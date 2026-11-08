@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const STATE = tmpdir('xs-state-');
 process.env.XIANGSU_MCP_EXT_STATE = STATE;
-const { Library, M, CONFIG_PATH } = require('../editor-plugin/library.cjs');
+const { Library, M, CONFIG_PATH, MAX_MENU_PREVIEW } = require('../editor-plugin/library.cjs');
 
 class FaceWarpXItem {
   constructor(id, intensity, brush) {
@@ -258,6 +258,23 @@ test('menu_preview returns description plus a CDN url or an existing bundled fil
   ]);
   assert.throws(() => lib.menuPreview({ menu_ids: [] }), /INVALID_MENU_IDS/);
   assert.throws(() => lib.menuPreview({ menu_ids: ['AIDraw'] }), /MENU_ITEM_NOT_ALLOWED/);
+});
+
+test('menu_list details adds description and picture to each match, and only for a narrow query', () => {
+  const { lib } = setup();
+  assert.deepEqual(lib.menuList({ query: '面部生成', details: true }), {
+    total: 4,
+    items: [
+      { menu_id: 'smokey', name: '烟熏妆', path: 'AI 玩法/面部生成', kind: 'builtin', components: ['GanComponent'], description: '一键烟熏妆', image_url: 'https://cdn/smokey.png', image_file: null },
+      { menu_id: 'SausageLips', name: '香肠嘴', path: 'AI 玩法/面部生成', kind: 'package', components: [], description: '香肠嘴说明', image_url: null, image_file: null },
+    ],
+  });
+  assert.deepEqual(lib.menuList({ query: '没有这项', details: true }), { total: 4, items: [] });
+  assert.equal(lib.menuList({ query: '面部生成' }).items[0].description, undefined);
+  const many = setup();
+  const entries = Array.from({ length: MAX_MENU_PREVIEW + 1 }, (_, i) => ({ menu_id: `m${i}`, name: `项${i}`, path: 'p', kind: 'builtin', components: [] }));
+  many.lib.menuEntries = () => entries;
+  assert.throws(() => many.lib.menuList({ details: true }), new RegExp(`MENU_DETAILS_TOO_MANY: ${MAX_MENU_PREVIEW + 1} items match; narrow the query to at most ${MAX_MENU_PREVIEW}`));
 });
 
 test('face_warp_list reports every warp editor with its path and item intensities', () => {

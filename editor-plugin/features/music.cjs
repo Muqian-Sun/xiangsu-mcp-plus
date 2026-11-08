@@ -50,7 +50,7 @@ const methods = {
       if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
       return { query: query.trim(), ...page(await withTimeout(list.getNextSearchMusicListForDouyin(query.trim()), 'search')) };
     }
-    if (typeof category_code !== 'string' || !category_code) throw Error('INVALID_CATEGORY: pass category_code from music_categories, or query');
+    if (typeof category_code !== 'string' || !category_code) throw Error('INVALID_CATEGORY: pass category_code from music_list called without arguments, or query');
     categories.setSelectedCategory({ codeCategory: category_code });
     return { category_code, ...page(await withTimeout(list.getNextMusicListForDouyin(), 'list')) };
   },

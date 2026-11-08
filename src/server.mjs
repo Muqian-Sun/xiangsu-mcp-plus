@@ -2,6 +2,7 @@
 // stdio MCP server: everything 像塑's official MCP offers (proxied unchanged), plus editor features the
 // official server cannot reach, served by the XiangsuMcpExt editor plugin.
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,12 @@ import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
+
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
+const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
+const LIBRARY_PANELS_TEXT =
+  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。需要扣额度现生成的 AI 面板不在其中。';
+const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -217,7 +224,7 @@ export function createServer(deps = {}) {
   };
   const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。');
   const workPage = {
-    category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
+    category_id: z.string().optional().describe('works_list 返回的 categories 里的分类 ID；省略时用第一个分类（推荐）。'),
     cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor；最后一页的 next_cursor 是 null。'),
     count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
     sort: workSort,
@@ -262,7 +269,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_view',
-      description: `查看图片。其它工具只返回图片地址，要看画面时把地址交给本工具：素材、作品、灵感、热点的 cover_url，作品动图 gif_url，inspiration_detail 的 images，task_detail 内容块 source 里的 url，library_images 的 url；也可以传本机图片文件的绝对路径（如 menu_preview 的 image_file）。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，视频（task_detail 里 mediaType=1 的 source）看不了。单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
+      description: `查看图片。其它工具只返回图片地址，要看画面时把地址交给本工具：素材、作品、灵感、热点的 cover_url，作品动图 gif_url，inspiration_detail 的 images，task_detail 内容块 source 里的 url，library_images 的 url；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，视频（task_detail 里 mediaType=1 的 source）看不了。单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
       shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('http(s) 图片地址，或本机图片文件的绝对路径。') },
       run: async ({ images }) => {
         const content = [];
@@ -284,23 +291,20 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'library_nav',
-      description:
-        '列出像塑官方素材库里可直接应用的分类面板（panel_key）和类型 kind：general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。需要扣额度现生成的 AI 面板不在其中。',
-      shape: { ...target },
-      run: plugin('library_nav'),
-    },
-    {
       name: 'library_list',
-      description: '分页列出某个官方素材面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_url 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。',
+      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_url 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
       shape: {
         ...target,
-        panel_key: z.string().describe('library_nav 返回的 panel_key。'),
+        panel_key: z.string().optional().describe('面板，取不传 panel_key 时返回的 panels 里的 panel_key；省略时只返回面板清单。'),
         category_id: z.string().optional().describe('子分类 ID（收藏为目录名）；省略时用第一个子分类（通常是「全部」）。'),
         cursor: z.union([z.number().int().min(0), z.string()]).optional().describe('翻页游标，原样取上一页的 next_cursor（收藏是字符串）。'),
         count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
       },
-      run: library('library_list'),
+      run: async (a) => {
+        if (a.panel_key !== undefined) return library('library_list')(a);
+        const { project_path, instance_id } = a;
+        return text(await d.callPlugin('library_nav', {}, { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) }));
+      },
     },
     {
       name: 'library_search',
@@ -310,7 +314,7 @@ export function createServer(deps = {}) {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词，如「芒果脸」「腮红」「复古滤镜」。与 queries 二选一。'),
         queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["冷艳", "猫眼", "烟熏", "风格妆"]。与 query 二选一。'),
-        panel_key: z.string().optional().describe('只搜这个面板（library_nav 返回的 panel_key，如 aigc_material）。'),
+        panel_key: z.string().optional().describe('只搜这个面板（library_list 不传 panel_key 时返回的 panel_key，如 aigc_material）。'),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
         count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 50。'),
       },
@@ -345,17 +349,8 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'works_nav',
-      description: '列出像塑首页「模板」里的作品分类（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）和可用排序。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法。任意一个工程窗口开着即可。',
-      shape: { ...target },
-      run: async (a) => {
-        const { project_path, instance_id } = a;
-        return text(await d.callPlugin('works_nav', {}, await homeWindow({ project_path, instance_id })));
-      },
-    },
-    {
       name: 'works_list',
-      description: '分页列出首页某个分类下的作品：template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_url 和动图 gif_url（用 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
+      description: '分页列出像塑首页「模板」某个分类下的作品。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法；任意一个工程窗口开着即可。每次都带上全部分类 categories（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）。每条作品有 template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_url 和动图 gif_url（用 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
       shape: { ...target, ...workPage },
       run: works('works_list'),
     },
@@ -367,7 +362,7 @@ export function createServer(deps = {}) {
         ...target,
         query: z.string().min(1).optional().describe('作品名关键词，如「合掌」「转场」「换装」。与 queries 二选一。'),
         queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["头套", "头饰"]。与 query 二选一。'),
-        category_id: z.string().optional().describe('只搜这个分类（works_nav 返回的分类 ID）；省略时搜全部分类。'),
+        category_id: z.string().optional().describe('只搜这个分类（works_list 返回的 categories 里的分类 ID）；省略时搜全部分类。'),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
         count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 30。'),
         sort: workSort,
@@ -377,7 +372,7 @@ export function createServer(deps = {}) {
     {
       name: 'works_by_effect',
       description:
-        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到两次请求，20 个约 6 秒。',
+        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到两次请求，20 个约 6 秒。',
       shape: {
         ...target,
         effects: z
@@ -527,17 +522,11 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'inspiration_nav',
-      description: '列出像塑「灵感」页的分类（全部、热门音源、头饰、变形等）。灵感是官方和创作者发布的特效创意（图、玩法说明、奖励），首页右侧「灵感」页签就是它。任意一个工程窗口开着即可，用当前登录的账号请求。',
-      shape: { ...target },
-      run: community('inspiration_nav'),
-    },
-    {
       name: 'inspiration_list',
-      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_url（用 image_view 看）。拿到 inspiration_id 后用 inspiration_detail 看详情。',
+      description: '分页列出某个分类下的灵感（灵感是官方和创作者发布的特效创意，首页右侧「灵感」页签就是它）：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_url（用 image_view 看）。每次都带上全部分类 tabs。拿到 inspiration_id 后用 inspiration_detail 看详情。',
       shape: {
         ...target,
-        tab: z.string().optional().describe('inspiration_nav 返回的分类名；省略时用第一个（全部）。'),
+        tab: z.string().optional().describe('分类名，取上次返回的 tabs 里的一个（全部、热门音源、头饰、变形等）；省略时用第一个（全部）。'),
         cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
         // The server answers code 1 at 100 (measured); 50 works.
         count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20。'),
@@ -626,27 +615,17 @@ export function createServer(deps = {}) {
       run: community('growth_route'),
     },
     {
-      name: 'rank_nav',
-      description: '像塑移动版「排行榜」的榜单和筛选项：可用的 rank_type（年轻喜爱榜、特效每日投稿榜、男生/女生喜爱榜、热玩互动榜、模板每日投稿榜、特效跟拍榜）、rank_list 可用的等级 / 面板 / 偏好 / 来自工具 / 年轻喜爱度选项，以及该榜当天（或 date 那天）的分类和条数。分类有两级：level 1 是大类（人像美化、游戏玩法、人设扮演、AI 玩法…），level 2 是细类（基础头饰、测一测、不露脸壁纸…），每个榜的分类不同。按主题的专题榜（如「热爆美妆特效榜」「歌词玩法模板榜」）见 rank_subjects。',
-      shape: {
-        ...target,
-        rank_type: z.number().int().optional().describe('要看分类的榜单，默认 1（年轻喜爱榜）。'),
-        date: z.string().optional().describe('榜单日期 YYYY-MM-DD，默认最新一期。'),
-      },
-      run: community('rank_nav'),
-    },
-    {
       name: 'rank_list',
-      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。要看某个特效的工程，把 effect_id 和 name 交给 works_by_effect，查它在不在首页。',
+      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，每页都带上该榜当天的分类 categories（level 1 大类如人像美化、游戏玩法、人设扮演、AI 玩法，level 2 细类如基础头饰、测一测、不露脸壁纸；每个榜不同）。按主题的专题榜（如「热爆美妆特效榜」）见 rank_subjects。要看某个特效的工程，把 effect_id 和 name 交给 works_by_effect，查它在不在首页。',
       shape: {
         ...target,
-        rank_type: z.number().int().optional().describe('rank_nav 返回的 rank_type，默认 1（年轻喜爱榜）。'),
+        rank_type: z.number().int().optional().describe(`榜单：${RANK_TYPE_TEXT}；默认 1。`),
         date: z.string().optional().describe('榜单日期 YYYY-MM-DD，默认最新一期。'),
-        categories: z.array(z.string()).max(3).optional().describe('rank_nav 返回的分类名，每级最多一个，可叠加，如 ["人像美化","美妆"]（大类 + 细类）。'),
-        levels: z.array(z.string()).optional().describe('特效等级，如 ["S","A+"]。'),
-        panels: z.array(z.string()).optional().describe('面板，如 ["头饰","美妆"]。'),
-        preferences: z.array(z.string()).optional().describe('偏好：友友、潮酷。'),
-        tools: z.array(z.string()).optional().describe('来自工具：像塑桌面端、像塑移动版、轻颜 App。'),
+        categories: z.array(z.string()).max(3).optional().describe('分类名，取上一页返回的 categories，每级最多一个，可叠加，如 ["人像美化","美妆"]（大类 + 细类）。'),
+        levels: rankFilter('levels').describe('特效等级，如 ["S","A+"]。'),
+        panels: rankFilter('panels').describe('面板，如 ["头饰","美妆"]。'),
+        preferences: rankFilter('preferences').describe('偏好。'),
+        tools: rankFilter('tools').describe('来自工具。'),
         young_like_scores: z.array(z.number().int().min(1).max(10)).optional().describe('年轻喜爱度 1–10。'),
         cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
         // The server answers code 1 above 20 (measured).
@@ -679,61 +658,47 @@ export function createServer(deps = {}) {
       run: community('rank_subjects'),
     },
     {
-      name: 'rank_creators_month',
-      description: '创新计划创作者月榜：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金。',
-      shape: { ...target },
-      run: community('rank_creators_month'),
-    },
-    {
-      name: 'rank_innovation_picks',
-      description: '创新计划官方精选（像塑移动版发现页的精选列表）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面。kind=template 为模板（移动版展示的就是这个），kind=effect 为特效。',
+      name: 'rank_innovation',
+      description: '创新计划的榜单。kind=template / effect 为官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面；kind=creators 为创作者月榜：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金（元）。',
       shape: {
         ...target,
-        kind: z.enum(['template', 'effect']).optional().describe('template 模板（默认），effect 特效。'),
+        kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效，creators 创作者月榜。'),
         offset: z.number().int().min(0).optional().describe('翻页偏移，取上一页的 next_offset。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20；服务端会过滤，实际条数可能略少。'),
+        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20；精选由服务端过滤，实际条数可能略少。'),
       },
-      run: community('rank_innovation_picks'),
+      run: community('rank_innovation'),
     },
     {
-      name: 'effects_mine',
+      name: 'my_effects',
       description:
-        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 effect_reviews。',
+        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews。',
       shape: {
         ...target,
         cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
         // Picked, not measured: every failed effect on a page costs one or two more requests.
         count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20（最大 50）。'),
       },
-      run: community('effects_mine'),
+      run: community('my_effects'),
     },
     {
-      name: 'effect_reviews',
+      name: 'my_effect_reviews',
       description:
         '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空）。',
-      shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('effects_mine 返回的 effect_id。') },
-      run: community('effect_reviews'),
-    },
-    {
-      name: 'music_categories',
-      description: '列出抖音音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等），返回 code 和名称。',
-      shape: { ...target },
-      run: async (a) => {
-        const { project_path, instance_id } = a;
-        return text(await d.callPlugin('music_categories', {}, await homeWindow({ project_path, instance_id })));
-      },
+      shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。') },
+      run: community('my_effect_reviews'),
     },
     {
       name: 'music_list',
-      description: '列出抖音音乐：传 query 按关键词搜索，或传 category_code（music_categories 返回）看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面、试听链接和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
+      description: '列出抖音音乐：两个参数都不传时返回音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称；传 query 按关键词搜索，或传 category_code 看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面、试听链接和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词。'),
-        category_code: z.string().min(1).optional().describe('分类 code；与 query 二选一。'),
+        category_code: z.string().min(1).optional().describe('分类 code（不带参数调用时返回）；与 query 二选一。'),
       },
       run: async (a) => {
         const { project_path, instance_id, query, category_code } = a;
-        if ((query === undefined) === (category_code === undefined)) throw Error('INVALID_ARGUMENTS(music_list): pass exactly one of query or category_code');
+        if (query !== undefined && category_code !== undefined) throw Error('INVALID_ARGUMENTS(music_list): pass query or category_code, not both');
+        if (query === undefined && category_code === undefined) return text(await d.callPlugin('music_categories', {}, await homeWindow({ project_path, instance_id })));
         const res = await d.callPlugin('music_list', query !== undefined ? { query } : { category_code }, await homeWindow({ project_path, instance_id }));
         return text(seenMusic.keep(res, { category_code: category_code ?? null }));
       },
@@ -931,16 +896,13 @@ export function createServer(deps = {}) {
     {
       name: 'menu_list',
       description:
-        '列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。',
-      shape: { ...target, query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。') },
+        `列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。details=true 时每项再带说明 description 和示意图（编辑器悬停提示里的图：在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null），按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看；details 一次最多 ${MAX_MENU_PREVIEW} 项，query 匹配更多时报错。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。`,
+      shape: {
+        ...target,
+        query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。'),
+        details: z.boolean().optional().describe(`同时返回说明和示意图，默认 false；匹配项须不超过 ${MAX_MENU_PREVIEW} 个。`),
+      },
       run: plugin('menu_list'),
-    },
-    {
-      name: 'menu_preview',
-      description:
-        '菜单功能项的说明和示意图（编辑器悬停提示里的图）：示意图在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null；按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看。',
-      shape: { ...target, menu_ids: z.array(z.string()).min(1).describe('menu_list 返回的 menu_id。') },
-      run: plugin('menu_preview'),
     },
     {
       name: 'menu_add',

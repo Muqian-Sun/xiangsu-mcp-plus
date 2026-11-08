@@ -20,7 +20,7 @@ const CACHE_ENTRIES = 20;
 // term in the title (it matches loosely now and then) comes last.
 const TIER = { exact: 0, prefix: 1, contains: 2, category: 3, server: 4 };
 
-const NO_MATCH_HINT = '没有标题、面板名或子分类名对得上的素材：换更短或更具体的词（如「复古」而不是「复古风格滤镜」），用 queries 一次试几个近义词，或用 library_nav / library_list 按面板和子分类浏览';
+const NO_MATCH_HINT = '没有标题、面板名或子分类名对得上的素材：换更短或更具体的词（如「复古」而不是「复古风格滤镜」），用 queries 一次试几个近义词，或用 library_list 按面板和子分类浏览';
 
 const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 
