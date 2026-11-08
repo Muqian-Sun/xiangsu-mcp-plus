@@ -1116,8 +1116,8 @@ export function createServer(deps = {}) {
             length: z.number().gt(0).max(3).optional().describe('长度倍数，默认 1。'),
             count: z.number().int().min(1).max(120).optional().describe('根数（cluster 是簇数）。'),
             curl: z.number().min(-60).max(60).optional().describe('卷翘（度）。'),
-            color: z.union([z.string(), z.tuple([z.number(), z.number(), z.number()])]).optional().describe('默认深棕 [40, 30, 30]，比眼线浅。'),
-            opacity: z.number().min(0).max(1).optional().describe('默认 0.6；全黑开满像假睫毛。'),
+            color: z.union([z.string(), z.tuple([z.number(), z.number(), z.number()])]).optional().describe('默认深棕 [40, 30, 30]，比眼线稍浅。'),
+            opacity: z.number().min(0).max(1).optional().describe('默认 0.85；全黑开满像假睫毛，60–70% 会糊成一圈浅色绒边。'),
             seed: z.number().int().optional(),
           })
           .optional(),
