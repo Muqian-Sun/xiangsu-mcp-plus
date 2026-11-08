@@ -155,7 +155,8 @@
   - 一个窗口里面板同时只跑一个「当前生成」，其余在后台；工具提交后把自己的任务转到后台，所以可以连续提交，同时在跑的上限是 10 个。
   - 结果在提交它的那个工程窗口里合成；别的窗口第一次看到这个任务时要自己下载并合成一次（显示 `restoring`）。
   - 次数：编辑器只有用完时的提示「模型使用次数达到上限，请提升特效师等级以获取更多次数」（错误码 2038），没有查询剩余次数或单次消耗的接口。
-  - 实测（2026-11-08，一次）：一张 1024×1536 的小猫图、`mode=motion`、10 秒、不加投影，云端 2 秒接受，约 6 分钟后在本机合成完，输出 720×720、24 fps、带原声。`ar_video_import` 的导入路径只读了代码，还没有实测。
+  - 实测（2026-11-08，一次）：一张 1024×1536 的小猫图、`mode=motion`、10 秒、不加投影，云端 2 秒接受，约 6 分钟后在本机合成完，输出 720×720、24 fps、带原声。之后在另一个工程窗口里查这条任务，直接就是 `succeeded`（编辑器的生成记录缓存在 `Shared/Resources/ARVideoHistory/` 下，各窗口共用，本机合成的文件还在就不重做）。
+  - 导入后的场景（同日实测，导进一个空场景）：渲染组「AR跟踪」›「AR平面跟踪」（`MeshRenderer`，内置 AR 平面网格和「蒙版阴影」材质）›「AR 视频主体 1」，加一个「AR摄像机」（`Camera`、`DeviceTracker`）；空场景还会多出「通用」组。「AR 视频主体」上有 `Image`（`texture` 是导入的 `Mp4Texture`「混合透明 MP4 播放器」，`loopCount=-1` 无限循环）、`LookAt`（朝向 AR 摄像机）、`AudioComponent`（原声，`autoPlay=false`）和编辑器内置的 `ARVideoAudioController`（`playOriginalAudio_target`、`originalVolume_target`、`videoTexture_target`，让原声跟着视频播）。脚本里控制视频：`texture.getControl()` 的 `play()` / `pause()` / `resume()` / `stop()`，事件用 `APJS.EventManager.getObjectEmitter(texture)` 监听 `APJS.Mp4Event.*`（取自内置节点「视频纹理播放器」的实现 `CGVideoTexturePlayer.js`）。同一个工程第二次导入时对象怎么排还没有实测。
   - 预览图 `preview_image_file` 是用编辑器自带的 ffmpeg 从预览视频均匀取 6 帧拼成的横条，存在 `~/.xiangsu-mcp-ext/ar-video/<task_id>.jpg`，预览视频重建后自动重做。
 - 预览重载有延迟，应用后用 `interact_by_dsl` 先 `wait` 2–3 秒再截图更稳。
 - 资源删除不可撤销；对象删除可以在编辑器里撤销，但已删除的资源不会回来。
