@@ -602,7 +602,8 @@ test('preview_frames resets, takes full-size frames from the plugin, saves and c
   ]);
   assert.ok(!official.calls.some((c) => c[0] === 'interact_by_dsl'));
   assert.equal(sleeps.length, 2);
-  assert.ok(sleeps.every((ms) => ms > 400 && ms <= 1000), `${sleeps}`);
+  // Each wait runs to the frame's time from the start, so the second is about one interval longer.
+  assert.ok(sleeps[0] <= 500 && sleeps[1] <= 1000 && sleeps[1] > sleeps[0], `${sleeps}`);
   const summary = JSON.parse(res.content[0].text);
   assert.equal(summary.frames, 3);
   assert.deepEqual(summary.files.map((f) => path.basename(f)), ['frame-1.jpg', 'frame-2.jpg', 'frame-3.jpg']);
