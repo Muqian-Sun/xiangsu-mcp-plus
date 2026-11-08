@@ -30,6 +30,8 @@ const LEVEL_LABELS = Object.fromEntries(Object.entries(RANK_FILTERS.levels.optio
 const CATEGORY_PARAMS = { 1: 'material_labels3_first', 2: 'material_labels3_second', 3: 'material_labels3_third' };
 // Innovation plan picks by artwork type (the app's ArtworkType index); the app itself shows templates.
 const PICK_KINDS = { template: 2, effect: 0 };
+// rank_innovation kinds: the creator month board, or the picks of one artwork type.
+const INNOVATION_KINDS = ['creators', ...Object.keys(PICK_KINDS)];
 // Topic collection tabs of the app's 专题合集 page (topic_type).
 const SUBJECT_KINDS = { effect: 1, template: 2 };
 // subjects and subject_detail answer code 1 for larger counts.
@@ -350,7 +352,7 @@ const methods = {
     const d = await request(this, 'GET_INSPIRATIONS', '/creator_api/inspiration/v1/list', {
       query: { flag: cursor === 0 ? 1 : 2, cursor, count, tab_name: name },
     });
-    return { tab: name, items: (d.list || []).map(slimInspiration), next_cursor: d.cursor ?? null, has_more: !!d.has_more };
+    return { tab: name, tabs, items: (d.list || []).map(slimInspiration), next_cursor: d.cursor ?? null, has_more: !!d.has_more };
   },
 
   async inspirationCollected(id) {
@@ -544,18 +546,6 @@ const methods = {
     return d.map((t) => ({ name: t.tagName, level: t.level, count: t.num }));
   },
 
-  async rankNav({ rank_type = 1, date } = {}) {
-    const rt = rankType(rank_type);
-    checkDate(date);
-    const filters = Object.fromEntries(Object.entries(RANK_FILTERS).map(([key, f]) => [key, Object.keys(f.options)]));
-    return {
-      rank_types: Object.entries(RANK_TYPES).map(([k, name]) => ({ rank_type: Number(k), name })),
-      filters: { ...filters, young_like_scores: YOUNG_LIKE_SCORES },
-      rank_type: rt,
-      categories: await this.rankCategories(rt, date),
-    };
-  },
-
   async rankList(params = {}) {
     const { rank_type = 1, date, categories, young_like_scores, cursor = 0, count = 20 } = params;
     const rt = rankType(rank_type);
@@ -568,8 +558,9 @@ const methods = {
       for (const s of young_like_scores) if (!YOUNG_LIKE_SCORES.includes(s)) throw Error(`INVALID_FILTER(young_like_scores): ${s}; valid: 1-10`);
       query.young_like_score = young_like_scores.join(',');
     }
+    // The board's categories for that day go back with every page, for picking `categories` next time.
+    const known = await this.rankCategories(rt, date);
     if (categories && categories.length) {
-      const known = await this.rankCategories(rt, date);
       for (const name of categories) {
         const hit = known.find((c) => c.name === name);
         if (!hit) throw Error(`INVALID_CATEGORY: ${name}; valid: ${known.map((c) => c.name).join(', ')}`);
@@ -590,6 +581,7 @@ const methods = {
       items: list.map((e, i) => slimRankItem(e, cursor + i + 1)),
       next_cursor: d.cursor,
       has_more: d.cursor < d.total,
+      categories: known,
     };
   },
 
@@ -693,6 +685,14 @@ const methods = {
     return { kind, date: d.date || null, total: d.total, items, next_offset: offset + count, has_more: !!d.has_more };
   },
 
+  // The creator board arrives whole; it is paged here like the picks.
+  async rankInnovation({ kind = 'template', offset = 0, count = 20 } = {}) {
+    if (!INNOVATION_KINDS.includes(kind)) throw Error(`INVALID_KIND: ${kind}; valid: ${INNOVATION_KINDS.join(', ')}`);
+    if (kind !== 'creators') return this.rankInnovationPicks({ kind, offset, count });
+    const { items } = await this.rankCreatorsMonth();
+    return { kind, total: items.length, items: items.slice(offset, offset + count), next_offset: offset + count, has_more: offset + count < items.length };
+  },
+
   // The 上线审核 records of the review record page: review_nodes when it has them, otherwise effect_reviews.
   async onlineReviews(id) {
     const nodes = await send(this, 'GET_REVIEW_NODES', '/cam_api/effect/v1/review_nodes', { query: { effect_id: id, review_type: REVIEW_TYPES.online } });
@@ -701,7 +701,7 @@ const methods = {
   },
 
   // The mobile app's 作品 list, newest first. Pages chain through the `sort` key each page returns.
-  async effectsMine({ cursor, count = 20 } = {}) {
+  async myEffects({ cursor, count = 20 } = {}) {
     const d = await request(this, 'GET_MY_EFFECTS', '/effectcam/v1/artworks', { query: { count, sort: cursor } });
     const effects = d.effects || [];
     const items = await Promise.all(
@@ -716,7 +716,7 @@ const methods = {
     return { total: d.total, items, next_cursor: next, has_more: next !== null };
   },
 
-  async effectReviews({ effect_id } = {}) {
+  async myEffectReviews({ effect_id } = {}) {
     const id = requireId(effect_id, 'INVALID_EFFECT_ID');
     const [detail, online, innovation] = await Promise.all([
       request(this, 'GET_EFFECT_DETAIL', '/effectcam/v2/effect_detail', { query: { effect_id: id } }),
@@ -738,7 +738,6 @@ const methods = {
 };
 
 const METHODS = {
-  inspiration_nav: 'inspirationNav',
   inspiration_list: 'inspirationList',
   inspiration_detail: 'inspirationDetail',
   inspiration_collect: 'inspirationCollect',
@@ -747,14 +746,12 @@ const METHODS = {
   tasks_list: 'tasksList',
   task_detail: 'taskDetail',
   task_receive: 'taskReceive',
-  rank_nav: 'rankNav',
   rank_list: 'rankList',
   rank_hotspots: 'rankHotspots',
   rank_subjects: 'rankSubjects',
-  rank_creators_month: 'rankCreatorsMonth',
-  rank_innovation_picks: 'rankInnovationPicks',
-  effects_mine: 'effectsMine',
-  effect_reviews: 'effectReviews',
+  rank_innovation: 'rankInnovation',
+  my_effects: 'myEffects',
+  my_effect_reviews: 'myEffectReviews',
 };
 
-module.exports = { methods, METHODS, PICK_KINDS, SUBJECT_KINDS };
+module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS };

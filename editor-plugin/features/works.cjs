@@ -84,8 +84,8 @@ const methods = {
     return { categories, sorts: Object.keys(SORT) };
   },
 
-  async worksCategory(category_id) {
-    const { categories } = await this.worksNav();
+  async worksCategory(category_id, nav) {
+    const { categories } = nav || (await this.worksNav());
     if (category_id === undefined) return categories[0];
     const hit = categories.find((c) => c.id === String(category_id));
     if (!hit) throw Error(`INVALID_CATEGORY_ID: ${category_id}; valid: ${categories.map((c) => `${c.id}(${c.name})`).join(', ')}`);
@@ -104,13 +104,14 @@ const methods = {
   async worksList({ category_id, cursor, count = 30, sort } = {}) {
     const ranker = sortValue(sort);
     const state = decodeCursor(cursor);
-    const category = await this.worksCategory(category_id);
+    const nav = await this.worksNav();
+    const category = await this.worksCategory(category_id, nav);
     const data = body(
       await this.mod(M.worksCategory).apiTemplatesCategory({ ...state, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
       'GET_WORKS_LIST',
     );
     const { next, ...page } = this.worksPage(data.dataInfos || {});
-    return { category, ...page, next_cursor: encodeCursor(next) };
+    return { category, categories: nav.categories, ...page, next_cursor: encodeCursor(next) };
   },
 
   // Same request the homepage search box sends, scoped to one category; `state` is where the page starts.
@@ -280,7 +281,6 @@ const methods = {
 };
 
 const METHODS = {
-  works_nav: 'worksNav',
   works_list: 'worksList',
   works_search: 'worksSearch',
   works_by_effect: 'worksByEffect',

@@ -7,7 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.mjs';
 
 const require = createRequire(import.meta.url);
-const { Library, M, PICK_KINDS, SUBJECT_KINDS } = require('../editor-plugin/library.cjs');
+const { Library, M, INNOVATION_KINDS, RANK_FILTERS, SUBJECT_KINDS } = require('../editor-plugin/library.cjs');
 
 const ok = (data) => JSON.stringify({ code: 0, message: 'success', data });
 
@@ -292,6 +292,7 @@ test('inspiration_list checks the tab, sends flag 1 for the first page and 2 aft
   assert.deepEqual(to('/creator_api/inspiration/v1/list')[0].query, { flag: '1', cursor: '0', count: '20', tab_name: '全部' });
   assert.deepEqual(out, {
     tab: '全部',
+    tabs: ['全部', '热门音源', '头饰'],
     items: [
       {
         inspiration_id: '7697075498307897370',
@@ -542,18 +543,6 @@ test('task_receive fails when the server hands back no designer task', async () 
   await assert.rejects(lib.taskReceive({ item_id: '108116' }), /RECEIVE_TASK_FAILED: task 108116/);
 });
 
-test('rank_nav lists the boards, filter options and the board categories for a date', async () => {
-  const { lib, to } = setup();
-  const out = await lib.rankNav({ rank_type: 2, date: '2026-11-01' });
-  assert.deepEqual(out.rank_types.map((r) => r.rank_type), [1, 2, 3, 4, 7, 9, 10]);
-  assert.equal(out.rank_types.find((r) => r.rank_type === 10).name, '特效跟拍榜');
-  assert.deepEqual(out.filters.preferences, ['友友', '潮酷']);
-  assert.deepEqual(out.filters.young_like_scores, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.deepEqual(out.categories[0], { name: '基础头饰', level: 2, count: 45 });
-  assert.deepEqual(to('/cam_api/rank/v1/tag')[0].query, { rank_type: '2', date: '2026-11-01' });
-  await assert.rejects(lib.rankNav({ rank_type: 8 }), /INVALID_RANK_TYPE: 8; valid: 1\(年轻喜爱榜\)/);
-});
-
 test('rank_list maps filters and one category per level to the rank page query and numbers items from the cursor', async () => {
   const { lib, to } = setup();
   const out = await lib.rankList({
@@ -606,6 +595,14 @@ test('rank_list maps filters and one category per level to the rank page query a
   });
   assert.equal(out.next_cursor, 7);
   assert.equal(out.has_more, true);
+  assert.deepEqual(out.categories[0], { name: '基础头饰', level: 2, count: 45 });
+});
+
+test('rank_list returns the board categories for that day without a category filter', async () => {
+  const { lib, to } = setup();
+  const out = await lib.rankList({ rank_type: 2, date: '2026-11-01' });
+  assert.deepEqual(to('/cam_api/rank/v1/tag').map((c) => c.query), [{ rank_type: '2', date: '2026-11-01' }]);
+  assert.deepEqual(out.categories.map((c) => c.name), ['基础头饰', '美妆', '人像美化', '游戏玩法', '怪奇']);
 });
 
 test('rank_list reads the template board from its templates list', async () => {
@@ -701,9 +698,9 @@ test('rank_subjects keyword searches every page of a kind', async () => {
   await assert.rejects(lib.rankSubjects({ keyword: '  ' }), /INVALID_KEYWORD/);
 });
 
-test('rank_creators_month converts the award to yuan', async () => {
+test('rank_innovation creators converts the award to yuan', async () => {
   const { lib } = setup();
-  assert.deepEqual((await lib.rankCreatorsMonth()).items[0], {
+  assert.deepEqual((await lib.rankInnovation({ kind: 'creators' })).items[0], {
     rank: 1,
     uid: '7495234997042594875',
     name: '征蓬落日圆',
@@ -716,9 +713,19 @@ test('rank_creators_month converts the award to yuan', async () => {
   });
 });
 
-test('rank_innovation_picks asks for the artwork type and pages by the requested size', async () => {
+test('rank_innovation pages the creator board, which arrives whole', async () => {
+  const users = [1, 2, 3].map((n) => `{"rank_no":${n},"uid":749523499704259487${n},"username":"u${n}"}`).join(',');
+  const { lib, to } = setup({ 'GET /cam_api/innovation_plan/v1/user_month_rank': `{"code":0,"data":[${users}]}` });
+  const first = await lib.rankInnovation({ kind: 'creators', count: 2 });
+  assert.deepEqual({ ranks: first.items.map((u) => u.rank), total: first.total, next: first.next_offset, more: first.has_more }, { ranks: [1, 2], total: 3, next: 2, more: true });
+  const last = await lib.rankInnovation({ kind: 'creators', offset: 2, count: 2 });
+  assert.deepEqual({ ranks: last.items.map((u) => u.rank), uid: last.items[0].uid, more: last.has_more }, { ranks: [3], uid: '7495234997042594873', more: false });
+  assert.equal(to('/cam_api/innovation_plan/v1/rank_list').length, 0);
+});
+
+test('rank_innovation picks ask for the artwork type and page by the requested size', async () => {
   const { lib, to } = setup();
-  const out = await lib.rankInnovationPicks({ offset: 20, count: 20 });
+  const out = await lib.rankInnovation({ offset: 20, count: 20 });
   assert.deepEqual(to('/cam_api/innovation_plan/v1/rank_list')[0].query, { page_size: '20', offset: '20', tab_id: 'all', artwork_type: '2' });
   assert.deepEqual(out.items[0], {
     effect_id: '91518554',
@@ -733,9 +740,10 @@ test('rank_innovation_picks asks for the artwork type and pages by the requested
     video_item_id: '7704341495155455739',
   });
   assert.deepEqual({ next: out.next_offset, more: out.has_more, total: out.total }, { next: 40, more: true, total: 249 });
-  await lib.rankInnovationPicks({ kind: 'effect' });
+  await lib.rankInnovation({ kind: 'effect' });
   assert.equal(to('/cam_api/innovation_plan/v1/rank_list')[1].query.artwork_type, '0');
-  await assert.rejects(lib.rankInnovationPicks({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: template, effect/);
+  await assert.rejects(lib.rankInnovation({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: creators, template, effect/);
+  assert.equal(to('/cam_api/innovation_plan/v1/user_month_rank').length, 0);
 });
 
 test('community calls refuse without sending anything when the editor modules are missing', async () => {
@@ -797,7 +805,7 @@ test('effects_mine pages by the returned sort key and attaches the latest review
     'GET /cam_api/effect/v1/review_nodes': NO_NODES,
     'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
   });
-  const first = await lib.effectsMine({ count: 2 });
+  const first = await lib.myEffects({ count: 2 });
   assert.deepEqual(to('/effectcam/v1/artworks')[0].query, { count: '2' });
   assert.deepEqual(first.items[1], {
     effect_id: '92139627',
@@ -822,7 +830,7 @@ test('effects_mine pages by the returned sort key and attaches the latest review
   assert.deepEqual(to('/cam_api/effect/v1/review_nodes').map((c) => c.query), [{ effect_id: '92139627', review_type: '1' }]);
   assert.deepEqual(to('/effectcam/v1/effect_reviews').map((c) => c.query), [{ effect_id: '92139627' }]);
   assert.deepEqual({ total: first.total, next: first.next_cursor, more: first.has_more }, { total: 5, next: '["2026-11-07T19:01:46.000Z",92139627]', more: true });
-  const last = await lib.effectsMine({ cursor: first.next_cursor, count: 2 });
+  const last = await lib.myEffects({ cursor: first.next_cursor, count: 2 });
   assert.deepEqual(to('/effectcam/v1/artworks')[1].query, { count: '2', sort: '["2026-11-07T19:01:46.000Z",92139627]' });
   assert.deepEqual(last.items[0], {
     effect_id: '92032977',
@@ -855,7 +863,7 @@ test('effects_mine reads reviews for test and appeal failures too, from review_n
     ]),
     'GET /cam_api/effect/v1/review_nodes': (call) => ok([{ title: `节点${call.query.effect_id}`, detail_desc: '', created_at: 5 }]),
   });
-  const out = await lib.effectsMine({});
+  const out = await lib.myEffects({});
   assert.deepEqual(out.items.map((i) => i.review && i.review.title), ['节点1', '节点2', undefined]);
   assert.deepEqual({ next: out.next_cursor, more: out.has_more }, { next: null, more: false });
   assert.deepEqual(to('/effectcam/v1/artworks')[0].query, { count: '20' });
@@ -868,18 +876,18 @@ test('online reviews fall back to effect_reviews when review_nodes fails, and fa
     'GET /cam_api/effect/v1/review_nodes': JSON.stringify({ code: 400, message: '参数错误' }),
     'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
   });
-  assert.equal((await fallback.lib.effectsMine({})).items[0].review.text, REJECTED_TEXT);
+  assert.equal((await fallback.lib.myEffects({})).items[0].review.text, REJECTED_TEXT);
   const down = setup({
     'GET /effectcam/v1/artworks': artworks([ART_FAILED]),
     'GET /cam_api/effect/v1/review_nodes': NO_NODES,
     'GET /effectcam/v1/effect_reviews': JSON.stringify({ code: 500, message: '内部错误' }),
   });
-  await assert.rejects(down.lib.effectsMine({}), /GET_EFFECT_REVIEWS_FAILED: code=500 message=内部错误/);
+  await assert.rejects(down.lib.myEffects({}), /GET_EFFECT_REVIEWS_FAILED: code=500 message=内部错误/);
   const odd = setup({
     'GET /effectcam/v1/artworks': artworks([ART_FAILED]),
     'GET /cam_api/effect/v1/review_nodes': ok({ nodes: [] }),
   });
-  await assert.rejects(odd.lib.effectsMine({}), /GET_REVIEW_NODES_FAILED: expected a list of review records/);
+  await assert.rejects(odd.lib.myEffects({}), /GET_REVIEW_NODES_FAILED: expected a list of review records/);
 });
 
 test('effect_reviews returns both review timelines with the markup read like the review record page', async () => {
@@ -895,7 +903,7 @@ test('effect_reviews returns both review timelines with the markup read like the
     'GET /cam_api/effect/v1/review_nodes': (call) => (call.query.review_type === '2' ? ok([reasons]) : NO_NODES),
     'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
   });
-  const out = await lib.effectReviews({ effect_id: ' 92139627 ' });
+  const out = await lib.myEffectReviews({ effect_id: ' 92139627 ' });
   assert.deepEqual(to('/effectcam/v2/effect_detail')[0].query, { effect_id: '92139627' });
   assert.deepEqual(to('/cam_api/effect/v1/review_nodes').map((c) => c.query.review_type).sort(), ['1', '2']);
   assert.deepEqual({ name: out.name, status: out.status, status_text: out.status_text, task: out.task }, { name: '我和codex三天', status: 101, status_text: '审核未通过', task: '玩法孵化之热梗语录定向征集' });
@@ -926,9 +934,9 @@ test('effect_reviews rejects blank ids and passes on the refusal for effects of 
     'GET /cam_api/effect/v1/review_nodes': refused,
     'GET /effectcam/v1/effect_reviews': refused,
   });
-  await assert.rejects(lib.effectReviews({ effect_id: ' ' }), /INVALID_EFFECT_ID/);
+  await assert.rejects(lib.myEffectReviews({ effect_id: ' ' }), /INVALID_EFFECT_ID/);
   assert.equal(calls.length, 0);
-  await assert.rejects(lib.effectReviews({ effect_id: '88649924' }), /code=1301 message=参数不正确，请正确访问/);
+  await assert.rejects(lib.myEffectReviews({ effect_id: '88649924' }), /code=1301 message=参数不正确，请正确访问/);
 });
 
 async function connect(deps) {
@@ -1021,33 +1029,34 @@ test('task tools take the tasks_list task_id and hand the plugin the id each tas
   assert.equal(seen.filter((s) => s.method === 'task_receive').length, 1);
 });
 
-test('effects_mine and effect_reviews go to the lowest-pid window and check their arguments', async () => {
+test('my_effects and my_effect_reviews go to the lowest-pid window and check their arguments', async () => {
   const seen = [];
   const client = await connect({
     listInstances: () => [{ pid: 300 }, { pid: 200 }],
     callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { method }),
   });
   const call = (name, args) => client.callTool({ name, arguments: args });
-  assert.deepEqual(JSON.parse((await call('effects_mine', { cursor: '["x",1]', count: 50 })).content[0].text), { method: 'effects_mine' });
-  assert.deepEqual(seen[0], { method: 'effects_mine', params: { cursor: '["x",1]', count: 50 }, opts: { pid: 200 } });
-  await call('effect_reviews', { effect_id: '92139627' });
-  assert.deepEqual(seen[1], { method: 'effect_reviews', params: { effect_id: '92139627' }, opts: { pid: 200 } });
+  assert.deepEqual(JSON.parse((await call('my_effects', { cursor: '["x",1]', count: 50 })).content[0].text), { method: 'my_effects' });
+  assert.deepEqual(seen[0], { method: 'my_effects', params: { cursor: '["x",1]', count: 50 }, opts: { pid: 200 } });
+  await call('my_effect_reviews', { effect_id: '92139627' });
+  assert.deepEqual(seen[1], { method: 'my_effect_reviews', params: { effect_id: '92139627' }, opts: { pid: 200 } });
   for (const [name, args] of [
-    ['effects_mine', { count: 51 }],
-    ['effects_mine', { cursor: '' }],
-    ['effect_reviews', { effect_id: 'abc' }],
-    ['effect_reviews', {}],
+    ['my_effects', { count: 51 }],
+    ['my_effects', { cursor: '' }],
+    ['my_effect_reviews', { effect_id: 'abc' }],
+    ['my_effect_reviews', {}],
   ]) {
     assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
   }
   assert.equal(seen.length, 2);
 });
 
-test('server kind enums match the plugin tables', async () => {
+test('server kind and rank filter enums match the plugin tables', async () => {
   const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   const props = (name) => tools.find((t) => t.name === name).inputSchema.properties;
-  assert.deepEqual(props('rank_innovation_picks').kind.enum, Object.keys(PICK_KINDS));
+  assert.deepEqual(props('rank_innovation').kind.enum, INNOVATION_KINDS);
+  for (const key of Object.keys(RANK_FILTERS)) assert.deepEqual(props('rank_list')[key].items.enum, Object.keys(RANK_FILTERS[key].options), key);
   assert.deepEqual(props('rank_subjects').kind.enum, Object.keys(SUBJECT_KINDS));
 });
 

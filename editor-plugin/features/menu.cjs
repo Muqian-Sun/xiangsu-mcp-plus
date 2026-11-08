@@ -48,11 +48,16 @@ const methods = {
     return out;
   },
 
-  menuList({ query } = {}) {
+  // details adds each item's hover description and picture, which is one lookup per item, so it takes a
+  // query narrow enough to match at most MAX_MENU_PREVIEW items.
+  menuList({ query, details = false } = {}) {
     const all = this.menuEntries();
     const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
     const items = q ? all.filter((e) => `${e.path}/${e.name}/${e.menu_id}`.toLowerCase().includes(q)) : all;
-    return { total: all.length, items };
+    if (!details) return { total: all.length, items };
+    if (items.length > MAX_MENU_PREVIEW) throw Error(`MENU_DETAILS_TOO_MANY: ${items.length} items match; narrow the query to at most ${MAX_MENU_PREVIEW} for details`);
+    const tips = items.length ? this.menuPreview({ menu_ids: items.map((e) => e.menu_id) }) : [];
+    return { total: all.length, items: items.map((e, i) => ({ ...e, description: tips[i].description, image_url: tips[i].image_url, image_file: tips[i].image_file })) };
   },
 
   menuEntry(menu_id) {
@@ -119,6 +124,6 @@ const methods = {
   },
 };
 
-const METHODS = { menu_list: 'menuList', menu_add: 'menuAdd', menu_preview: 'menuPreview' };
+const METHODS = { menu_list: 'menuList', menu_add: 'menuAdd' };
 
 module.exports = { methods, METHODS, MENU_DENY, MAX_MENU_PREVIEW };

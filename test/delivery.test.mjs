@@ -604,19 +604,22 @@ test('task_bind needs a received task from tasks_list and reopens the project wi
   assert.deepEqual(launch[1], { operation: 'openLocal', path: proj, activity: { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } });
 });
 
-test('music_list takes exactly one of query and category, and music_apply sends the raw track with its category', async () => {
+test('music_list lists categories without arguments, takes at most one of query and category, and music_apply sends the raw track with its category', async () => {
   const seen = [];
   const client = await connect({
     callPlugin: async (method, params) => {
       seen.push([method, params]);
       if (method === 'music_list') return { category_code: params.category_code, items: [{ music_id: '7', title: 't' }], raw: [{ id: 7, duration: 30 }] };
+      if (method === 'music_categories') return { categories: [{ code: 'ugc_recommend', name: '推荐' }] };
       return { ok: true };
     },
   });
   const both = await client.callTool({ name: 'music_list', arguments: { query: 'a', category_code: 'b' } });
-  assert.match(both.content[0].text, /exactly one of query or category_code/);
+  assert.match(both.content[0].text, /pass query or category_code, not both/);
+  assert.equal(seen.length, 0);
   const none = await client.callTool({ name: 'music_list', arguments: {} });
-  assert.equal(none.isError, true);
+  assert.deepEqual(json(none), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
+  assert.deepEqual(seen.at(-1), ['music_categories', {}]);
   const unseen = await client.callTool({ name: 'music_apply', arguments: { music_id: '7' } });
   assert.match(unseen.content[0].text, /UNKNOWN_MUSIC: 7/);
   const list = json(await client.callTool({ name: 'music_list', arguments: { category_code: 'ugc_recommend' } }));

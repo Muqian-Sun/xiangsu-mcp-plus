@@ -18,7 +18,7 @@ const call = async (name, args) => {
 };
 
 await call('ext_status', {});
-const nav = await call('library_nav', { project_path: projectPath });
+const nav = await call('library_list', { project_path: projectPath });
 console.log('panels:', nav.json.panels.map((p) => p.panel_key).join(','));
 const found = await call('library_search', { project_path: projectPath, query });
 const hit = found.json.items.find((i) => i.title === title);

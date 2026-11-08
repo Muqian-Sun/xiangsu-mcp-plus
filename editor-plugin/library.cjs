@@ -42,9 +42,12 @@ module.exports = {
   slim: assets.slim,
   REQUIRED: assets.REQUIRED,
   MENU_DENY: menu.MENU_DENY,
+  MAX_MENU_PREVIEW: menu.MAX_MENU_PREVIEW,
   WORK_SORTS: works.SORT,
   MAX_WORK_EFFECTS: works.MAX_EFFECTS,
-  PICK_KINDS: community.PICK_KINDS,
+  INNOVATION_KINDS: community.INNOVATION_KINDS,
   SUBJECT_KINDS: community.SUBJECT_KINDS,
+  RANK_TYPES: community.RANK_TYPES,
+  RANK_FILTERS: community.RANK_FILTERS,
   CONFIG_PATH: dev.CONFIG_PATH,
 };
