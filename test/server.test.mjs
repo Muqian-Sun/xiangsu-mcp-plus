@@ -279,3 +279,49 @@ test('image helpers sniff real bytes from URLs and files and reject non-images',
   assert.equal((await readImageFile(path.join(dir, 'a.gif'))).mimeType, 'image/gif');
   await assert.rejects(readImageFile(path.join(dir, 'b.txt')), /not a png/);
 });
+
+test('a call that asked for progress gets beats while it runs, and every call is logged with its outcome', async () => {
+  const entries = [];
+  const callLog = { call: (e) => entries.push(e) };
+  const slow = fakeOfficial({ call: () => new Promise((r) => setTimeout(() => r({ content: [{ type: 'text', text: 'done' }] }), 120)) });
+  const { client } = await connect({ official: slow, callPlugin: async () => ({}), callLog, progressMs: 20 });
+  const beats = [];
+  const res = await client.callTool({ name: 'get_scene', arguments: {} }, undefined, { onprogress: (p) => beats.push(p), resetTimeoutOnProgress: true });
+  assert.equal(res.content[0].text, 'done');
+  assert.ok(beats.length >= 3, `got ${beats.length} beats`);
+  assert.deepEqual(beats.slice(0, 2).map((b) => b.progress), [1, 2]);
+  assert.match(beats[0].message, /^get_scene: \d+ s$/);
+  const n = beats.length;
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(beats.length, n, 'beats stop when the call ends');
+  assert.equal(entries[0].tool, 'get_scene');
+  assert.ok(entries[0].ms >= 100);
+  assert.ok(entries[0].progress >= 3);
+  await client.callTool({ name: 'get_scene', arguments: {} });
+  assert.equal(entries[1].progress, 'none', 'no beats without a progress token');
+  const down = await connect({ official: fakeOfficial({ call: () => Promise.reject(Error('ECONNREFUSED')) }), callPlugin: async () => ({}), callLog });
+  await down.client.callTool({ name: 'get_scene', arguments: {} });
+  assert.match(entries[2].result.content[0].text, /OFFICIAL_MCP_UNAVAILABLE/);
+});
+
+test('the call log writes one line per call, with the error of a failed one', async () => {
+  const { CallLog } = await import('../src/calllog.mjs');
+  const dir = tmpdir('xs-log-');
+  const log = new CallLog({ stateDir: dir, now: () => new Date(Date.UTC(2026, 10, 8)) });
+  log.call({ tool: 'preview_frames', ms: 12, result: { isError: true, content: [{ type: 'text', text: 'PLUGIN_ERROR(preview_reset): NO_FRESH_PREVIEW_FRAME' }] }, progress: 2 });
+  log.call({ tool: 'get_scene', ms: 3, result: { content: [] }, progress: 'none' });
+  log.write({ event: 'client_closed' });
+  const lines = fs.readFileSync(path.join(dir, 'logs', 'server.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines[0], { at: '2026-11-08T00:00:00.000Z', pid: process.pid, tool: 'preview_frames', ms: 12, ok: false, error: 'PLUGIN_ERROR(preview_reset): NO_FRESH_PREVIEW_FRAME', progress: 2 });
+  assert.equal(lines[1].ok, true);
+  assert.equal(lines[1].error, undefined);
+  assert.equal(lines[2].event, 'client_closed');
+});
+
+test('capture_preview is listed with a note on when its picture can be stale', async () => {
+  const official = fakeOfficial({ tools: [{ name: 'capture_preview', description: '截图', inputSchema: { type: 'object' } }, { name: 'get_scene', description: 'official', inputSchema: { type: 'object' } }] });
+  const { client } = await connect({ official, callPlugin: async () => ({}) });
+  const { tools } = await client.listTools();
+  assert.match(tools.find((t) => t.name === 'capture_preview').description, /^截图[\s\S]*preview_frames/);
+  assert.equal(tools.find((t) => t.name === 'get_scene').description, 'official');
+});

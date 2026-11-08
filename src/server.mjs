@@ -21,6 +21,7 @@ import { makeupLayers } from './makeup.mjs';
 import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
+import { CallLog } from './calllog.mjs';
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -50,6 +51,11 @@ const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
 // animated GIFs from one task's content reached 16 MB of base64 (measured); this leaves room for the text.
 const IMAGE_VIEW_BYTES = 8 * 1024 * 1024;
+// Cursor ends a tool call that sends nothing for a while ("MCP tool call timed out (idle)", seen on a
+// submit_prepare that waited for the page's checks). Picked: well inside the 25 s calls that went through.
+const PROGRESS_MS = 5000;
+const CAPTURE_PREVIEW_NOTE =
+  '\n\n（xiangsu-mcp-plus）窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。';
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -116,6 +122,7 @@ export function createServer(deps = {}) {
     closeTimeoutMs: 30000,
     instanceTimeoutMs: 30000,
     saveTimeoutMs: 15000,
+    progressMs: PROGRESS_MS,
     ...deps,
   };
   const server = new Server({ name: 'xiangsu-mcp-ext', version: VERSION }, { capabilities: { tools: { listChanged: true } } });
@@ -124,6 +131,7 @@ export function createServer(deps = {}) {
   const projects = new Projects(d);
   d.downloads = d.downloads ?? new Downloads();
   d.qrCodes = d.qrCodes ?? new QrCodes();
+  d.callLog = d.callLog ?? new CallLog();
   d.qrCodes.prune();
   // Library assets and homepage works seen in this session, kept here rather than in a window:
   // windows open and close while an agent works, and a later apply or download may be served by a
@@ -1020,12 +1028,13 @@ export function createServer(deps = {}) {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const mine = [...own.values()].map((t) => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema) }));
-    const official = (await d.official.listTools()).filter((t) => !own.has(t.name));
+    const official = (await d.official.listTools())
+      .filter((t) => !own.has(t.name))
+      .map((t) => (t.name === 'capture_preview' ? { ...t, description: `${t.description || ''}${CAPTURE_PREVIEW_NOTE}` } : t));
     return { tools: [...mine, ...official] };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const { name, arguments: args = {} } = req.params;
+  const callTool = async (name, args) => {
     const t = own.get(name);
     if (t) {
       const parsed = t.schema.safeParse(args);
@@ -1049,6 +1058,36 @@ export function createServer(deps = {}) {
       if (e instanceof McpError) return failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`);
       return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);
     }
+  };
+
+  // While a call runs, a client that asked for progress gets a beat every progressMs, so long calls
+  // (frames over seconds, waiting for checks) are not ended as idle.
+  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+    const { name, arguments: args = {} } = req.params;
+    const token = req.params._meta?.progressToken;
+    const started = Date.now();
+    let beats = 0;
+    const timer =
+      token === undefined
+        ? null
+        : setInterval(() => {
+            beats += 1;
+            extra
+              .sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: beats, message: `${name}: ${Math.round((Date.now() - started) / 1000)} s` } })
+              .catch(() => {});
+          }, d.progressMs);
+    let result;
+    let error;
+    try {
+      result = await callTool(name, args);
+      return result;
+    } catch (e) {
+      error = String(e?.message ?? e);
+      throw e;
+    } finally {
+      clearInterval(timer);
+      d.callLog.call({ tool: name, ms: Date.now() - started, result, error, progress: token === undefined ? 'none' : beats });
+    }
   });
 
   return server;
@@ -1059,6 +1098,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
   official.watch();
   // The official-MCP watcher keeps the event loop alive, so a closed client would leave this process
   // running forever.
-  process.stdin.on('end', () => process.exit(0));
-  await createServer({ official }).connect(new StdioServerTransport());
+  const callLog = new CallLog();
+  process.stdin.on('end', () => {
+    callLog.write({ event: 'client_closed' });
+    process.exit(0);
+  });
+  for (const kind of ['uncaughtException', 'unhandledRejection']) {
+    process.on(kind, (e) => {
+      callLog.write({ event: kind, error: String(e?.stack ?? e).slice(0, 2000) });
+      process.exit(1);
+    });
+  }
+  callLog.write({ event: 'started' });
+  await createServer({ official, callLog }).connect(new StdioServerTransport());
 }
