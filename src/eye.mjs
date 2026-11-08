@@ -8,10 +8,13 @@ import { fitArc } from './paint.mjs';
 // smoothed): `edge` is where the lid skin ends, `rim` the dark lash-line rim. Inner corner first.
 const RIM = [[305, 259], [285, 253], [270, 249], [255, 247.5], [240, 247], [225, 247], [210, 246.5], [195, 248.5], [180, 255], [165, 262], [152, 266]];
 const EDGE = [[305, 254], [285, 244], [270, 240], [255, 237], [240, 236], [225, 235.5], [210, 236], [195, 238.5], [180, 242], [165, 245.5], [152, 248]];
-// Where the official lower lashes (自然下睫毛) and aegyo-sal (卧蚕) textures put their weight, read
-// column by column (2026-11-08); inner corner first.
-const LOWER = [[300, 312], [270, 320], [240, 322], [210, 316], [180, 307], [152, 297]];
-const AEGYO = [[300, 332], [270, 337], [240, 338], [210, 335], [180, 328], [152, 318]];
+// The lower lid: the top half-max edge of the official 粉雾 crescent, which a calibration texture put on
+// model D's lower lid (初雪冷白 make_snow.py, 2026-11-08); inner corner first, to the outer end of the
+// mesh (x ≈ 130). The aegyo-sal's highlight sits 4–20 rows below it, its crease 25 rows below.
+const LOWER = [[340, 294], [325, 299], [310, 303], [295, 306], [280, 308], [265, 309], [250, 309], [235, 308], [220, 307], [205, 304], [190, 299], [175, 294], [160, 288], [145, 284], [130, 278]];
+const AEGYO_HIGHLIGHT = 12;
+const AEGYO_CREASE = 25;
+const AEGYO = LOWER.map(([x, y]) => [x, y + AEGYO_HIGHLIGHT]);
 
 export const DEFAULT_ANATOMY = {
   source: 'default',
@@ -132,11 +135,12 @@ function dense(pts, n = 24) {
 export const LINERS = ['tight', 'lash_line', 'wing'];
 export const LASHES = ['natural', 'cluster', 'sunflower', 'doll', 'fox'];
 
-// Default colours (beauty notes: liner in ink; lashes a lighter brown than the liner at about 60 %,
-// full black reads as false lashes; under the eye light colours in normal blend, never multiply).
+// Default colours (beauty notes: liner in ink; lashes a slightly lighter dark brown at about 85 %: full
+// black reads as false lashes, a light brown at 60–70 % blurs into a pale fuzz; under the eye light
+// colours in normal blend, never multiply).
 const INK = '#1A1212';
 const LASH = [40, 30, 30];
-const LASH_OPACITY = 0.6;
+const LASH_OPACITY = 0.85;
 
 function liner(a, o) {
   const rim = dense(a.rim);
@@ -324,7 +328,7 @@ function under(a, o) {
   }
   if (o.aegyo_shadow) {
     const ag = part(dense(a.aegyo, 24), 0.1, 0.8);
-    layers.push({ color: o.aegyo_shadow.color ?? '#B08478', opacity: o.aegyo_shadow.opacity ?? 0.25, blur: 2.5, shapes: [{ type: 'stroke', points: shiftY(ag, 7), radius: 1.5, mirror: true }] });
+    layers.push({ color: o.aegyo_shadow.color ?? '#B08478', opacity: o.aegyo_shadow.opacity ?? 0.25, blur: 2.5, shapes: [{ type: 'stroke', points: shiftY(ag, AEGYO_CREASE - AEGYO_HIGHLIGHT), radius: 1.5, mirror: true }] });
   }
   if (o.outer) {
     const low = part(dense(a.lower, 24), 0.6, 1);

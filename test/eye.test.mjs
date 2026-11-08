@@ -179,3 +179,16 @@ test('makeup_eye writes one texture per blend mode and attaches each to a new ey
   assert.equal(calls.filter(([m]) => m === 'makeup_add_layer').length, 4);
   assert.equal(calls.at(-1)[1].changes[0].male, 0.1);
 });
+
+test('defaults follow the beauty notes: lashes at 85 %, the aegyo-sal highlight 4–20 rows and its crease 25 rows below the lower lid', () => {
+  assert.equal(eyeTextures({ lashes: { style: 'natural' } })[0].layers[0].opacity, 0.85);
+  const x = 250;
+  const lower = at(DEFAULT_ANATOMY.lower, x);
+  const [light] = eyeTextures({ aegyo: { highlight: { opacity: 1 } } }).map(painted);
+  const lit = Array.from({ length: 50 }, (_, k) => lower + k).filter((y) => alpha(light, x, y) > 60);
+  assert.ok(Math.min(...lit) >= lower + 4 && Math.max(...lit) <= lower + 20, `${Math.min(...lit)}–${Math.max(...lit)} vs lid ${lower}`);
+  const [under] = eyeTextures({ aegyo: { shadow: { opacity: 1 } } }).map(painted);
+  const rows = Array.from({ length: 50 }, (_, k) => lower + k);
+  const peak = rows.reduce((b, y) => (alpha(under, x, y) > alpha(under, x, b) ? y : b), rows[0]);
+  assert.ok(Math.abs(peak - (lower + 25)) <= 1.5, `crease at ${peak}, lid ${lower}`);
+});
