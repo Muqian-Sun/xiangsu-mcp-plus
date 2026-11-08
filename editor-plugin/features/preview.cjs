@@ -2,6 +2,9 @@
 // Preview frames at the preview's own resolution, read from the render output. Since 9.8.1 the
 // official screenshot photographs the editor window's preview area instead, which comes back black
 // while the window is minimized; the render output keeps updating either way.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { M } = require('./common.cjs');
 
 // Right after a window opens the preview has no frame yet and the capture comes back empty (seen
@@ -19,15 +22,32 @@ const TIMING = { reloadTimeoutMs: 15000, frameTimeoutMs: 5000 };
 const RELOADED = 'PreviewReloaded';
 const TEXTURE = 'PreviewTextureUpdated';
 
+// The render output as a lossless PNG, read back through a scratch file (saveToPng only writes files).
+function renderOutputPng(pm) {
+  const rt = pm.previewRTHandle;
+  if (!rt || typeof rt.saveToPng !== 'function') throw Error('INCOMPATIBLE_EDITOR: missing PreviewManager.previewRTHandle.saveToPng');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-preview-png-'));
+  try {
+    const file = path.join(dir, 'frame.png');
+    rt.saveToPng(file);
+    return fs.existsSync(file) ? fs.readFileSync(file) : null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const methods = {
-  async previewFrame({ quality = 92 } = {}) {
+  // format 'jpeg' is the editor's own screenshot encoder; 'png' reads the render output losslessly
+  // (JPEG blurs thin lines and bleeds colour across sharp edges, which matters when checking makeup).
+  async previewFrame({ format = 'jpeg', quality = 92 } = {}) {
+    if (format !== 'jpeg' && format !== 'png') throw Error(`INVALID_FORMAT: ${format}`);
     this.ensureCompatible('preview');
     const pm = this.mod(M.preview).PreviewManager.getInstance();
     for (let i = 0; i < EMPTY_RETRIES; i++) {
       if (i) await new Promise((r) => setTimeout(r, RETRY_MS));
       pm.cacheCurrentFrame();
-      const buf = pm.captureScreenshotToMemory(quality);
-      if (buf && buf.length) return { mimeType: 'image/jpeg', data: Buffer.from(buf).toString('base64') };
+      const buf = format === 'png' ? renderOutputPng(pm) : pm.captureScreenshotToMemory(quality);
+      if (buf && buf.length) return { mimeType: `image/${format}`, data: Buffer.from(buf).toString('base64') };
     }
     throw Error(`NO_PREVIEW_FRAME: the preview returned no frame after ${EMPTY_RETRIES} tries; is the preview panel showing?`);
   },
