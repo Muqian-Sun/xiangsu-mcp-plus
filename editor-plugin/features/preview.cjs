@@ -48,14 +48,19 @@ const methods = {
     let frames = 0;
     try {
       await new Promise((resolve, reject) => {
-        const fail = (code, ms, what) => {
-          timer = setTimeout(() => reject(Error(`${code}: ${what} within ${ms} ms`)), ms);
+        const fail = (code, ms, what, advice) => {
+          timer = setTimeout(() => reject(Error(`${code}: ${what} within ${ms} ms${advice}`)), ms);
         };
         onReloaded = () => {
           if (reloadedAt !== null) return;
           reloadedAt = Date.now();
           clearTimeout(timer);
-          fail('NO_FRESH_PREVIEW_FRAME', frameTimeoutMs, `the preview did not draw ${FRESH_FRAMES} frames after reloading`);
+          fail(
+            'NO_FRESH_PREVIEW_FRAME',
+            frameTimeoutMs,
+            `the preview did not draw ${FRESH_FRAMES} frames after reloading`,
+            '; the preview video is most likely not playing (it stalls when its file is replaced while in use): switch to another video with set_preview_video, or close and reopen the project',
+          );
         };
         onTexture = () => {
           if (reloadedAt === null) return;
@@ -64,7 +69,7 @@ const methods = {
         };
         PreviewSyncer.addListener(RELOADED, onReloaded);
         bus.on(TEXTURE, onTexture);
-        fail('PREVIEW_RELOAD_TIMEOUT', reloadTimeoutMs, 'the preview did not reload');
+        fail('PREVIEW_RELOAD_TIMEOUT', reloadTimeoutMs, 'the preview did not reload', '; the window may be busy or stuck: check it, or close and reopen the project');
         PreviewSyncer.getInstance().requestReloadSticker();
       });
     } finally {
