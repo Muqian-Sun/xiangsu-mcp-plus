@@ -19,6 +19,7 @@ const OWN = [
   'ext_status',
   'face_warp_list',
   'face_warp_set_intensity',
+  'growth_route',
   'icon_open',
   'icon_set',
   'image_view',

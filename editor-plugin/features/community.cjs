@@ -36,6 +36,11 @@ const SUBJECT_KINDS = { effect: 1, template: 2 };
 const SUBJECT_MAX = 20;
 // The editor's task window page reads task details with this mobile app version.
 const TASK_PAGE_APP_VERSION = '11.3.0';
+// The 像塑 mobile app version whose endpoints growth_route reads (v17.7.0 Android package, 2026-11-08).
+const MOBILE_APP_VERSION = '17.7.0';
+// 成长之路 states, read off a live answer: the finished goal (1/1) was 1, the current level and its open goals
+// 2, every later level 3.
+const GROWTH_STATES = { 1: 'done', 2: 'in_progress', 3: 'locked' };
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -115,8 +120,14 @@ function slimInspiration(i) {
     collect_count: i.total_collection ?? null,
     collected: !!i.is_collect,
     ai: !!i.is_ai_ins,
+    hotspot: i.hotspot_data && i.hotspot_data.title ? { id: str(i.hotspot_data.id), title: i.hotspot_data.title } : null,
     cover_url: first(i.cover_img && i.cover_img.urlList),
   };
+}
+
+// The example videos an inspiration page plays: Douyin videos made from the idea.
+function slimVideo(v) {
+  return { url: v.video_url || null, cover_url: v.video_img || null, author: v.video_username || null, likes: str(v.video_digg), width: v.width ?? null, height: v.height ?? null };
 }
 
 function tagNames(tags) {
@@ -136,6 +147,7 @@ function slimTask(lib, t, kind) {
     title: t.title || t.name || '',
     status: kind === 'task' ? lib.taskStatus(t.process_status) : null,
     status_text: t.process_status_text || null,
+    status_desc: t.process_status_desc || null,
     received: kind === 'task' ? !!t.designer_task_id : null,
     bindable: !!bindId,
     tags: tagNames(t.tags),
@@ -146,6 +158,35 @@ function slimTask(lib, t, kind) {
     offline_at: iso(t.offline_at),
     icon_url: t.icon_url || null,
   };
+}
+
+// An effect submitted to a task, as the task page lists it under 我的作品.
+function slimTaskEffect(e) {
+  return {
+    effect_id: str(e.effect_id),
+    name: e.effect_name,
+    type: e.type_desc || null,
+    status: e.effect_status_desc || null,
+    status_code: e.effect_status ?? null,
+    fits_theme: e.is_fit_theme === 1,
+    track: e.sub_track_name || null,
+    shoots: str(e.shoot_num),
+    views: str(e.vv_num),
+    peak_pub: str(e.pub_peak_num),
+    award: e.award_amount || null,
+    icon_url: first(e.icon && e.icon.url_list),
+  };
+}
+
+function slimGrowthLevel(l) {
+  const level = { level: l.layer, name: l.layer_name, award: l.award || null, status: GROWTH_STATES[l.status] ?? l.status };
+  if (l.sub_tasks) {
+    level.goals = l.sub_tasks.flatMap((t) =>
+      (t.progresses || []).map((p) => ({ text: p.goal_text, current: p.curr_num, target: p.goal_num, reward: p.desc_text || null, status: GROWTH_STATES[t.status] ?? t.status })),
+    );
+  }
+  if (l.rights) level.rights = l.rights.flatMap((r) => (r.right_cards || []).map((c) => c.title));
+  return level;
 }
 
 // What the task detail window passes as launch extras when it opens a project for a task.
@@ -343,11 +384,17 @@ const methods = {
       bonus_text: base.bonus_text || null,
       images: (base.imgs || []).map((i) => first(i.urlList)).filter(Boolean),
       author: d.designer ? { uid: str(d.designer.uid), name: d.designer.name } : null,
-      award: d.award && d.award.amount ? { amount: d.award.amount, text: d.award.text || '', desc: d.award.desc || '' } : null,
-      hotspot: hot.title ? { title: hot.title, score: str(hot.score) } : null,
-      project: d.project_info && d.project_info.title ? { title: d.project_info.title, desc: d.project_info.desc || '' } : null,
-      effects: (d.effects || []).map((e) => ({ name: e.name, published: e.total_pub_num ?? null })),
-      videos: (d.videos || []).length,
+      // The award times come as numbers whose unit no live answer has shown yet (all were 0), so they pass as they are.
+      award:
+        d.award && d.award.amount
+          ? { amount: d.award.amount, text: d.award.text || '', desc: d.award.desc || '', start_time: d.award.start_time ?? null, end_time: d.award.end_time ?? null, award_time: d.award.award_time ?? null, icon_url: d.award.icon_url || null }
+          : null,
+      hotspot: hot.title ? { id: str(hot.id), title: hot.title, score: str(hot.score), tags: hot.tags || [] } : null,
+      project: d.project_info && d.project_info.title ? { title: d.project_info.title, desc: d.project_info.desc || '', icon_url: d.project_info.icon || null } : null,
+      // Effects made from the idea; fields beyond name and total_pub_num pass through, none having been seen live yet.
+      effects: (d.effects || []).map(({ name, total_pub_num, ...rest }) => ({ name, published: total_pub_num ?? null, ...rest })),
+      videos: (d.videos || []).map(slimVideo),
+      stickers: d.stickers || [],
       collected,
       collect_count,
     };
@@ -445,6 +492,9 @@ const methods = {
         reward_end: d.reward_end || null,
         offline_at: iso(d.offline_at_unix),
         can_finish_times: d.can_fin_times ?? null,
+        finish_status: d.fin_status || null,
+        level_task: !!d.is_level_task,
+        my_effects: (d.task_effect_list || []).map(slimTaskEffect),
         content: (c.modules || []).map((m) => JSON.parse(m.render_content)),
       };
     }
@@ -461,6 +511,15 @@ const methods = {
       };
     }
     throw Error(`INVALID_KIND: ${kind}; valid: task, growth`);
+  },
+
+  // The mobile app's 成长之路: designer levels with their cash awards, each goal with its progress.
+  async growthRoute() {
+    const d = await request(this, 'GET_GROWTH_ROUTE', '/cam_api/designer/v6/growth_route', { query: { app_version: MOBILE_APP_VERSION } });
+    const entries = Array.isArray(d) ? d : [];
+    if (!entries.length) throw Error('NO_GROWTH_ROUTE: the 成长之路 answer has no levels');
+    const levels = entries.flatMap((e) => e.layer_task || []).map(slimGrowthLevel);
+    return { current_level: entries[0].cur_layer ?? null, levels };
   },
 
   // Same request as the activity center's 领取 button, which it only offers while the task waits to be received.
@@ -684,6 +743,7 @@ const METHODS = {
   inspiration_detail: 'inspirationDetail',
   inspiration_collect: 'inspirationCollect',
   inspiration_bind: 'inspirationBind',
+  growth_route: 'growthRoute',
   tasks_list: 'tasksList',
   task_detail: 'taskDetail',
   task_receive: 'taskReceive',

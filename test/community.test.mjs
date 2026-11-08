@@ -23,6 +23,7 @@ const INSPIRATION = {
   is_collect: false,
   author_uid: '2465527461847677',
   is_ai_ins: true,
+  hotspot_data: { id: '13483', title: '进博会中国好物' },
 };
 const INSPIRATION_DETAIL = {
   base: {
@@ -36,10 +37,14 @@ const INSPIRATION_DETAIL = {
   },
   designer: { uid: '103424810657', name: '早安玫瑰', avatar: 'https://cdn/av.png' },
   award: { id: '0', type: 0, amount: 0, text: '', desc: '' },
-  ai_hotspot_info: { id: '12527', title: '双11开门红', score: '11681000' },
+  ai_hotspot_info: { id: '12527', title: '双11开门红', score: '11681000', tags: ['66条热点相关灵感', '1168.1万热度'] },
   project_info: { title: 'AI 女神节快乐', icon: 'i', desc: '可在像塑桌面端搜索使用' },
   effects: [{ name: '拆快递', total_pub_num: 169 }],
-  videos: [{}, {}],
+  videos: [
+    { video_url: 'https://play/v1', video_img: 'https://img/c1.jpeg', video_username: '吃屁股', video_avatar: '', video_digg: '', height: 1920, width: 864 },
+    { video_url: 'https://play/v2', video_img: 'https://img/c2.jpeg', video_username: '小鱼', video_digg: '1.2万', height: 1280, width: 720 },
+  ],
+  stickers: [],
 };
 const ACTIVITY = { id: 'A1', title: '新人成长路线', tags: '新手,必做', ttl: 3 * 86400000 + 5 };
 const EFFECT_TASKS = {
@@ -50,6 +55,7 @@ const EFFECT_TASKS = {
       title: '冷空气网感美妆定向征集赛',
       process_status: 1,
       process_status_text: '领取',
+      process_status_desc: '查看官方指导，帮您完成任务',
       designer_task_id: '',
       item_id: 108116,
       tags: [{ type: 3, name: '特效' }],
@@ -296,6 +302,7 @@ test('inspiration_list checks the tab, sends flag 1 for the first page and 2 aft
         collect_count: 185,
         collected: false,
         ai: true,
+        hotspot: { id: '13483', title: '进博会中国好物' },
         cover_url: 'https://cdn/i1.png',
       },
     ],
@@ -321,10 +328,14 @@ test('inspiration_detail merges the detail with its collection state and count',
     images: ['https://cdn/d1.png'],
     author: { uid: '103424810657', name: '早安玫瑰' },
     award: null,
-    hotspot: { title: '双11开门红', score: '11681000' },
-    project: { title: 'AI 女神节快乐', desc: '可在像塑桌面端搜索使用' },
+    hotspot: { id: '12527', title: '双11开门红', score: '11681000', tags: ['66条热点相关灵感', '1168.1万热度'] },
+    project: { title: 'AI 女神节快乐', desc: '可在像塑桌面端搜索使用', icon_url: 'i' },
     effects: [{ name: '拆快递', published: 169 }],
-    videos: 2,
+    videos: [
+      { url: 'https://play/v1', cover_url: 'https://img/c1.jpeg', author: '吃屁股', likes: null, width: 864, height: 1920 },
+      { url: 'https://play/v2', cover_url: 'https://img/c2.jpeg', author: '小鱼', likes: '1.2万', width: 720, height: 1280 },
+    ],
+    stickers: [],
     collected: false,
     collect_count: 35,
   });
@@ -390,6 +401,7 @@ test('tasks_list merges activities and effect tasks, and prepares launch extras 
     title: '冷空气网感美妆定向征集赛',
     status: 'WAIT_RECEIVE',
     status_text: '领取',
+    status_desc: '查看官方指导，帮您完成任务',
     received: false,
     bindable: false,
     tags: ['特效'],
@@ -436,6 +448,24 @@ test('task_detail reads an effect task like the task window and a growth task wi
       template_id_list: '["7408401210929053711","7411422748410609714"]',
       can_fin_times: -1,
       offline_at_unix: 1797350400000,
+      fin_status: '',
+      is_level_task: false,
+      task_effect_list: [
+        {
+          effect_name: '方言吃播挑战',
+          shoot_num: '0',
+          vv_num: '0',
+          effect_status: 100,
+          effect_status_desc: '审核中',
+          award_amount: '',
+          effect_id: '92199001',
+          icon: { uri: 'u', url_list: ['https://cdn/e1.png', 'https://cdn/e1b.png'] },
+          pub_peak_num: '0',
+          is_fit_theme: 1,
+          type_desc: '特效',
+          sub_track_name: '',
+        },
+      ],
     }),
     'GET /effectcam/v2/effect_task_content': ok({
       modules: [{ name: '', type: 3, seq: 0, render_content: '{"type":3,"contentBlockName":"参与要求","demandList":[{"tit":"主题要求","desc":"年轻美妆"}]}' }],
@@ -462,6 +492,24 @@ test('task_detail reads an effect task like the task window and a growth task wi
     reward_end: '12月31日',
     offline_at: new Date(1797350400000).toISOString(),
     can_finish_times: -1,
+    finish_status: null,
+    level_task: false,
+    my_effects: [
+      {
+        effect_id: '92199001',
+        name: '方言吃播挑战',
+        type: '特效',
+        status: '审核中',
+        status_code: 100,
+        fits_theme: true,
+        track: null,
+        shoots: '0',
+        views: '0',
+        peak_pub: '0',
+        award: null,
+        icon_url: 'https://cdn/e1.png',
+      },
+    ],
     content: [{ type: 3, contentBlockName: '参与要求', demandList: [{ tit: '主题要求', desc: '年轻美妆' }] }],
   });
   const growth = await lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' });
@@ -1001,4 +1049,34 @@ test('server kind enums match the plugin tables', async () => {
   const props = (name) => tools.find((t) => t.name === name).inputSchema.properties;
   assert.deepEqual(props('rank_innovation_picks').kind.enum, Object.keys(PICK_KINDS));
   assert.deepEqual(props('rank_subjects').kind.enum, Object.keys(SUBJECT_KINDS));
+});
+
+test('growth_route reads the mobile app 成长之路 with each level, goal and state', async () => {
+  const goal = (id, status, text, curr, target, reward) => ({ id, status, progresses: [{ goal_text: text, curr_num: curr, goal_num: target, desc_text: reward }] });
+  const route = [
+    { cur_layer: 2, layer_task: [{ layer: 2, layer_name: '新手特效师', award: '¥50', status: 2, sub_tasks: [goal(2110, 1, '拍摄作品视频并发布到抖音', 1, 1, '¥10'), goal(2120, 2, '绑定「灵感」上线 0/3 个作品', 0, 3, '¥10')] }] },
+    { cur_layer: 2, layer_task: [{ layer: 3, layer_name: '潜力特效师', award: '¥90', status: 3, sub_tasks: [goal(3110, 3, '绑定「任务」上线 2 个作品', 0, 2, '¥20')] }] },
+    { cur_layer: 2, layer_task: [{ layer: 9, layer_name: '大师特效师', award: '¥0', status: 3, rights: [{ operate_text: '专属两项新权益', right_cards: [{ title: '作者专访' }, { title: '周年礼盒' }] }] }] },
+  ];
+  const { lib, to } = setup({ 'GET /cam_api/designer/v6/growth_route': ok(route) });
+  assert.deepEqual(await lib.growthRoute(), {
+    current_level: 2,
+    levels: [
+      {
+        level: 2,
+        name: '新手特效师',
+        award: '¥50',
+        status: 'in_progress',
+        goals: [
+          { text: '拍摄作品视频并发布到抖音', current: 1, target: 1, reward: '¥10', status: 'done' },
+          { text: '绑定「灵感」上线 0/3 个作品', current: 0, target: 3, reward: '¥10', status: 'in_progress' },
+        ],
+      },
+      { level: 3, name: '潜力特效师', award: '¥90', status: 'locked', goals: [{ text: '绑定「任务」上线 2 个作品', current: 0, target: 2, reward: '¥20', status: 'locked' }] },
+      { level: 9, name: '大师特效师', award: '¥0', status: 'locked', rights: ['作者专访', '周年礼盒'] },
+    ],
+  });
+  assert.deepEqual(to('/cam_api/designer/v6/growth_route')[0].query, { app_version: '17.7.0' });
+  const empty = setup({ 'GET /cam_api/designer/v6/growth_route': ok(null) });
+  await assert.rejects(empty.lib.growthRoute(), /NO_GROWTH_ROUTE/);
 });

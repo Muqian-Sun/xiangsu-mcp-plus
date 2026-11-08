@@ -534,7 +534,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_list',
-      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、封面 cover_url（用 image_view 看）。拿到 inspiration_id 后用 inspiration_detail 看详情。',
+      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_url（用 image_view 看）。拿到 inspiration_id 后用 inspiration_detail 看详情。',
       shape: {
         ...target,
         tab: z.string().optional().describe('inspiration_nav 返回的分类名；省略时用第一个（全部）。'),
@@ -546,7 +546,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_detail',
-      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励、关联热点、关联官方工程、已有的同灵感特效及发布量，以及当前账号是否已收藏和总收藏数。',
+      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
       shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / rank_hotspots / task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
       run: community('inspiration_detail'),
     },
@@ -569,7 +569,7 @@ export function createServer(deps = {}) {
     {
       name: 'tasks_list',
       description:
-        '列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
+        '列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
       shape: { ...target, kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。') },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -579,7 +579,7 @@ export function createServer(deps = {}) {
     {
       name: 'task_detail',
       description:
-        '一个任务的详情。征集任务返回状态、奖励时间、下线时间和完整的任务说明（参与要求、奖项详情、近期热门等内容块）：内容块里的参考图和视频只给 source 地址，mediaType=1 的是 mp4 视频，其余是图片（用 image_view 看），空地址和 blob: 地址无效（任务页里也显示不出来）。成长任务返回奖励、参考工程、相关灵感（封面 cover_url）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、是否符合主题、赛道）、完成状态、是否分档任务，和完整的任务说明（参与要求、奖项详情、近期热门等内容块）：内容块里的参考图和视频只给 source 地址，mediaType=1 的是 mp4 视频，其余是图片（用 image_view 看），空地址和 blob: 地址无效（任务页里也显示不出来）。成长任务返回奖励、参考工程、相关灵感（封面 cover_url）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
@@ -617,6 +617,13 @@ export function createServer(deps = {}) {
         if (open) await projects.close({ project_path: projectDir });
         return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
       },
+    },
+    {
+      name: 'growth_route',
+      description:
+        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。',
+      shape: { ...target },
+      run: community('growth_route'),
     },
     {
       name: 'rank_nav',
