@@ -65,7 +65,16 @@ const M = {
   aiApiUtils: '@orion/Business/AIEffectWindow/controller/apiUtils',
   resImport: '@orion/Business/ResItemExtraData/ResourceImportHandles',
   globalConfig: '@orion/config/LegacyGlobalConfig',
+  arVideoManager: '@orion/Business/AssetsLibrary/Core/Control/ARVideoManager/ARVideoManager',
+  arVideoContract: '@orion/Business/VideoMatting/ARVideoGenerationContract',
+  arVideoAudit: '@orion/Business/VideoMatting/ARVideoAudit',
+  arVideoAnalytics: '@orion/Business/VideoMatting/ARVideoAnalytics',
+  arVideoProject: '@orion/Business/VideoMatting/ARVideoProject',
+  ffmpeg: '@orion/Business/Utils/Ffmpeg',
 };
+
+// Where this plugin keeps its own files (import records, preview strips) outside any project.
+const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
 
 // Scratch folder under the editor instance for exports this plugin makes and removes itself.
 function scratchDir(lib, kind) {
@@ -163,7 +172,7 @@ function packageRoot(projectPath, assetPath) {
 
 // Package folders an import created, recorded against the scene objects it added, so removing those
 // objects later can also remove folders the scene never references (e.g. prefab templates).
-const IMPORTS_DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), 'imports');
+const IMPORTS_DIR = path.join(STATE_ROOT, 'imports');
 
 function importsFile(projectPath) {
   return path.join(IMPORTS_DIR, `${crypto.createHash('sha1').update(projectPath).digest('hex')}.json`);
@@ -214,6 +223,7 @@ function resolveByPath(candidates, objectPath, what) {
 
 module.exports = {
   M,
+  STATE_ROOT,
   scratchDir,
   exportEffectPackage,
   nextEvent,
