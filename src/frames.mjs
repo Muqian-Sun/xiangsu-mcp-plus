@@ -34,6 +34,20 @@ export async function cropImage(file, box, { exec = run } = {}) {
   return { width: cw, height: ch };
 }
 
+// The pixels of a preview frame (the editor's JPEG) as PNG bytes, for decoding with pngjs.
+export async function jpegToPng(jpeg, { exec = run } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-jpeg-'));
+  try {
+    const src = path.join(dir, 'frame.jpg');
+    const out = path.join(dir, 'frame.png');
+    fs.writeFileSync(src, jpeg);
+    await exec('sips', ['-s', 'format', 'png', src, '--out', out]);
+    return fs.readFileSync(out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Scales the image in place so its longer side is `maxSide`, keeping the aspect ratio.
 export async function resizeImage(file, maxSide, { exec = run } = {}) {
   await exec('sips', ['-Z', String(maxSide), file, '--out', file]);

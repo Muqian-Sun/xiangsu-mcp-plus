@@ -46,7 +46,6 @@ function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
     ['滤镜/冷白皮', { kind: 'filter', intensity: 1, enabled: true }],
   ]);
   let frames = 0;
-  let held = false;
   const describe = (p) => ({ object_path: p, ...layers.get(p) });
   const render = () => {
     frames += 1;
@@ -74,15 +73,8 @@ function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
   const answers = {
     preview_full_rate: ({ hold_ms }) => ({ held: hold_ms > 0 }),
     preview_reset: () => ({ reloaded_ms: 700, ready_ms: 1100 }),
-    preview_hold: ({ hold }) => {
-      held = hold;
-      return { held };
-    },
     preview_fresh: () => ({ frames: 2 }),
-    preview_frame: ({ format }) => {
-      assert.equal(format, 'png');
-      return { mimeType: 'image/png', data: render() };
-    },
+    preview_frame: () => ({ mimeType: 'image/png', data: render() }),
     makeup_list: () => ({ layers: [...layers.keys()].map(describe) }),
     // Paths resolve like the plugin's resolveByPath: the full path or a unique trailing chain.
     makeup_set: ({ changes }) => {
@@ -121,7 +113,6 @@ function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
   return {
     calls,
     layers,
-    held: () => held,
     callPlugin: async (method, params, opts) => {
       calls.push([method, params]);
       assert.equal(opts.projectPath, projectDir);
@@ -148,7 +139,7 @@ function project() {
 const strengths = (w) => Object.fromEntries([...w.layers].map(([p, l]) => [p, l.kind === 'face_mask' ? [l.female, l.male] : l.intensity]));
 const CHEEK = { label: '脸颊', x: 0, y: 100 / FH, width: 1, height: 20 / FH };
 
-test('makeup_compare holds one frame, shoots the baseline and each variant, puts every change back and measures the regions', async () => {
+test('makeup_compare shoots the baseline and each variant on the playing preview, puts every change back and measures the regions', async () => {
   const projectDir = project();
   const win = fakeWindow({ projectDir });
   const original = strengths(win);
@@ -167,18 +158,17 @@ test('makeup_compare holds one frame, shoots the baseline and each variant, puts
   });
   assert.equal(res.isError, undefined, res.content[0].text);
   assert.deepEqual(
-    win.calls.map(([m, p]) => (m === 'makeup_set' ? `set:${p.changes.map((c) => `${c.object_path}=${c.female}`).join(',')}` : m === 'preview_hold' ? `hold:${p.hold}` : m)),
+    win.calls.map(([m, p]) => (m === 'makeup_set' ? `set:${p.changes.map((c) => `${c.object_path}=${c.female}`).join(',')}` : m)),
     [
-      'preview_full_rate', 'preview_reset', 'hold:true',
+      'preview_full_rate', 'preview_reset',
       'preview_full_rate', 'preview_frame',
       'set:腮红=0', 'preview_fresh', 'preview_full_rate', 'preview_frame', 'set:面部面具/腮红=0.6',
       'set:面部面具/腮红=1', 'preview_fresh', 'preview_full_rate', 'preview_frame', 'set:面部面具/腮红=0.6',
       'preview_fresh', 'preview_full_rate', 'preview_frame',
-      'hold:false', 'preview_full_rate',
+      'preview_full_rate',
     ],
   );
   assert.deepEqual(strengths(win), original);
-  assert.equal(win.held(), false);
   const out = JSON.parse(res.content[0].text);
   assert.deepEqual(out.states, ['基线', '关腮红', '腮红满']);
   const r = out.runs[0].regions[0];
@@ -192,7 +182,7 @@ test('makeup_compare holds one frame, shoots the baseline and each variant, puts
   assert.deepEqual(res.content.slice(1).map((c) => c.type), ['text', 'image']);
 });
 
-test('makeup_compare puts the change back and plays the preview again when a capture fails', async () => {
+test('makeup_compare puts the change back when a capture fails', async () => {
   const projectDir = project();
   const win = fakeWindow({ projectDir, fail: { preview_frame: (_, calls) => calls.filter(([m]) => m === 'preview_frame').length === 2 } });
   const original = strengths(win);
@@ -201,17 +191,16 @@ test('makeup_compare puts the change back and plays the preview again when a cap
   assert.equal(res.isError, true);
   assert.match(res.content[0].text, /boom/);
   assert.deepEqual(strengths(win), original);
-  assert.equal(win.held(), false);
 });
 
-test('makeup_compare says so when the held frame changed between the first and the last baseline', async () => {
+test('makeup_compare says so when the face changed between the first and the last baseline (a moving video)', async () => {
   const projectDir = project();
   const win = fakeWindow({ projectDir, drift: true });
   const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
   const res = await client.callTool({ name: 'makeup_compare', arguments: { instance_id: '2', variants: [{ label: '关腮红', changes: [{ object_path: '腮红', female: 0 }] }, { label: '腮红满', changes: [{ object_path: '腮红', female: 1 }] }], regions: [CHEEK] } });
   const r = JSON.parse(res.content[0].text).runs[0].regions[0];
   assert.ok(r.drift.max > 8, JSON.stringify(r.drift));
-  assert.match(r.warning, /画面在停住期间还在变/);
+  assert.match(r.warning, /这期间画面自己在变/);
 });
 
 test('makeup_calibrate decodes both eyes on a temporary layer, reads the lid, mutes and restores everything and cleans up', async () => {
@@ -226,7 +215,7 @@ test('makeup_calibrate decodes both eyes on a temporary layer, reads the lid, mu
   const [left, right] = out.runs[0].parts;
   assert.deepEqual([left.eye, right.eye], ['left', 'right']);
   assert.deepEqual(left.box_px, [22, 32, 76, 56]);
-  assert.equal(left.texture_px_per_frame_px, 1.47);
+  assert.equal(left.texture_px_per_frame_px, 1.5);
   // The fake lid rim is at texture y 247 on both eyes; read in 2-px bins.
   for (const p of [left, right]) for (const row of p.upper_lid.filter((r) => r.rim !== null)) assert.equal(row.rim, 246, JSON.stringify(row));
   assert.ok(left.upper_lid.filter((r) => r.rim !== null).length >= 5);
@@ -243,7 +232,6 @@ test('makeup_calibrate decodes both eyes on a temporary layer, reads the lid, mu
   assert.equal(win.layers.has('面部面具/眼部妆容'), false);
   assert.deepEqual(fs.readdirSync(path.join(projectDir, 'Assets')), []);
   assert.equal(out.cleaned_up.length, 1);
-  assert.equal(win.held(), false);
 });
 
 test('makeup_calibrate fails clearly when the code does not show, and still removes what it added', async () => {
@@ -296,4 +284,14 @@ test('makeup_texture attach puts the texture on an existing layer of the same re
   assert.match(missing.content[0].text, /MAKEUP_LAYER_NOT_FOUND: 睫毛 matches 0/);
   const both = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'eye', blend: 'normal', layers, attach: { object_path: '眼线', add: true } } });
   assert.match(both.content[0].text, /give object_path or add: true, not both/);
+});
+
+test('makeup_calibrate deletes its texture without asking the editor when it failed before handing it over', async () => {
+  const projectDir = project();
+  const win = fakeWindow({ projectDir, fail: { makeup_list: () => true, resource_delete_unused: () => true } });
+  const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
+  const res = await client.callTool({ name: 'makeup_calibrate', arguments: { instance_id: '2', layout: 'eye' } });
+  assert.match(res.content[0].text, /PLUGIN_ERROR\(makeup_list\)/);
+  assert.deepEqual(fs.readdirSync(path.join(projectDir, 'Assets')), []);
+  assert.ok(!win.calls.some(([m]) => m === 'resource_delete_unused'));
 });

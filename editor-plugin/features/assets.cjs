@@ -144,10 +144,6 @@ const REQUIRED = {
     [M.ef, 'UndoSystem.instance.start'],
     [M.ef, 'UndoSystem.instance.end'],
     [M.ef, 'Resource.ResourceUndoManager.createImportUndoID'],
-    [M.preview, 'PreviewManager.getInstance'],
-    [M.preview, 'PreviewManager.prototype.pause'],
-    [M.preview, 'PreviewManager.prototype.resume'],
-    [M.preview, 'PreviewManager.prototype.getPlaystate'],
     [M.events, 'BusinessEventManager.TypeGuard'],
   ],
   aiCombine: [

@@ -44,6 +44,7 @@ const OWN = [
   'library_search',
   'makeup_calibrate',
   'makeup_compare',
+  'makeup_eye',
   'makeup_layers',
   'makeup_texture',
   'menu_add',

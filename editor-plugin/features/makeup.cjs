@@ -1,7 +1,6 @@
 'use strict';
 // Makeup layers in the open project, read and changed through their component editors (the same
-// setters the inspector uses, so the preview follows), and the preview held on one video frame so
-// makeup states can be compared or decoded on exactly the same picture.
+// setters the inspector uses, so the preview follows without a reload).
 const { M, editingScene, sceneObjectPath, resolveByPath } = require('./common.cjs');
 
 const KINDS = { FaceMaskComponentEditor: 'face_mask', EyeColorComponentEditor: 'eye_color', FilterComponentEditor: 'filter' };
@@ -15,9 +14,13 @@ const SETTABLE = {
 const REGION_MENU = { face: 'FaceMask', eye: 'FaceEye', lips: 'FaceLips' };
 
 const TEXTURE = 'PreviewTextureUpdated';
-// Picked, not measured: same count as preview_reset waits for (the first frame after a change may
-// still be the old one); the timeout leaves room for the 6 fps background mode.
-const FRESH_FRAMES = 2;
+// Picked, not measured: up to 2 s for an imported texture to show up under its path.
+const IMPORT_LOOKUPS = 10;
+const IMPORT_LOOKUP_MS = 200;
+// Measured 2026-11-08 (still-photo video, liner and lashes switched off and back): a strength change
+// shows from the second new frame on; one more for margin. The timeout leaves room for the 6 fps
+// background mode.
+const FRESH_FRAMES = 3;
 const FRAME_TIMEOUT_MS = 5000;
 
 function tunables(lib) {
@@ -85,7 +88,16 @@ const methods = {
       if (ch.texture === undefined || textures.has(ch.texture)) continue;
       const rm = project.resourceManager;
       let item = rm.getResourceItemByAssetPath(ch.texture);
-      if (!item) item = await rm.importResourceFileAsync(ch.texture, { undoID: EF.Resource.ResourceUndoManager.createImportUndoID(`makeup_set:${ch.texture}`) });
+      if (!item) {
+        const got = await rm.importResourceFileAsync(ch.texture, { undoID: EF.Resource.ResourceUndoManager.createImportUndoID(`makeup_set:${ch.texture}`) });
+        // Seen once in the calibration runs: the import finished without handing the item back. It is
+        // then found by its path.
+        item = got && got.mainObject ? got : null;
+        for (let i = 0; !item && i < IMPORT_LOOKUPS; i++) {
+          await new Promise((r) => setTimeout(r, IMPORT_LOOKUP_MS));
+          item = rm.getResourceItemByAssetPath(ch.texture);
+        }
+      }
       if (!item || !item.mainObject) throw Error(`TEXTURE_IMPORT_FAILED: ${ch.texture}`);
       if (ch.texture_size !== undefined && item.compressMaxResolution !== ch.texture_size) item.compressMaxResolution = ch.texture_size;
       textures.set(ch.texture, item);
@@ -125,15 +137,6 @@ const methods = {
     return { object_path: layer.path, added_objects: res.added_objects };
   },
 
-  // Holds the preview on the current video frame (hold=true) or plays it again (hold=false).
-  previewHold({ hold }) {
-    this.ensureCompatible('makeup');
-    const pm = this.mod(M.preview).PreviewManager.getInstance();
-    if (hold) pm.pause();
-    else pm.resume();
-    return { held: !pm.getPlaystate() };
-  },
-
   // Resolves once the preview has drawn `frames` new frames (after a change, so the next capture shows it).
   async previewFresh({ frames = FRESH_FRAMES, timeout_ms = FRAME_TIMEOUT_MS } = {}) {
     this.ensureCompatible('makeup');
@@ -158,6 +161,6 @@ const methods = {
   },
 };
 
-const METHODS = { makeup_list: 'makeupList', makeup_set: 'makeupSet', makeup_add_layer: 'makeupAddLayer', preview_hold: 'previewHold', preview_fresh: 'previewFresh' };
+const METHODS = { makeup_list: 'makeupList', makeup_set: 'makeupSet', makeup_add_layer: 'makeupAddLayer', preview_fresh: 'previewFresh' };
 
 module.exports = { methods, METHODS, KINDS, SETTABLE, REGION_MENU };
