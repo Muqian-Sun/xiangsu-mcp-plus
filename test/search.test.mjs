@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './tmp.mjs';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
