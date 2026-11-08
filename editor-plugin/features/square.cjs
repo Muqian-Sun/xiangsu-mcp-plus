@@ -65,7 +65,7 @@ const methods = {
     return raw.panelKey === SQUARE_PANEL ? this.squareKind(raw) : 'package';
   },
 
-  async squareList({ category_id, cursor = 0, count = 30 }) {
+  async squareList({ category_id, cursor = 0, count = 20 }) {
     this.ensureCompatible('square');
     const catBody = await this.mod(M.aiCategory).getAIAssetCategory({ cursor: 0, count: 50, panelKey: SQUARE_PANEL });
     if (!catBody || catBody.statusCode !== 0) throw Error(`GET_CATEGORY_FAILED: statusCode=${catBody && catBody.statusCode} message=${(catBody && catBody.message) || ''}`);
@@ -108,7 +108,7 @@ const methods = {
     const uris = squareParts(item).ai.resPictureUri;
     const res = await this.mod(M.aiEffectApi).getDYEHFileUrls({ uriList: uris });
     if (!res || res.code !== 0) throw Error(`GET_IMAGE_URLS_FAILED: code=${res && res.code} message=${(res && res.message) || ''}`);
-    return uris.map((uri, i) => ({ image_index: i, url: (res.data && res.data[uri] && res.data[uri].url) || null }));
+    return uris.map((uri, i) => ({ image_index: i, image_url: (res.data && res.data[uri] && res.data[uri].url) || null }));
   },
 
   // Applies a square card through the asset library instance, then waits for the objects its callbacks add.

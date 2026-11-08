@@ -23,6 +23,7 @@ import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
+import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 
 const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
@@ -100,6 +101,8 @@ class Seen {
 }
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
+const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs，如 img:12、video:3），交给 image_view：图片直接显示，视频和音频返回原地址；引用在 MCP 服务这次运行期间有效。';
+const KIND_TEXT = { video: '视频', audio: '音频' };
 const failure = (error) => ({ content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true });
 
 async function imageContent(d, { url, file }) {
@@ -139,6 +142,8 @@ export function createServer(deps = {}) {
   d.downloads = d.downloads ?? new Downloads();
   d.qrCodes = d.qrCodes ?? new QrCodes();
   d.callLog = d.callLog ?? new CallLog();
+  d.refs = d.refs ?? new MediaRefs();
+  d.spill = d.spill ?? new Spill();
   d.qrCodes.prune();
   // Library assets and homepage works seen in this session, kept here rather than in a window:
   // windows open and close while an agent works, and a later apply or download may be served by a
@@ -177,19 +182,17 @@ export function createServer(deps = {}) {
     if (hits.length === 1) return String(hits[0].instance_id);
     throw Error(project_path ? `NO_UNIQUE_INSTANCE for ${project_path}: ${hits.length} matches` : `AMBIGUOUS_INSTANCE: ${list.length} editor windows; pass project_path or instance_id`);
   };
-  const library = (method) => async (args) => {
-    const { project_path, instance_id, ...params } = args;
-    const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-    return text(seenLib.keep(await d.callPlugin(method, params, { projectPath })));
-  };
-
-  // Homepage works do not depend on the project, so any window serves them (the lowest pid when no
-  // target is given).
+  // Homepage works, the asset library and the add-object menu do not depend on the project, so any
+  // window serves them (the lowest pid when no target is given).
   const homeWindow = async ({ project_path, instance_id }) => {
     if (project_path !== undefined || instance_id !== undefined) return { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) };
     const pids = d.listInstances().map((s) => s.pid).sort((a, b) => a - b);
     if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
     return { pid: pids[0] };
+  };
+  const library = (method) => async (args) => {
+    const { project_path, instance_id, ...params } = args;
+    return text(seenLib.keep(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }))));
   };
   const works = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
@@ -226,7 +229,7 @@ export function createServer(deps = {}) {
   const workPage = {
     category_id: z.string().optional().describe('works_list 返回的 categories 里的分类 ID；省略时用第一个分类（推荐）。'),
     cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor；最后一页的 next_cursor 是 null。'),
-    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
+    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
     sort: workSort,
   };
 
@@ -269,16 +272,24 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_view',
-      description: `查看图片。其它工具只返回图片地址，要看画面时把地址交给本工具：素材、作品、灵感、热点的 cover_url，作品动图 gif_url，inspiration_detail 的 images，task_detail 内容块 source 里的 url，library_images 的 url；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，视频（task_detail 里 mediaType=1 的 source）看不了。单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
-      shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('http(s) 图片地址，或本机图片文件的绝对路径。') },
+      description: `查看图片。列表类工具（素材、作品、灵感、任务、排行榜、音乐等）返回的是短引用 *_ref / *_refs（如 img:12），详情类工具（inspiration_detail 的 images、menu_list details 的 image_url）返回地址，都交给本工具；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。视频和音频引用（video:3、audio:5）看不了画面，返回它的原地址。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
+      shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('其它工具返回的引用（img:12）、http(s) 图片地址，或本机图片文件的绝对路径。') },
       run: async ({ images }) => {
         const content = [];
         let bytes = 0;
         let shown = 0;
         for (const src of images) {
-          const remote = /^https?:\/\//.test(src);
+          const hit = REF_PATTERN.test(src) ? d.refs.get(src) : null;
+          if (REF_PATTERN.test(src) && (!hit || hit.kind !== 'image')) {
+            const said = hit ? `${src} 是${KIND_TEXT[hit.kind]}，看不了画面，原地址：${hit.url}` : `图片读取失败：引用 ${src} 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具`;
+            content.push({ type: 'text', text: `第 ${shown + 1} 张：${src}` }, { type: 'text', text: said });
+            shown++;
+            continue;
+          }
+          const where = hit ? hit.url : src;
+          const remote = /^https?:\/\//.test(where);
           const img =
-            remote || path.isAbsolute(src) ? await imageContent(d, remote ? { url: src } : { file: src }) : { type: 'text', text: '图片读取失败：不是 http(s) 地址或绝对路径' };
+            remote || path.isAbsolute(where) ? await imageContent(d, remote ? { url: where } : { file: where }) : { type: 'text', text: '图片读取失败：不是引用、http(s) 地址或绝对路径' };
           const size = img.data ? img.data.length : 0;
           if (shown && bytes + size > IMAGE_VIEW_BYTES) break;
           bytes += size;
@@ -292,38 +303,41 @@ export function createServer(deps = {}) {
     },
     {
       name: 'library_list',
-      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_url 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
+      refs: true,
+      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、封面 cover_ref 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_ref 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
       shape: {
         ...target,
         panel_key: z.string().optional().describe('面板，取不传 panel_key 时返回的 panels 里的 panel_key；省略时只返回面板清单。'),
         category_id: z.string().optional().describe('子分类 ID（收藏为目录名）；省略时用第一个子分类（通常是「全部」）。'),
         cursor: z.union([z.number().int().min(0), z.string()]).optional().describe('翻页游标，原样取上一页的 next_cursor（收藏是字符串）。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
+        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
       },
       run: async (a) => {
         if (a.panel_key !== undefined) return library('library_list')(a);
         const { project_path, instance_id } = a;
-        return text(await d.callPlugin('library_nav', {}, { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) }));
+        return text(await d.callPlugin('library_nav', {}, await homeWindow({ project_path, instance_id })));
       },
     },
     {
       name: 'library_search',
+      refs: true,
       description:
-        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_url，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
+        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_ref，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词，如「芒果脸」「腮红」「复古滤镜」。与 queries 二选一。'),
         queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["冷艳", "猫眼", "烟熏", "风格妆"]。与 query 二选一。'),
         panel_key: z.string().optional().describe('只搜这个面板（library_list 不传 panel_key 时返回的 panel_key，如 aigc_material）。'),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 50。'),
+        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 20。'),
       },
       run: library('library_search'),
     },
     {
       name: 'library_images',
+      refs: true,
       description:
-        '一张 AI 图片卡片（kind=ai_image）的整组结果图地址，按 image_index 编号；用 image_view 看图，应用时用 library_apply 的 image_index 选择。template_id 须来自本会话的 library_list / library_search。',
+        '一张 AI 图片卡片（kind=ai_image）的整组结果图 image_ref，按 image_index 编号；用 image_view 看图，应用时用 library_apply 的 image_index 选择。template_id 须来自本会话的 library_list / library_search。',
       shape: { ...target, template_id: z.string().describe('library_list / library_search 返回的 template_id。') },
       run: async ({ project_path, instance_id, template_id }) => {
         const { slim, raw } = seenLib.get(template_id);
@@ -350,12 +364,14 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_list',
-      description: '分页列出像塑首页「模板」某个分类下的作品。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法；任意一个工程窗口开着即可。每次都带上全部分类 categories（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）。每条作品有 template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_url 和动图 gif_url（用 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
+      refs: true,
+      description: '分页列出像塑首页「模板」某个分类下的作品。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法；任意一个工程窗口开着即可。每次都带上全部分类 categories（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）。每条作品有 template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_ref 和动图 gif_ref（交给 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
       shape: { ...target, ...workPage },
       run: works('works_list'),
     },
     {
       name: 'works_search',
+      refs: true,
       description:
         '按作品名搜索首页作品（与首页搜索框同一个接口）。不给 category_id 时搜全部分类并合并去重：「推荐」翻到底只有约 300 条，「美化」「友友天地」等分类里还有它没有的作品。合并顺序是先「推荐」里的（按 sort），再按分类顺序追加只在其它分类出现的；每个分类最多 300 条。每条带 found_in（出现在哪些分类），另返回 total、by_category（各分类条数）。queries 一次搜多个词（最多 8 个）并合并，每条带 matched_queries。按 offset / count 分页，结果缓存 10 分钟，翻页不重新请求。某个分类翻页时服务端一直给同一页，会列在 incomplete 里。其余字段同 works_list。按特效 ID 查用 works_by_effect。',
       shape: {
@@ -364,13 +380,14 @@ export function createServer(deps = {}) {
         queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["头套", "头饰"]。与 query 二选一。'),
         category_id: z.string().optional().describe('只搜这个分类（works_list 返回的 categories 里的分类 ID）；省略时搜全部分类。'),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 30。'),
+        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 20。'),
         sort: workSort,
       },
       run: works('works_search'),
     },
     {
       name: 'works_by_effect',
+      refs: true,
       description:
         '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到两次请求，20 个约 6 秒。',
       shape: {
@@ -523,7 +540,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_list',
-      description: '分页列出某个分类下的灵感（灵感是官方和创作者发布的特效创意，首页右侧「灵感」页签就是它）：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_url（用 image_view 看）。每次都带上全部分类 tabs。拿到 inspiration_id 后用 inspiration_detail 看详情。',
+      refs: true,
+      description: '分页列出某个分类下的灵感（灵感是官方和创作者发布的特效创意，首页右侧「灵感」页签就是它）：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_ref（交给 image_view 看）。每次都带上全部分类 tabs。拿到 inspiration_id 后用 inspiration_detail 看详情。',
       shape: {
         ...target,
         tab: z.string().optional().describe('分类名，取上次返回的 tabs 里的一个（全部、热门音源、头饰、变形等）；省略时用第一个（全部）。'),
@@ -557,26 +575,37 @@ export function createServer(deps = {}) {
     },
     {
       name: 'tasks_list',
+      refs: true,
       description:
-        '列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
-      shape: { ...target, kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。') },
+        '按 offset / count 分页列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
+      shape: {
+        ...target,
+        kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。'),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
+      },
       run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(seenTasks.keep(await d.callPlugin('tasks_list', params, await homeWindow({ project_path, instance_id }))));
+        const { project_path, instance_id, offset = 0, count = 20, ...params } = a;
+        const { items, ...rest } = seenTasks.keep(await d.callPlugin('tasks_list', params, await homeWindow({ project_path, instance_id })));
+        const next = offset + count;
+        return text({ ...rest, total: items.length, items: items.slice(offset, next), next_offset: next, has_more: next < items.length });
       },
     },
     {
       name: 'task_detail',
+      refs: true,
       description:
-        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、是否符合主题、赛道）、完成状态、是否分档任务，和完整的任务说明（参与要求、奖项详情、近期热门等内容块）：内容块里的参考图和视频只给 source 地址，mediaType=1 的是 mp4 视频，其余是图片（用 image_view 看），空地址和 blob: 地址无效（任务页里也显示不出来）。成长任务返回奖励、参考工程、相关灵感（封面 cover_url）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
-      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。') },
+        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、是否符合主题、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。成长任务返回奖励、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
-        const { project_path, instance_id, task_id } = a;
+        const { project_path, instance_id, task_id, save_to } = a;
         const t = seenTasks.get(task_id);
         if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect and growth tasks have details`);
         const id = t.raw.kind === 'task' ? t.raw.item_id : t.slim.task_id;
-        const out = await d.callPlugin('task_detail', { kind: t.raw.kind, id }, await homeWindow({ project_path, instance_id }));
-        return text({ task_id, ...out });
+        const { raw, ...out } = await d.callPlugin('task_detail', { kind: t.raw.kind, id }, await homeWindow({ project_path, instance_id }));
+        if (save_to === undefined) return text({ task_id, ...out });
+        const file = saveFile(save_to, `task_detail-${task_id}.json`, JSON.stringify(raw ?? out, null, 2));
+        return text({ task_id, ...out, raw_saved_to: file });
       },
     },
     {
@@ -616,6 +645,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_list',
+      refs: true,
       description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，每页都带上该榜当天的分类 categories（level 1 大类如人像美化、游戏玩法、人设扮演、AI 玩法，level 2 细类如基础头饰、测一测、不露脸壁纸；每个榜不同）。按主题的专题榜（如「热爆美妆特效榜」）见 rank_subjects。要看某个特效的工程，把 effect_id 和 name 交给 works_by_effect，查它在不在首页。',
       shape: {
         ...target,
@@ -635,16 +665,19 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_hotspots',
-      description: '热点榜（按热度排序的抖音热点，每小时更新）：名次、topic_id、标题、说明、热度、相关灵感数。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_url，用 image_view 看）。',
+      refs: true,
+      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_ref，交给 image_view 看）。',
       shape: {
         ...target,
-        count: z.number().int().min(1).optional().describe('最多返回多少个热点，默认全部。'),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
         topic_id: z.string().min(1).optional().describe('只看这个热点下的灵感（rank_hotspots 返回的 topic_id）。'),
       },
       run: community('rank_hotspots'),
     },
     {
       name: 'rank_subjects',
+      refs: true,
       description: '像塑移动版「专题合集」里按主题的榜单，最新的在前：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。keyword 按榜名搜索全部期；传 subject_id 时返回该榜的全部特效（最多 20 个）。',
       shape: {
         ...target,
@@ -659,6 +692,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_innovation',
+      refs: true,
       description: '创新计划的榜单。kind=template / effect 为官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面；kind=creators 为创作者月榜：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金（元）。',
       shape: {
         ...target,
@@ -670,6 +704,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'my_effects',
+      refs: true,
       description:
         '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews。',
       shape: {
@@ -689,7 +724,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'music_list',
-      description: '列出抖音音乐：两个参数都不传时返回音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称；传 query 按关键词搜索，或传 category_code 看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面、试听链接和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
+      refs: true,
+      description: '列出抖音音乐：两个参数都不传时返回音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称；传 query 按关键词搜索，或传 category_code 看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词。'),
@@ -902,7 +938,10 @@ export function createServer(deps = {}) {
         query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。'),
         details: z.boolean().optional().describe(`同时返回说明和示意图，默认 false；匹配项须不超过 ${MAX_MENU_PREVIEW} 个。`),
       },
-      run: plugin('menu_list'),
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('menu_list', params, await homeWindow({ project_path, instance_id })));
+      },
     },
     {
       name: 'menu_add',
@@ -996,7 +1035,7 @@ export function createServer(deps = {}) {
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const mine = [...own.values()].map((t) => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema) }));
+    const mine = [...own.values()].map((t) => ({ name: t.name, description: t.refs ? `${t.description}${REF_NOTE}` : t.description, inputSchema: z.toJSONSchema(t.schema) }));
     const official = (await d.official.listTools())
       .filter((t) => !own.has(t.name))
       .map((t) => (t.name === 'capture_preview' ? { ...t, description: `${t.description || ''}${CAPTURE_PREVIEW_NOTE}` } : t));
@@ -1009,7 +1048,9 @@ export function createServer(deps = {}) {
       const parsed = t.schema.safeParse(args);
       if (!parsed.success) return failure(`INVALID_ARGUMENTS(${name}): ${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`);
       try {
-        return await t.run(parsed.data);
+        let res = await t.run(parsed.data);
+        if (t.refs && !res.isError) res = { ...res, content: res.content.map((c) => (c.type === 'text' ? { ...c, text: JSON.stringify(withRefs(JSON.parse(c.text), d.refs), null, 2) } : c)) };
+        return d.spill.apply(name, res);
       } catch (e) {
         return failure(e);
       }

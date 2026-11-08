@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../src/server.mjs';
 import { fetchImage, readImageFile } from '../src/images.mjs';
+import { MediaRefs } from '../src/outputs.mjs';
 
 const OWN = [
   'ai_combine_apply',
@@ -176,11 +177,32 @@ test('image_view shows URLs and local files with a caption each, isolating failu
     { type: 'text', text: '第 3 张：/hover/smokey.png' },
     { type: 'image', data: Buffer.from('/hover/smokey.png').toString('base64'), mimeType: 'image/gif' },
     { type: 'text', text: '第 4 张：blob:https://admin/x' },
-    { type: 'text', text: '图片读取失败：不是 http(s) 地址或绝对路径' },
+    { type: 'text', text: '图片读取失败：不是引用、http(s) 地址或绝对路径' },
   ]);
   assert.deepEqual(fetched, ['https://ok', 'https://bad']);
   const tooMany = await client.callTool({ name: 'image_view', arguments: { images: Array(9).fill('https://ok') } });
   assert.equal(tooMany.isError, true);
+});
+
+test('image_view resolves refs: pictures by their address, videos and audio as their address, unknown refs per item', async () => {
+  const fetched = [];
+  const refs = new MediaRefs();
+  const img = refs.add('https://c/cover.png', 'image');
+  const video = refs.add('https://c/clip.mp4', 'video');
+  const audio = refs.add('https://c/song.mp3', 'audio');
+  const { client } = await connect({ official: fakeOfficial(), callPlugin: async () => ({}), refs, fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }) });
+  const res = await client.callTool({ name: 'image_view', arguments: { images: [img, video, audio, 'img:999'] } });
+  assert.deepEqual(res.content, [
+    { type: 'text', text: `第 1 张：${img}` },
+    { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+    { type: 'text', text: `第 2 张：${video}` },
+    { type: 'text', text: `${video} 是视频，看不了画面，原地址：https://c/clip.mp4` },
+    { type: 'text', text: `第 3 张：${audio}` },
+    { type: 'text', text: `${audio} 是音频，看不了画面，原地址：https://c/song.mp3` },
+    { type: 'text', text: '第 4 张：img:999' },
+    { type: 'text', text: '图片读取失败：引用 img:999 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具' },
+  ]);
+  assert.deepEqual(fetched, ['https://c/cover.png']);
 });
 
 test('image_view stops before the stdio message limit and lists what it left out', async () => {
@@ -209,7 +231,7 @@ test('menu_list details and library_images return image addresses without fetchi
       sent.push({ method, params });
       if (method === 'menu_list') return { total: 300, items: rows };
       if (method === 'library_search') return { items: [{ template_id: '901', title: '萌猫造型帽子', kind: 'ai_image' }], raw: [{ templateId: '901' }] };
-      if (method === 'library_images') return [{ image_index: 0, url: 'https://img/0.png' }];
+      if (method === 'library_images') return [{ image_index: 0, image_url: 'https://img/0.png' }];
       throw Error(`unexpected ${method}`);
     },
     listInstances: () => [{ pid: 1 }],
@@ -222,7 +244,7 @@ test('menu_list details and library_images return image addresses without fetchi
   assert.equal(menu.content.length, 1);
   await client.callTool({ name: 'library_search', arguments: { query: '猫' } });
   const lib = await client.callTool({ name: 'library_images', arguments: { template_id: '901' } });
-  assert.deepEqual(JSON.parse(lib.content[0].text), { template_id: '901', title: '萌猫造型帽子', images: [{ image_index: 0, url: 'https://img/0.png' }] });
+  assert.deepEqual(JSON.parse(lib.content[0].text), { template_id: '901', title: '萌猫造型帽子', images: [{ image_index: 0, image_ref: 'img:1' }] });
 });
 
 test('library_list without panel_key lists the panels instead of a panel page', async () => {
@@ -241,6 +263,52 @@ test('library_list without panel_key lists the panels instead of a panel page', 
       ['library_list', { panel_key: '3d_makeup' }, '/proj/A'],
     ],
   );
+});
+
+test('the asset library and the add-object menu go to the lowest-pid window when no target is given', async () => {
+  const seen = [];
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 300 }, { pid: 200 }],
+    callPlugin: async (method, params, opts) => (seen.push({ method, opts }), method === 'library_nav' ? { panels: [] } : { total: 0, items: [], raw: [] }),
+  });
+  for (const [name, args] of [
+    ['library_list', {}],
+    ['library_list', { panel_key: '3d_makeup' }],
+    ['library_search', { query: '腮红' }],
+    ['menu_list', { query: '妆' }],
+  ]) {
+    const res = await client.callTool({ name, arguments: args });
+    assert.equal(res.isError, undefined, `${name}: ${res.content[0].text}`);
+  }
+  assert.deepEqual(
+    seen.map((c) => [c.method, c.opts]),
+    [
+      ['library_nav', { pid: 200 }],
+      ['library_list', { pid: 200 }],
+      ['library_search', { pid: 200 }],
+      ['menu_list', { pid: 200 }],
+    ],
+  );
+  await client.callTool({ name: 'menu_list', arguments: { project_path: '/proj/A' } });
+  assert.deepEqual(seen.at(-1).opts, { projectPath: '/proj/A' });
+});
+
+test('own answers over the spill limit come back as a file and an outline, after refs are handed out', async () => {
+  const items = Array.from({ length: 300 }, (_, i) => ({ music_id: String(i), title: `歌${i}`, cover_url: `https://c/${i}.png`, preview_url: `https://c/${i}.mp3`, note: '很长的说明'.repeat(10) }));
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 1 }],
+    callPlugin: async (method, params) => (params.query === '冬天' ? { query: '冬天', items: items.slice(0, 1), raw: items.slice(0, 1) } : { query: '夏天', items, raw: items }),
+  });
+  const res = await client.callTool({ name: 'music_list', arguments: { query: '夏天' } });
+  const summary = JSON.parse(res.content[0].text);
+  assert.deepEqual(summary.outline.items, { items: 300, item_keys: ['music_id', 'title', 'cover_ref', 'preview_ref', 'note'] });
+  const full = JSON.parse(fs.readFileSync(summary.spilled_to, 'utf8'));
+  assert.deepEqual(full.items[1], { music_id: '1', title: '歌1', cover_ref: 'img:3', preview_ref: 'audio:4', note: items[1].note });
+  const small = JSON.parse((await client.callTool({ name: 'music_list', arguments: { query: '冬天' } })).content[0].text);
+  assert.equal(small.spilled_to, undefined);
+  assert.equal(small.items[0].cover_ref, 'img:1');
 });
 
 test('ext_status reports the official connection and each window with instance id and self check', async () => {
