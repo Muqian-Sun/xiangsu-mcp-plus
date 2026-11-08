@@ -1,11 +1,12 @@
 import test from 'node:test';
-import './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { listInstances } from '../src/bridge.mjs';
+import http from 'node:http';
+import { tmpdir } from './tmp.mjs';
+import { listInstances, resolveInstance, BRIDGE_TIMING } from '../src/bridge.mjs';
 
 const DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE, 'instances');
 const PROCESS_START = Date.now() - process.uptime() * 1000;
@@ -13,7 +14,7 @@ const PROCESS_START = Date.now() - process.uptime() * 1000;
 function writeRecords(records) {
   fs.rmSync(DIR, { recursive: true, force: true });
   fs.mkdirSync(DIR, { recursive: true });
-  for (const r of records) fs.writeFileSync(path.join(DIR, `${r.pid}.json`), JSON.stringify({ port: 1, token: 't', ...r }));
+  for (const { pid, port = 1, startedAt } of records) fs.writeFileSync(path.join(DIR, `${pid}.json`), JSON.stringify({ pid, port, token: 't', startedAt }));
 }
 
 async function exitedPid() {
@@ -45,4 +46,65 @@ test('a record whose process has exited is stale, and does not hide the live one
 test('records whose processes have all exited give no windows', async () => {
   writeRecords([{ pid: await exitedPid(), startedAt: Date.now() }]);
   assert.deepEqual(listInstances(), []);
+});
+
+// A window: a sleeping process for the pid, and an HTTP server answering the plugin's status RPC.
+// `answer` is the project path to report, 'hang' to never reply, or 'closed' for a port nobody listens on.
+const children = [];
+test.after(() => children.forEach((c) => c.kill()));
+
+async function window(answer) {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1e6)']);
+  children.push(child);
+  const calls = [];
+  const server = http.createServer((req, res) => {
+    calls.push(req.url);
+    if (answer === 'hang') return;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, value: { projectPath: answer } }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address();
+  if (answer === 'closed') await new Promise((r) => server.close(r));
+  else test.after(() => server.closeAllConnections() || server.close());
+  await new Promise((r) => setTimeout(r, 50));
+  return { pid: child.pid, port, startedAt: Date.now(), calls, server };
+}
+
+test('a hung, a closing and a stale window do not keep the target window from being found', async () => {
+  BRIDGE_TIMING.statusMs = 300;
+  const target = tmpdir('xs-proj-');
+  const gone = path.join(tmpdir('xs-gone-'), 'deleted');
+  const [hung, closing, stale, good] = [await window('hang'), await window('closed'), await window(gone), await window(target)];
+  writeRecords([hung, closing, stale, good]);
+  const t0 = Date.now();
+  assert.equal((await resolveInstance({ projectPath: target })).pid, good.pid);
+  assert.ok(Date.now() - t0 < 1500, 'windows are asked together');
+  const before = hung.calls.length;
+  const t1 = Date.now();
+  assert.equal((await resolveInstance({ projectPath: target })).pid, good.pid);
+  assert.ok(Date.now() - t1 < 200, 'the window last seen with the project is asked first');
+  assert.equal(hung.calls.length, before, 'the hung window is not asked again');
+});
+
+test('a project in no window fails with the windows that did not answer', async () => {
+  BRIDGE_TIMING.statusMs = 300;
+  const [hung, other, stale] = [await window('hang'), await window(tmpdir('xs-other-')), await window(path.join(tmpdir('xs-gone-'), 'deleted'))];
+  writeRecords([hung, other, stale]);
+  const err = await resolveInstance({ projectPath: tmpdir('xs-none-') }).catch((e) => e);
+  assert.match(err.message, new RegExp(`NO_UNIQUE_PLUGIN_INSTANCE for .*: 0 matches; windows that did not answer: ${hung.pid} \\(`));
+  assert.ok(!err.message.includes(String(stale.pid)), 'a window showing a deleted project did answer');
+});
+
+test('a window that no longer shows the project it was last seen with sends the lookup to every window', async () => {
+  BRIDGE_TIMING.statusMs = 300;
+  const target = tmpdir('xs-proj-');
+  const first = await window(target);
+  writeRecords([first]);
+  assert.equal((await resolveInstance({ projectPath: target })).pid, first.pid);
+  const moved = await window(target);
+  first.server.removeAllListeners('request');
+  first.server.on('request', (req, res) => res.end(JSON.stringify({ ok: true, value: { projectPath: tmpdir('xs-else-') } })));
+  writeRecords([first, moved]);
+  assert.equal((await resolveInstance({ projectPath: target })).pid, moved.pid);
 });

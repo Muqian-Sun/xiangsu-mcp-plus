@@ -54,7 +54,27 @@ async function post(instance, method, params, timeoutMs) {
   return body.value;
 }
 
-// Selects the plugin instance by pid, or by the project path open in that window.
+// statusMs is picked: a window that does not answer its status in this long is passed over.
+export const BRIDGE_TIMING = { statusMs: 5000 };
+// The window each project (real path) was last found in, asked first next time. Every window is asked only
+// when that one no longer shows the project, so a hung or closing window costs nothing until then.
+const lastSeen = new Map();
+
+const realPath = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+
+async function projectOf(instance) {
+  const st = await post(instance, 'status', {}, BRIDGE_TIMING.statusMs);
+  return st.projectPath ? realPath(st.projectPath) : null;
+}
+
+// Selects the plugin instance by pid, or by the project path open in that window. Windows are asked
+// together, and one that does not answer (hung, closing) does not keep the others from being found.
 export async function resolveInstance({ pid, projectPath } = {}) {
   const live = listInstances();
   if (pid) {
@@ -67,13 +87,16 @@ export async function resolveInstance({ pid, projectPath } = {}) {
     throw Error(`AMBIGUOUS_INSTANCE: ${live.length} plugin instances; pass project_path`);
   }
   const want = fs.realpathSync(projectPath);
-  const matches = [];
-  for (const s of live) {
-    const st = await post(s, 'status', {}, 5000);
-    if (st.projectPath && fs.realpathSync(st.projectPath) === want) matches.push(s);
+  const known = live.find((s) => s.pid === lastSeen.get(want));
+  if (known && (await projectOf(known).catch(() => null)) === want) return known;
+  const answers = await Promise.allSettled(live.map(projectOf));
+  const matches = live.filter((s, i) => answers[i].status === 'fulfilled' && answers[i].value === want);
+  if (matches.length === 1) {
+    lastSeen.set(want, matches[0].pid);
+    return matches[0];
   }
-  if (matches.length !== 1) throw Error(`NO_UNIQUE_PLUGIN_INSTANCE for ${projectPath}: ${matches.length} matches`);
-  return matches[0];
+  const silent = live.flatMap((s, i) => (answers[i].status === 'rejected' ? [`${s.pid} (${answers[i].reason.message})`] : []));
+  throw Error(`NO_UNIQUE_PLUGIN_INSTANCE for ${projectPath}: ${matches.length} matches${silent.length ? `; windows that did not answer: ${silent.join(', ')}` : ''}`);
 }
 
 export async function callPlugin(method, params = {}, { pid, projectPath, timeoutMs = 120000 } = {}) {
