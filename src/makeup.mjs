@@ -29,6 +29,7 @@ const NAME_PARTS = [
   [/高光|提亮|亮片|闪/, '高光'],
   [/痣/, '痣'],
   [/雀斑/, '雀斑'],
+  [/遮瑕/, '遮瑕'],
   [/口红|唇/, '口红'],
   [/眼影|眼妆/, '眼影'],
 ];
@@ -38,20 +39,25 @@ const NAME_FITS = {
   唇部: ['口红', '高光'],
 };
 
+// Blend modes that can only lighten the skin (相加, 滤色, 颜色减淡, 变亮, 线性减淡): whatever the
+// texture's colour, such a layer is a highlight, never a blush or a contour.
+const LIGHTENING = new Set([3, 4, 8, 12, 13]);
+
 // Pixel rules, from the textures of the same 109 layers (positions are fractions of the texture):
 // neutral-grey full-face maps (rgb 125–128, 73–100 % covered) are light/shadow maps blended over the
 // skin; brows sit at y 0.39–0.40 and are under 0.07 tall; nose highlights are about 0.12 wide;
 // freckles, moles and sparkles cover under 0.1 % of the texture; blush and cheek contour sit at
 // y 0.51–0.64. In the eye layout liners are bands 0.09–0.20 tall, lower-lid lines sit at y 0.70 and
 // below, highlights are near white.
-function partFromPixels(region, s) {
-  if (region === '唇部') return s.hsl[2] >= 80 ? '唇部高光' : '口红';
+function partFromPixels(region, s, blendMode) {
+  if (region === '唇部') return s.hsl[2] >= 80 || LIGHTENING.has(blendMode) ? '唇部高光' : '口红';
   if (region === '眼部') {
-    if (s.hsl[2] >= 80) return '高光';
+    if (s.hsl[2] >= 80 || LIGHTENING.has(blendMode)) return '高光';
     if (s.cy >= 0.68) return '卧蚕';
     if (s.height <= 0.2) return '眼线';
     return '眼影';
   }
+  if (LIGHTENING.has(blendMode)) return '高光';
   if (s.coverage > 0.5 && s.hsl[1] < 8 && Math.abs(s.hsl[2] - 50) < 6) return '明暗';
   if (s.cy < 0.45 && s.height < 0.1) return '眉毛';
   if (s.width <= 0.15 && Math.abs(s.cx - 0.5) < 0.05) return '鼻部';
@@ -61,13 +67,19 @@ function partFromPixels(region, s) {
 }
 
 // The look's coverage, by the groups a makeup artist checks.
-const GROUPS = ['眉', '眼妆', '美瞳', '颊', '轮廓', '唇', '点缀', '其他'];
-// Groups every full look is expected to decide on; 点缀 and 其他 are optional.
+const GROUPS = ['底妆', '眉', '眼妆', '美瞳', '颊', '轮廓', '唇', '点缀', '其他'];
+// Groups every full look is expected to decide on; 底妆 (mostly the AI face and skin smoothing, not
+// makeup layers), 点缀 and 其他 are optional.
 const CORE_GROUPS = ['眉', '眼妆', '美瞳', '颊', '轮廓', '唇'];
 const EYE_PARTS = ['眼影', '眼线', '睫毛', '卧蚕'];
 // The runtime classes of FaceMask and EyeColorV2: seen under these names only when the editor's side
 // (main.scene.extra) is missing, which also loses their region and texture.
 const RUNTIME_ONLY = ['EffectFaceMakeupFaceU', 'EyeColor'];
+// BlendModeType and SurfaceType of the editor's FaceMask plugin (CreationConfigBase.d.ts, FaceMask@1.0.6).
+export const BLEND_MODES = ['普通', '正片叠底', '叠加', '相加', '滤色', '柔光', '平均', '颜色加深', '颜色减淡', '变暗', '差值', '排除', '变亮', '线性减淡'];
+const SURFACES = ['普通', '水润', '珠光', '渐变', '哑光', '丝绒', '金属'];
+// A FaceMask draws on every face unless faceIds says otherwise; the editor's default is all five.
+const ALL_FACES = [0, 1, 2, 3, 4];
 
 function groupOf(region, part) {
   if (region === '眼部' || region === '睫毛') return '眼妆';
@@ -75,6 +87,7 @@ function groupOf(region, part) {
   if (region === '美瞳') return '美瞳';
   if (region === '牙齿') return null;
   if (part === '眉毛') return '眉';
+  if (part === '遮瑕') return '底妆';
   if (EYE_PARTS.includes(part)) return '眼妆';
   if (part === '腮红' || part === '腮红/修容') return '颊';
   if (['修容', '明暗', '鼻部', '高光'].includes(part)) return '轮廓';
@@ -96,13 +109,21 @@ function hsl(r, g, b) {
 }
 
 const hex = (r, g, b) => `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+const round3 = (v) => Math.round(v * 1000) / 1000;
 
 // Alpha-weighted colour and placement of a texture's painted pixels. Pixels under 5 % alpha (texture
 // noise) do not count.
 export function textureStats(file) {
   const buf = fs.readFileSync(file);
   if (sniffImage(buf) !== 'image/png') throw Error('不是 PNG，没有分析像素');
-  const { width: w, height: h, data } = PNG.sync.read(buf);
+  const s = pixelStats(PNG.sync.read(buf));
+  const round = (v) => Number(v.toFixed(3));
+  return { color: s.color, hsl: s.hsl, coverage: round(s.coverage), cx: round(s.cx), cy: round(s.cy), width: round(s.width), height: round(s.height) };
+}
+
+// The same for RGBA pixels in memory, unrounded; positions are fractions of the texture, measured on
+// pixel indices.
+export function pixelStats({ width: w, height: h, data }) {
   let sum = 0, sx = 0, sy = 0, r = 0, g = 0, b = 0;
   let x0 = w, y0 = h, x1 = -1, y1 = -1;
   for (let y = 0; y < h; y++) {
@@ -123,15 +144,14 @@ export function textureStats(file) {
     }
   }
   if (!sum) throw Error('贴图全透明');
-  const round = (v) => Number(v.toFixed(3));
   return {
     color: hex(r / sum, g / sum, b / sum),
     hsl: hsl(r / sum, g / sum, b / sum),
-    coverage: round(sum / (w * h)),
-    cx: round(sx / sum / w),
-    cy: round(sy / sum / h),
-    width: round((x1 - x0 + 1) / w),
-    height: round((y1 - y0 + 1) / h),
+    coverage: sum / (w * h),
+    cx: sx / sum / w,
+    cy: sy / sum / h,
+    width: (x1 - x0 + 1) / w,
+    height: (y1 - y0 + 1) / h,
   };
 }
 
@@ -156,55 +176,109 @@ export function makeupLayers(projectDir) {
     return stats.get(file);
   };
 
-  const layers = [];
-  const blind = [];
-  const visit = (nodes, parents, shown) => {
+  const all = [];
+  const flatten = (nodes, parents, shown) => {
     for (const n of nodes) {
       const names = [...parents, n.name];
       const visible = shown && n.visible;
-      for (const c of scene.inspect(n.guid).components) {
-        if (RUNTIME_ONLY.includes(c.type)) blind.push(`${n.guid} ${n.name}`);
-        if (c.type !== 'FaceMask' && c.type !== 'EyeColorV2') continue;
-        const p = c.properties;
-        const eye = c.type === 'EyeColorV2';
-        const region = eye ? '美瞳' : REGIONS[`${p.type}/${p.regionType}`] ?? `${p.type}/${p.regionType}`;
-        const female = eye ? p.intensity : p.femaleIntensity;
-        const male = eye ? p.intensity : p.maleIntensity;
-        const off = !visible ? '隐藏' : p.enabled === false ? '组件停用' : !female && !male ? '强度为 0' : null;
-        const layer = { object: n.guid, name: n.name, path: names.join('/'), active: !off, ...(off ? { off } : {}), region, part: null, part_from: null, female, male };
-        const tex = textureFile(projectDir, p.makeupTexture);
-        let s = null;
-        if (tex.file) {
-          layer.texture = tex.rel;
-          s = statsOf(tex.file);
-          if (s.error) {
-            layer.texture_note = s.error;
-            s = null;
-          } else Object.assign(layer, { color: s.color, hsl: s.hsl });
-        } else layer.texture_note = tex.note;
-        if (eye && p.color) layer.tint = hex(p.color.r * 255, p.color.g * 255, p.color.b * 255);
-
-        const named = NAME_PARTS.find(([re]) => re.test(n.name))?.[1];
-        if (eye) [layer.part, layer.part_from] = ['美瞳', '组件'];
-        else if (region === '睫毛') [layer.part, layer.part_from] = ['睫毛', '区域'];
-        else if (region === '牙齿') [layer.part, layer.part_from] = ['牙齿美白', '区域'];
-        else if (!REGIONS[`${p.type}/${p.regionType}`]) notes.push(`${n.guid} ${n.name}：没见过的妆容区域 ${region}，没有判断部位`);
-        else if (named && (!NAME_FITS[region] || NAME_FITS[region].includes(named))) {
-          layer.part = region === '唇部' && named === '高光' ? '唇部高光' : named;
-          layer.part_from = '层名';
-        } else if (s) [layer.part, layer.part_from] = [partFromPixels(region, s), '贴图'];
-        layers.push(layer);
-      }
-      visit(n.children, names, visible);
+      all.push({ n, path: names.join('/'), visible, components: scene.inspect(n.guid).components });
+      flatten(n.children, names, visible);
     }
   };
-  visit(scene.tree({ depth: Infinity }), [], true);
+  flatten(scene.tree({ depth: Infinity }), [], true);
+
+  // A packaged look (清冷, 清透伪素颜) is generated by one AI face GAN, which lists the makeup layers it
+  // drives in facemaskGuids and scales them with facemaskIntensity (written to each layer as its
+  // external intensity). Removing or disabling any of them makes the editor drop the whole look.
+  const sets = [];
+  const setOf = new Map();
+  for (const { n, components } of all) {
+    for (const c of components) {
+      if (c.type !== 'GanComponent' || !Array.isArray(c.properties.facemaskGuids) || !c.properties.facemaskGuids.length) continue;
+      const set = { object: n.guid, name: n.name, facemask_intensity: c.properties.facemaskIntensity ?? null, layers: [] };
+      for (const g of c.properties.facemaskGuids) {
+        if (g && typeof g === 'object' && g.object) setOf.set(g.object, set);
+        else notes.push(`${n.guid} ${n.name}：facemaskGuids 里的 ${JSON.stringify(g)} 在场景里找不到`);
+      }
+      sets.push(set);
+    }
+  }
+
+  const layers = [];
+  const blind = [];
+  for (const { n, path: objectPath, visible, components } of all) {
+    for (const c of components) {
+      if (RUNTIME_ONLY.includes(c.type)) blind.push(`${n.guid} ${n.name}`);
+      if (c.type !== 'FaceMask' && c.type !== 'EyeColorV2') continue;
+      const p = c.properties;
+      const eye = c.type === 'EyeColorV2';
+      const region = eye ? '美瞳' : REGIONS[`${p.type}/${p.regionType}`] ?? `${p.type}/${p.regionType}`;
+      const female = eye ? p.intensity : p.femaleIntensity;
+      const male = eye ? p.intensity : p.maleIntensity;
+      // The editor sets the shader's opacity to the slider times the external intensity
+      // (FaceMaskComponentEditor's femaleIntensity setter); the runtime component keeps the product.
+      const external = eye ? null : { female: p.externalFemaleIntensity ?? 1, male: p.externalMaleIntensity ?? 1 };
+      const opacity = eye ? { female, male } : { female: round3(female * external.female), male: round3(male * external.male) };
+      if (!eye && typeof p.femaleOpacity === 'number' && (Math.abs(p.femaleOpacity - opacity.female) > 0.01 || Math.abs(p.maleOpacity - opacity.male) > 0.01)) {
+        notes.push(`${n.guid} ${n.name}：场景里运行时的不透明度（女 ${p.femaleOpacity} / 男 ${p.maleOpacity}）和强度 × 外部强度（女 ${opacity.female} / 男 ${opacity.male}）对不上，编辑器里可能有没保存的改动`);
+      }
+      const off = !visible
+        ? '隐藏'
+        : p.enabled === false
+          ? '组件停用'
+          : !opacity.female && !opacity.male
+            ? female || male
+              ? '整套强度为 0'
+              : '强度为 0'
+            : null;
+      let blend = BLEND_MODES[p.blendMode] ?? null;
+      if (p.blendMode === undefined) notes.push(`${n.guid} ${n.name}：场景里没有混合模式`);
+      else if (blend === null) {
+        blend = `未知（${p.blendMode}）`;
+        notes.push(`${n.guid} ${n.name}：混合模式 ${p.blendMode} 不认识，按原值报告`);
+      }
+      const layer = { object: n.guid, name: n.name, path: objectPath, active: !off, ...(off ? { off } : {}), region, part: null, part_from: null, blend, female, male };
+      if (!eye && (external.female !== 1 || external.male !== 1)) layer.external = external;
+      layer.opacity = opacity;
+      const set = setOf.get(n.guid);
+      if (set) {
+        layer.in_set = { object: set.object, name: set.name };
+        set.layers.push(`${n.guid} ${n.name}`);
+      }
+      if (Array.isArray(p.faceIds) && p.faceIds.join() !== ALL_FACES.join()) layer.faces = p.faceIds;
+      if (!eye && p.surfaceType) layer.surface = { type: SURFACES[p.surfaceType] ?? `未知（${p.surfaceType}）`, intensity: p.surfaceIntensity ?? null };
+      if (!eye && Array.isArray(p.color) && p.color.slice(0, 3).some((v) => v !== 1)) layer.tint = hex(p.color[0] * 255, p.color[1] * 255, p.color[2] * 255);
+      if (!eye && typeof p.intensity === 'number') layer.intensity = p.intensity;
+      const tex = textureFile(projectDir, p.makeupTexture);
+      let s = null;
+      if (tex.file) {
+        layer.texture = tex.rel;
+        s = statsOf(tex.file);
+        if (s.error) {
+          layer.texture_note = s.error;
+          s = null;
+        } else Object.assign(layer, { color: s.color, hsl: s.hsl });
+      } else layer.texture_note = tex.note;
+      if (eye && p.color) layer.tint = hex(p.color.r * 255, p.color.g * 255, p.color.b * 255);
+
+      const named = NAME_PARTS.find(([re]) => re.test(n.name))?.[1];
+      if (eye) [layer.part, layer.part_from] = ['美瞳', '组件'];
+      else if (region === '睫毛') [layer.part, layer.part_from] = ['睫毛', '区域'];
+      else if (region === '牙齿') [layer.part, layer.part_from] = ['牙齿美白', '区域'];
+      else if (!REGIONS[`${p.type}/${p.regionType}`]) notes.push(`${n.guid} ${n.name}：没见过的妆容区域 ${region}，没有判断部位`);
+      else if (named && (!NAME_FITS[region] || NAME_FITS[region].includes(named))) {
+        layer.part = region === '唇部' && named === '高光' ? '唇部高光' : named;
+        layer.part_from = '层名';
+      } else if (s) [layer.part, layer.part_from] = [partFromPixels(region, s, p.blendMode), '贴图'];
+      layers.push(layer);
+    }
+  }
   if (blind.length) throw Error(`MAKEUP_EDITOR_DATA_MISSING: ${blind.length} 个妆容组件在 main.scene.extra 里没有编辑器数据，读不出区域和贴图（${blind.join('、')}）`);
 
   const groups = Object.fromEntries(GROUPS.map((g) => [g, []]));
   for (const l of layers) {
     const g = l.active && groupOf(l.region, l.part);
-    if (g) groups[g].push(`${l.object} ${l.name}（${l.part ?? l.region}，女 ${l.female} / 男 ${l.male}）`);
+    if (g) groups[g].push(`${l.object} ${l.name}（${l.part ?? l.region}，${l.blend ?? '混合模式未知'}，女 ${l.opacity.female} / 男 ${l.opacity.male}）`);
   }
-  return { layers, groups, absent: CORE_GROUPS.filter((g) => !groups[g].length), notes };
+  return { layers, groups, absent: CORE_GROUPS.filter((g) => !groups[g].length), sets, notes };
 }
