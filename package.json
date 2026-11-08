@@ -1,6 +1,6 @@
 {
   "name": "@muqian/xiangsu-mcp-plus",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "mcpName": "io.github.Muqian-Sun/xiangsu-mcp-plus",
   "type": "module",
   "description": "Unofficial MCP server for Douyin AR (像塑) on macOS: proxies the official MCP and adds the official asset library, add-object menu, AI combine workflows, delivery (icon, effect checks, submit window, phone preview), Douyin music, inspirations, tasks and rank boards, review status, FaceWarpX intensity and project windows. For learning and personal creation only; do not use it to copy other creators' works.",
@@ -14,13 +14,13 @@
     "ai-agent"
   ],
   "author": "muqian <1175473269@qq.com>",
-  "homepage": "https://github.com/Muqian-Sun/xiangsu-mcp-ext#readme",
+  "homepage": "https://github.com/Muqian-Sun/xiangsu-mcp-plus#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muqian-Sun/xiangsu-mcp-ext.git"
+    "url": "git+https://github.com/Muqian-Sun/xiangsu-mcp-plus.git"
   },
   "bugs": {
-    "url": "https://github.com/Muqian-Sun/xiangsu-mcp-ext/issues"
+    "url": "https://github.com/Muqian-Sun/xiangsu-mcp-plus/issues"
   },
   "engines": {
     "node": ">=24"

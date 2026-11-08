@@ -1,6 +1,6 @@
-# xiangsu-mcp-ext
+# xiangsu-mcp-plus
 
-[![test](https://github.com/Muqian-Sun/xiangsu-mcp-ext/actions/workflows/test.yml/badge.svg)](https://github.com/Muqian-Sun/xiangsu-mcp-ext/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey) ![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)
+[![test](https://github.com/Muqian-Sun/xiangsu-mcp-plus/actions/workflows/test.yml/badge.svg)](https://github.com/Muqian-Sun/xiangsu-mcp-plus/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey) ![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)
 
 像塑（Douyin AR，macOS）的 MCP 扩展：**一个 MCP 服务**同时提供像塑官方 MCP 的全部工具，以及官方 MCP 够不到的编辑器能力。
 
@@ -128,8 +128,8 @@ echo "$(npm root -g)/@muqian/xiangsu-mcp-plus/src/server.mjs"   # MCP 配置里 
 或从源码安装：
 
 ```bash
-git clone https://github.com/Muqian-Sun/xiangsu-mcp-ext.git
-cd xiangsu-mcp-ext
+git clone https://github.com/Muqian-Sun/xiangsu-mcp-plus.git
+cd xiangsu-mcp-plus
 npm ci
 node scripts/install.mjs
 ```

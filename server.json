@@ -4,15 +4,15 @@
   "title": "像塑 MCP Plus",
   "description": "Unofficial macOS MCP for Douyin AR (像塑): assets, menus, AI combine, delivery. For learning only.",
   "repository": {
-    "url": "https://github.com/Muqian-Sun/xiangsu-mcp-ext",
+    "url": "https://github.com/Muqian-Sun/xiangsu-mcp-plus",
     "source": "github"
   },
-  "version": "0.6.0",
+  "version": "0.6.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@muqian/xiangsu-mcp-plus",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "transport": {
         "type": "stdio"
       }
