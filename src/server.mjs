@@ -45,9 +45,6 @@ const saveTo = z.string().min(1).optional().describe('另存到这个目录（�
 // each, measured) keep one answer at about 1.8 MB of images.
 const MAX_FRAME_VIDEOS = 4;
 const MAX_FRAMES = 24;
-// A PNG frame is about five times a JPEG one (0.45 MB, measured); picked to keep one answer under
-// about 3 MB of images.
-const MAX_PNG_FRAMES = 6;
 // Derived: the plugin's preview_reset gives up after 15 s for the reload plus 5 s for fresh frames.
 const RESET_TIMEOUT_MS = 20000;
 // Picked, not measured: on top of the reset and the frame intervals, room for the frame calls
@@ -871,7 +868,7 @@ export function createServer(deps = {}) {
     {
       name: 'preview_frames',
       description:
-        `按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 ${MAX_FRAMES} 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。要看眼线、睫毛、唇纹这类细节时用 format=png 取无损画面（默认 JPEG 会糊掉细线、在锐利边缘串色），一次最多 ${MAX_PNG_FRAMES} 张。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。`,
+        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
       shape: {
         ...target,
         count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
@@ -888,19 +885,16 @@ export function createServer(deps = {}) {
           })
           .optional()
           .describe('裁剪区域，按画面宽高的比例，左上角为 (0, 0)。'),
-        format: z.enum(['jpeg', 'png']).optional().describe('jpeg（默认，编辑器的截图编码）或 png（无损，文件约大 5 倍）。'),
         save_to: saveTo,
       },
       run: async (a) => {
-        const { count = 4, interval_ms = 700, videos, tracking_type = 'face', reset = true, crop, format = 'jpeg', save_to } = a;
+        const { count = 4, interval_ms = 700, videos, tracking_type = 'face', reset = true, crop, save_to } = a;
         const total = count * (videos ? videos.length : 1);
-        const cap = format === 'png' ? MAX_PNG_FRAMES : MAX_FRAMES;
-        if (total > cap) throw Error(`TOO_MANY_FRAMES: ${total} frames asked, at most ${cap} per call${format === 'png' ? ' with format=png' : ''}`);
+        if (total > MAX_FRAMES) throw Error(`TOO_MANY_FRAMES: ${total} frames asked, at most ${MAX_FRAMES} per call`);
         const instance_id = await officialInstance(a);
         const projectPath = await projects.resolveProjectPath({ instance_id });
         const dir = save_to ? saveDir(save_to) : d.framesDir();
-        const ext = format === 'png' ? 'png' : 'jpg';
-        const frame = (name) => d.callPlugin('preview_frame', { format }, { projectPath, timeoutMs: 15000 }).then((img) => ({ name, img }));
+        const frame = (name) => d.callPlugin('preview_frame', {}, { projectPath, timeoutMs: 15000 }).then((img) => ({ name, img }));
         const shoot = async (prefix) => {
           await holdFullRate(projectPath, RESET_TIMEOUT_MS + count * interval_ms + HOLD_SLACK_MS);
           if (reset) await resetPreview(projectPath);
@@ -909,7 +903,7 @@ export function createServer(deps = {}) {
           for (let i = 0; i < count; i++) {
             if (i) await d.sleep(Math.max(0, t0 + i * interval_ms - Date.now()));
             const at = Date.now() - t0;
-            shots.push({ ...(await frame(`${prefix}frame-${i + 1}.${ext}`)), at });
+            shots.push({ ...(await frame(`${prefix}frame-${i + 1}.jpg`)), at });
           }
           return shots;
         };

@@ -363,26 +363,6 @@ test('previewFrame returns the cached full-size preview frame, retrying while th
   await assert.rejects(new Library(() => undefined).previewFrame(), /INCOMPATIBLE_EDITOR: missing .*PreviewManager/);
 });
 
-test('previewFrame format=png reads the render output losslessly, retrying until it writes a file', async () => {
-  const written = [];
-  let attempts = 0;
-  const { lib, calls } = previewLib([]);
-  const pm = lib.mod(M.preview).PreviewManager.getInstance();
-  pm.previewRTHandle = {
-    saveToPng(file) {
-      written.push(file);
-      if (++attempts > 1) fs.writeFileSync(file, 'png');
-    },
-  };
-  assert.deepEqual(await lib.previewFrame({ format: 'png' }), { mimeType: 'image/png', data: Buffer.from('png').toString('base64') });
-  assert.deepEqual(calls, ['cache', 'cache']);
-  assert.equal(written.length, 2);
-  for (const f of written) assert.ok(!fs.existsSync(path.dirname(f)), `scratch folder left behind: ${f}`);
-  pm.previewRTHandle = {};
-  await assert.rejects(lib.previewFrame({ format: 'png' }), /INCOMPATIBLE_EDITOR: missing PreviewManager\.previewRTHandle\.saveToPng/);
-  await assert.rejects(lib.previewFrame({ format: 'webp' }), /INVALID_FORMAT: webp/);
-});
-
 // A fake preview: PreviewSyncer reload events, the texture event bus, recording and background mode.
 function previewEngine() {
   const listeners = new Map();
@@ -586,22 +566,18 @@ test('inspect_many inspects each guid, filters, resolves bound resources and iso
   assert.deepEqual(official.calls.filter((c) => c[0] === 'inspect').map((c) => c[1].guid), ['s21', 'r1', 'bad', 's22']);
 });
 
-const PNG_DATA = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');
-
 function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {} } = {}) {
   const calls = [];
   const answers = {
-    preview_frame: ({ format }) => (format === 'png' ? { mimeType: 'image/png', data: PNG_DATA } : { mimeType: 'image/jpeg', data: JPG }),
+    preview_frame: () => ({ mimeType: 'image/jpeg', data: JPG }),
     preview_reset: () => ({ reloaded_ms: 700, ready_ms: 1100 }),
     preview_full_rate: ({ hold_ms }) => ({ held: hold_ms > 0 }),
     preview_window: () => window,
   };
-  // The third item is the parameter that matters: the hold, or a png format.
-  const extra = (method, p) => (method === 'preview_full_rate' ? [p.hold_ms] : method === 'preview_frame' && p.format === 'png' ? ['png'] : []);
   return {
     calls,
     callPlugin: async (method, params, opts) => {
-      calls.push([method, opts.projectPath, ...extra(method, params)]);
+      calls.push(method === 'preview_full_rate' ? [method, opts.projectPath, params.hold_ms] : [method, opts.projectPath]);
       if (fail[method]) throw Error(fail[method]);
       return answers[method](params);
     },
@@ -672,28 +648,6 @@ test('preview_frames shoots each video in turn, switches back once even on failu
   assert.match((await c3.callTool({ name: 'preview_frames', arguments: { instance_id: '2' } })).content[0].text, /PREVIEW_RELOAD_TIMEOUT/);
   assert.deepEqual(p3.calls.map((c) => c[0]), ['preview_full_rate', 'preview_reset', 'preview_full_rate']);
   assert.equal(p3.calls.at(-1)[2], 0);
-});
-
-test('preview_frames format=png asks the plugin for lossless frames, saves .png files and caps the count', async () => {
-  const plugin = framePlugin();
-  const client = await connect({ official: fakeOfficial(), ...plugin, sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
-  const res = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 2, format: 'png' } });
-  assert.deepEqual(plugin.calls, [
-    ['preview_full_rate', '/proj/A', 20000 + 2 * 700 + 30000],
-    ['preview_reset', '/proj/A'],
-    ['preview_frame', '/proj/A', 'png'],
-    ['preview_frame', '/proj/A', 'png'],
-    ['preview_full_rate', '/proj/A', 0],
-  ]);
-  const summary = JSON.parse(res.content[0].text);
-  assert.deepEqual(summary.files.map((f) => path.basename(f)), ['frame-1.png', 'frame-2.png']);
-  for (const f of summary.files) assert.equal(fs.readFileSync(f).toString('base64'), PNG_DATA);
-  assert.equal(res.content[2].mimeType, 'image/png');
-
-  const tooMany = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 7, format: 'png' } });
-  assert.match(tooMany.content[0].text, /TOO_MANY_FRAMES: 7 frames asked, at most 6 per call with format=png/);
-  const jpeg = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 7 } });
-  assert.notEqual(jpeg.isError, true);
 });
 
 test('capture_preview goes to the official tool while the window is visible', async () => {
