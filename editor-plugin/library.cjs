@@ -27,10 +27,11 @@ const search = require('./features/search.cjs');
 const aicombine = require('./features/aicombine.cjs');
 const ai3d = require('./features/ai3d.cjs');
 const arvideo = require('./features/arvideo.cjs');
+const makeup = require('./features/makeup.cjs');
 const dev = require('./features/dev.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, aicombine, ai3d, arvideo, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, aicombine, ai3d, arvideo, makeup, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
