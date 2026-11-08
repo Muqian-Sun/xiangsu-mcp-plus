@@ -12,6 +12,13 @@ import { fetchImage, readImageFile } from '../src/images.mjs';
 import { MediaRefs } from '../src/outputs.mjs';
 
 const OWN = [
+  'ai3d_animation_submit',
+  'ai3d_cancel',
+  'ai3d_gs_segment',
+  'ai3d_gs_submit',
+  'ai3d_image_submit',
+  'ai3d_import',
+  'ai3d_tasks',
   'ai_combine_apply',
   'ai_combine_new',
   'effect_check',
@@ -412,4 +419,47 @@ test('official tools that overlap ours are listed with a note naming ours; the r
   assert.match(desc('inspect'), /（xiangsu-mcp-plus）.*inspect_many/);
   assert.match(desc('edit_by_dsl'), /（xiangsu-mcp-plus）.*object_remove/);
   assert.equal(desc('list_resources'), '官方list_resources');
+});
+
+test('ai3d tools route account calls to any window and keep the found subject for ai3d_gs_submit', async () => {
+  const seen = [];
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 30 }, { pid: 20 }],
+    callPlugin: async (method, params, opts) => {
+      seen.push({ method, params, opts });
+      if (method === 'ai3d_gs_segment') return { seg_task_id: 's1', subject_image_url: 'https://cdn/subject.png', subject_uri: 'tos-subject', req_json: { req_type: 1, vid: 'v1' } };
+      return { ok: method };
+    },
+  });
+  const call = async (name, args) => client.callTool({ name, arguments: args });
+  await call('ai3d_image_submit', { image_path: '/a/dog.png' });
+  assert.deepEqual(seen[0], { method: 'ai3d_image_submit', params: { image_path: '/a/dog.png' }, opts: { pid: 20, timeoutMs: 300000 } });
+
+  const missing = await call('ai3d_gs_submit', { seg_task_id: 's1' });
+  assert.match(missing.content[0].text, /UNKNOWN_SEGMENT: s1; call ai3d_gs_segment first/);
+  const seg = JSON.parse((await call('ai3d_gs_segment', { video_path: '/a/cup.mov' })).content[0].text);
+  assert.equal(seg.seg_task_id, 's1');
+  assert.match(seg.subject_image_ref, /^img:\d+$/);
+  assert.equal(seg.subject_uri, undefined, 'internal fields stay in the server');
+  assert.deepEqual(seen[1], { method: 'ai3d_gs_segment', params: { video_path: '/a/cup.mov', wait_s: 120 }, opts: { pid: 20, timeoutMs: 420000 } });
+  await call('ai3d_gs_submit', { seg_task_id: 's1' });
+  assert.deepEqual(seen[2].params, { subject_uri: 'tos-subject', req_json: { req_type: 1, vid: 'v1' } });
+
+  await call('ai3d_tasks', { kind: 'image', count: 5 });
+  assert.deepEqual(seen[3], { method: 'ai3d_tasks', params: { kind: 'image', cursor: undefined, count: 5 }, opts: { pid: 20 } });
+  const one = JSON.parse((await call('ai3d_tasks', { kind: 'image', task_id: 't1', wait_s: 60 })).content[0].text);
+  assert.deepEqual(one, { kind: 'image', ok: 'ai3d_task' });
+  assert.deepEqual(seen[4], { method: 'ai3d_task', params: { task_id: 't1', wait_s: 60 }, opts: { pid: 20, timeoutMs: 90000 } });
+  const stray = await call('ai3d_tasks', { kind: 'image', wait_s: 60 });
+  assert.match(stray.content[0].text, /wait_s only applies together with task_id/);
+
+  await call('ai3d_import', { project_path: '/proj/B', task_id: 't1', kind: 'image' });
+  assert.deepEqual(seen[5], { method: 'ai3d_import', params: { task_id: 't1', kind: 'image' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
+  const tooLong = await call('ai3d_tasks', { kind: 'image', task_id: 't1', wait_s: 601 });
+  assert.match(tooLong.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): wait_s/);
+  // The history API refuses pages of more than 20.
+  const tooMany = await call('ai3d_tasks', { kind: 'image', count: 21 });
+  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): count/);
+  assert.equal(seen.length, 6);
 });

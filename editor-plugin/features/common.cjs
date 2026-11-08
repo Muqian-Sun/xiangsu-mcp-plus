@@ -57,6 +57,14 @@ const M = {
   editWindow: '@orion/Business/EditWindow/EditWindowController',
   aiGraphManager: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/Manager/AIGraphManager',
   aiGraphProject: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/AIGraphProjectUtils',
+  ai3dConst: '@orion/Business/AssetsLibrary/Core/Control/AI3DManager/const',
+  ai3dUtils: '@orion/Business/AssetsLibrary/Core/Control/AI3DManager/utils',
+  uploadApi: '@orion/Business/API/upload_api',
+  aigcUtils: '@orion/Business/Utils/utils',
+  lokiUtils: '@orion/Business/Utils/LokiAsset/utils',
+  aiApiUtils: '@orion/Business/AIEffectWindow/controller/apiUtils',
+  resImport: '@orion/Business/ResItemExtraData/ResourceImportHandles',
+  globalConfig: '@orion/config/LegacyGlobalConfig',
 };
 
 // Scratch folder under the editor instance for exports this plugin makes and removes itself.

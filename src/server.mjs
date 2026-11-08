@@ -25,10 +25,12 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE } = createRequire(
+  import.meta.url,
+)('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。需要扣额度现生成的 AI 面板不在其中。';
+  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具。';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -54,6 +56,14 @@ const OFFICIAL_SHOT_SIDE = 569;
 const QR_TTL_SEC = 604800;
 // Picked: the expiry timer fires this long after the code expires, so the clock has surely passed it.
 const QR_PRUNE_SLACK_MS = 1000;
+// Picked, not measured: the subject step usually takes about 20 s (the editor's own estimate); six times that.
+const AI3D_SEGMENT_WAIT_S = 120;
+// Picked, not measured: long enough for one wait to cover a typical generation, short of the client's patience.
+const AI3D_MAX_WAIT_S = 600;
+// Derived: uploads (60 s each in the editor's upload API) plus the submit call, with room to spare.
+const AI3D_SUBMIT_TIMEOUT_MS = 300000;
+// Picked, not measured: the result download (30 s in the editor) plus the import.
+const AI3D_IMPORT_TIMEOUT_MS = 180000;
 // Picked, not measured: as many images per image_view call as the old preview tools showed.
 const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
@@ -158,6 +168,8 @@ export function createServer(deps = {}) {
   const seenWorks = new Seen('UNKNOWN_WORK', 'works_list, works_search or works_by_effect');
   const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
   const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
+  // Subjects found by ai3d_gs_segment, kept here so ai3d_gs_submit only needs the segment task id.
+  const segments = new Map();
 
   // Background windows draw at 6 fps; the plugin holds full rate until released, or by itself until
   // hold_ms runs out if the release never arrives.
@@ -969,6 +981,101 @@ export function createServer(deps = {}) {
         '把一张 AI 工作流放进场景，等同 AI 效果窗口的「应用」（可撤销）：编辑器编译工作流、把工作流文件上传到特效平台，再添加「AI 组合效果」对象（场景里没有 2D 前景时一并建「2D 前景」「2D 摄像机」）。不扣额度，不新建草稿；工作流生成过预览视频时一并上传供审核。效果组合节点没有输入连线等情况下编辑器会拒绝，返回 AI_COMBINE_APPLY_FAILED 和编辑器的提示原文（如「请先连接效果组合器」）。返回 added_objects（新对象名和 object_path）和 draft_id（工作流已存成云端草稿时才有，否则为 null）。之后 save_project。',
       shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
       run: plugin('ai_combine_apply', 180000),
+    },
+    {
+      name: 'ai3d_image_submit',
+      description: `素材库「AI 3D › 3D模型」（图生 3D）：上传一张参考图，在云端生成 3D 模型（静态网格，没有骨骼和动画），返回 task_id。参考图须是 ${AI3D_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_IMAGE_LIMIT.maxMB} MB、长宽不超过 ${AI3D_IMAGE_LIMIT.maxSide} 像素；主体完整清晰、无遮挡，背景尽量纯色（编辑器的建议）。卡通角色可以先用官方 generate_image 出一张正面全身、纯色背景的图再交给本工具。同一类型最多同时跑 ${AI3D_MAX_RUNNING} 个任务。之后用 ai3d_tasks（带 task_id 和 wait_s）等它完成，再用 ai3d_import 放进工程。是否扣账号额度以编辑器为准，编辑器代码里没有相关提示。`,
+      shape: {
+        ...target,
+        image_path: z.string().min(1).describe('参考图的绝对路径。'),
+        precision: z
+          .enum(Object.keys(AI3D_FACE_NUM))
+          .optional()
+          .describe(`精度（面数）：${Object.entries(AI3D_FACE_NUM).map(([k, v]) => `${k}=${v}`).join('、')}，对应编辑器的低 / 中 / 高面数；默认 medium。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('ai3d_image_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+      },
+    },
+    {
+      name: 'ai3d_animation_submit',
+      description: `素材库「AI 3D › 3D动画」：把参考视频里人的动作做成动画，套到一个带标准人形骨骼的 FBX 上，返回 task_id。model 可选内置的 ${Object.keys(AI3D_PRESET_MODELS).join(' / ')}（全身 / 上半身 / 下半身 / 手臂，编辑器自带的人形模型），或一个本地 .fbx 的绝对路径：须有骨骼（Hips、Spine、LeftUpLeg 等 20 根标准人形骨骼，名字完全一致、不带 mixamorig_ 前缀，缺了编辑器也只提醒，返回里会有 warning），骨骼和面数不超过编辑器的导入上限。参考视频须是 ${AI3D_VIDEO_LIMIT.animation.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_VIDEO_LIMIT.animation.maxSeconds} 秒、${AI3D_VIDEO_LIMIT.animation.maxMB} MB、长宽不超过 ${AI3D_VIDEO_LIMIT.animation.maxSide}，建议单人、全身出镜。图生 3D（ai3d_image_submit）出来的模型没有骨骼，不能直接用作 model。之后 ai3d_tasks 等完成、ai3d_import 导入（导入的是带动画的 FBX）。`,
+      shape: {
+        ...target,
+        video_path: z.string().min(1).describe('参考视频的绝对路径。'),
+        model: z.string().min(1).optional().describe(`${Object.keys(AI3D_PRESET_MODELS).join(' / ')} 之一，或本地 .fbx 的绝对路径；默认 whole。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('ai3d_animation_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+      },
+    },
+    {
+      name: 'ai3d_gs_segment',
+      refs: true,
+      description: `素材库「AI 3D › 高精度模型重建」第一步：上传一段实物 360 度环绕视频，云端识别出要重建的主体，返回 seg_task_id 和主体图 subject_image_ref（交给 image_view 看）。确认主体没问题后用 ai3d_gs_submit 正式生成 3D 高斯点云（.ply）；主体不对就换视频或重拍。视频须是 ${AI3D_VIDEO_LIMIT.gs.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_VIDEO_LIMIT.gs.maxSeconds} 秒、${AI3D_VIDEO_LIMIT.gs.maxMB} MB、长宽不超过 ${AI3D_VIDEO_LIMIT.gs.maxSide}，主体清晰、光线充足、各角度都拍到。识别一般约 20 秒，最多等 wait_s 秒，超时编辑器会取消这次识别。`,
+      shape: {
+        ...target,
+        video_path: z.string().min(1).describe('环绕视频的绝对路径。'),
+        wait_s: z.number().int().min(10).max(AI3D_MAX_WAIT_S).optional().describe(`最多等待识别的秒数，默认 ${AI3D_SEGMENT_WAIT_S}。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, wait_s = AI3D_SEGMENT_WAIT_S, ...params } = a;
+        const got = await d.callPlugin('ai3d_gs_segment', { ...params, wait_s }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS + wait_s * 1000 });
+        segments.set(got.seg_task_id, { subject_uri: got.subject_uri, req_json: got.req_json });
+        return text({ seg_task_id: got.seg_task_id, subject_image_url: got.subject_image_url });
+      },
+    },
+    {
+      name: 'ai3d_gs_submit',
+      description: '素材库「AI 3D › 高精度模型重建」第二步：按 ai3d_gs_segment 识别出的主体正式生成 3D 高斯点云，等同识别窗口里的「确认主体」，返回 task_id。之后 ai3d_tasks（kind=gs）等完成、ai3d_import 导入。',
+      shape: { ...target, seg_task_id: z.string().min(1).describe('ai3d_gs_segment 返回的 seg_task_id。') },
+      run: async (a) => {
+        const { project_path, instance_id, seg_task_id } = a;
+        const seg = segments.get(seg_task_id);
+        if (!seg) throw Error(`UNKNOWN_SEGMENT: ${seg_task_id}; call ai3d_gs_segment first`);
+        return text(await d.callPlugin('ai3d_gs_submit', seg, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+      },
+    },
+    {
+      name: 'ai3d_tasks',
+      description: `素材库「AI 3D」的生成任务（当前账号）。不传 task_id 时按 kind 分页列出历史任务：状态（running / finished / failed）、创建和完成时间、输入（图生 3D 的精度、3D 动画的模型）、失败原因，以及结果是否已下载到本机和本机的预览图 / 预览视频（preview_image_file 交给 image_view 看）。传 task_id 时只查这一个；再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI3D_MAX_WAIT_S} 秒），status=finished 后用 ai3d_import 导入。`,
+      shape: {
+        ...target,
+        kind: z.enum(['image', 'animation', 'gs']).describe('image=3D模型（图生 3D）、animation=3D动画、gs=高精度模型重建。'),
+        task_id: z.string().min(1).optional().describe('只查这个任务。'),
+        wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AI3D_HISTORY_PAGE}（服务端上限）。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, kind, task_id, wait_s = 0, cursor, count } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        if (task_id !== undefined) return text({ kind, ...(await d.callPlugin('ai3d_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 30000 })) });
+        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        return text(await d.callPlugin('ai3d_tasks', { kind, cursor, count }, win));
+      },
+    },
+    {
+      name: 'ai3d_import',
+      description:
+        '把一个已完成的 AI 3D 任务结果下载到编辑器的 AI 3D 缓存目录（面板里同样能看到），导入工程并放进场景（可撤销），与面板里勾选后点「导入素材」相同：图生 3D 导入 GLB（外层对象「模型大小控制」放大 15 倍）、3D 动画导入带动画的 FBX、高精度模型重建导入 PLY 点云（缩小到 0.3）。返回 added_objects（新对象名和 object_path）、package_folders 和本机预览文件。之后用 capture_preview 看大小和位置，save_project。',
+      shape: {
+        ...target,
+        task_id: z.string().min(1).describe('ai3d_*_submit 或 ai3d_tasks 返回的 task_id。'),
+        kind: z.enum(['image', 'animation', 'gs']).describe('任务类型，与提交时一致。'),
+      },
+      run: plugin('ai3d_import', AI3D_IMPORT_TIMEOUT_MS),
+    },
+    {
+      name: 'ai3d_cancel',
+      description: '取消一个还在 running 的 AI 3D 生成任务（等同面板里的「取消生成」）。',
+      shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
+      run: async (a) => {
+        const { project_path, instance_id, task_id } = a;
+        return text(await d.callPlugin('ai3d_cancel', { task_id }, await homeWindow({ project_path, instance_id })));
+      },
     },
     {
       name: 'face_warp_list',
