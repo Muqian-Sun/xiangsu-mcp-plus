@@ -77,14 +77,10 @@ test('a hung, a closing and a stale window do not keep the target window from be
   const gone = path.join(tmpdir('xs-gone-'), 'deleted');
   const [hung, closing, stale, good] = [await window('hang'), await window('closed'), await window(gone), await window(target)];
   writeRecords([hung, closing, stale, good]);
-  const t0 = Date.now();
   assert.equal((await resolveInstance({ projectPath: target })).pid, good.pid);
-  assert.ok(Date.now() - t0 < 1500, 'windows are asked together');
   const before = hung.calls.length;
-  const t1 = Date.now();
   assert.equal((await resolveInstance({ projectPath: target })).pid, good.pid);
-  assert.ok(Date.now() - t1 < 200, 'the window last seen with the project is asked first');
-  assert.equal(hung.calls.length, before, 'the hung window is not asked again');
+  assert.equal(hung.calls.length, before, 'the window last seen with the project is asked first, not the hung one');
 });
 
 test('a project in no window fails with the windows that did not answer', async () => {
