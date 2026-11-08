@@ -51,3 +51,36 @@ test('decodeUv refuses frames where the calibration texture does not show or sho
   assert.throws(() => decodeUv('eye', one, bare), /CALIBRATION_ONE_EYE/);
   assert.throws(() => decodeUv('eye', one, frame(10, 10, () => [0, 0, 0])), /FRAME_SIZE_MISMATCH/);
 });
+
+test('decodeUv fits the mapping on pixels away from strong edges, where JPEG errors pile up', () => {
+  const tex = PNG.sync.read(encodeUv('eye'));
+  const W = 240;
+  const H = 120;
+  // Left eye: frame (20–100, 30–90) → texture x 120–360, y 200–290; right eye mirrored.
+  const truth = (u, v) => {
+    if (u >= 20 && u < 100 && v >= 30 && v < 90) return [120 + 3 * (u + 0.5 - 20), 200 + 1.5 * (v + 0.5 - 30)];
+    if (u >= 140 && u < 220 && v >= 30 && v < 90) return [899 - (120 + 3 * (220 - (u + 0.5))), 200 + 1.5 * (v + 0.5 - 30)];
+    return null;
+  };
+  // A dark lash line across both eyes in the bare frame; next to it the coded colours are off, as
+  // JPEG leaves them around high-contrast edges.
+  const line = (v) => v >= 50 && v < 53;
+  const near = (v) => v >= 47 && v < 56;
+  const bare = frame(W, H, (u, v) => (truth(u, v) && line(v) ? [30, 25, 25] : [150, 120, 110]));
+  const coded = frame(W, H, (u, v) => {
+    const t = truth(u, v);
+    if (!t) return [150, 120, 110];
+    const i = (Math.floor(t[1]) * 900 + Math.floor(t[0])) * 4;
+    const off = near(v) ? 40 : 0;
+    return [Math.min(255, tex.data[i] + off), Math.max(0, tex.data[i + 1] - off), tex.data[i + 2]];
+  });
+  for (const p of decodeUv('eye', coded, bare)) {
+    let worst = 0;
+    for (let i = 0; i < W * H; i++) {
+      if (!Number.isFinite(p.tx[i])) continue;
+      const t = truth(i % W, Math.floor(i / W));
+      worst = Math.max(worst, Math.abs(p.tx[i] - t[0]), Math.abs(p.ty[i] - t[1]));
+    }
+    assert.ok(worst < 1.5, `${p.eye}: off by ${worst.toFixed(2)} texture px`);
+  }
+});

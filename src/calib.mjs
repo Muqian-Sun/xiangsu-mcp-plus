@@ -40,14 +40,12 @@ export function clearTexture(layout) {
 
 const luma = (d, i) => 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
 
-// B is written as 128 everywhere in the code, and the calibration layer is opaque, normal-blended and
-// drawn last, so on lossless frames B stays at 128 wherever it shows. Picked: ±8 covers rounding and
-// texture filtering, and rejects pixels a filter or another layer changed. Where the bare frame's own B
-// is that close to 128, the pixel must also differ in R or G to count as the layer showing.
-const B_TOLERANCE = 8;
-// Picked: σ 1.5 frame px averages the 8-bit steps (1.4 texture px on the eye layout) without blurring
-// across the eye opening, which is about 10 frame px tall on a 720-wide frame.
-const SMOOTH_SIGMA = 1.5;
+// B is written as 128 everywhere in the code, and with the other makeup and filters muted the frame shows
+// the calibration layer's own colours, so B stays near 128 wherever it shows. Derived: preview frames are
+// JPEG, measured up to 12/255 off the lossless frame around the eyes; twice that is the tolerance (the
+// JPEG-based eye_calib script used 30). Where the bare frame's own B is that close to 128, the pixel must
+// also differ in R or G to count as the layer showing.
+const B_TOLERANCE = 24;
 // Picked, not measured: fewer decoded pixels than this means the layer did not show (hidden, covered,
 // or a filter changed its colours).
 const MIN_PIXELS = 300;
@@ -65,32 +63,79 @@ function erode(mask, w, h, n) {
   return cur;
 }
 
-// Gaussian smoothing over the valid pixels only (normalised convolution: blur(v·m) / blur(m)), so
-// invalid pixels neither count nor get a value.
-function smoothValid(v, valid, w, h, sigma) {
-  const r = Math.ceil(sigma * 3);
-  const k = Array.from({ length: 2 * r + 1 }, (_, i) => Math.exp(-((i - r) ** 2) / (2 * sigma * sigma)));
-  const blur = (src) => {
-    const tmp = new Float32Array(w * h);
-    const out = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      let s = 0;
-      for (let j = -r; j <= r; j++) if (x + j >= 0 && x + j < w) s += src[y * w + x + j] * k[j + r];
-      tmp[y * w + x] = s;
+// Least squares by the normal equations, solved by Gaussian elimination with partial pivoting.
+function solve(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-12) throw Error('CALIBRATION_FIT_SINGULAR: too few distinct decoded pixels to fit the mapping');
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
     }
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      let s = 0;
-      for (let j = -r; j <= r; j++) if (y + j >= 0 && y + j < h) s += tmp[(y + j) * w + x] * k[j + r];
-      out[y * w + x] = s;
-    }
-    return out;
+  }
+  const x = new Array(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) {
+    let s = M[r][n];
+    for (let k = r + 1; k < n; k++) s -= M[r][k] * x[k];
+    x[r] = s / M[r][r];
+  }
+  return x;
+}
+
+// The mesh maps frame pixels to texture positions smoothly, while JPEG errors come in blocks (8 px,
+// colour at half resolution), so each part's mapping is fitted with a 2-D polynomial instead of being
+// read pixel by pixel: degree 4 in normalised coordinates, 4 rounds rejecting residuals over 2.5 rms,
+// fitted on pixels away from strong edges of the bare frame, where JPEG errors pile up. The method of
+// 工具/eye_calib/calib.py, which measured the 初雪冷白 lid to ±2 texture px on JPEG frames.
+const FIT_DEGREE = 4;
+const FIT_ROUNDS = 4;
+const FIT_REJECT = 2.5;
+const EDGE_GRADIENT = 60;
+
+function polyFit(px, py, vals, keep) {
+  const n = px.length;
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) [cx, cy] = [cx + px[i], cy + py[i]];
+  [cx, cy] = [cx / n, cy / n];
+  let s = 0;
+  for (let i = 0; i < n; i++) s = Math.max(s, Math.abs(px[i] - cx), Math.abs(py[i] - cy));
+  const terms = [];
+  for (let i = 0; i <= FIT_DEGREE; i++) for (let j = 0; j <= FIT_DEGREE - i; j++) terms.push([i, j]);
+  const basis = (x, y) => {
+    const u = (x - cx) / s;
+    const v = (y - cy) / s;
+    return terms.map(([i, j]) => u ** i * v ** j);
   };
-  const m = Float32Array.from(valid);
-  const num = blur(v.map((x, i) => x * m[i]));
-  const den = blur(m);
-  const out = new Float32Array(w * h).fill(NaN);
-  for (let i = 0; i < w * h; i++) if (valid[i]) out[i] = num[i] / den[i];
-  return out;
+  const rows = px.map((x, i) => basis(x, py[i]));
+  let use = keep.slice();
+  let coef = null;
+  let rms = 0;
+  for (let round = 0; round < FIT_ROUNDS; round++) {
+    const m = terms.length;
+    const A = Array.from({ length: m }, () => new Array(m).fill(0));
+    const b = new Array(m).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (!use[i]) continue;
+      const r = rows[i];
+      for (let a = 0; a < m; a++) {
+        b[a] += r[a] * vals[i];
+        for (let c = a; c < m; c++) A[a][c] += r[a] * r[c];
+      }
+    }
+    for (let a = 0; a < m; a++) for (let c = 0; c < a; c++) A[a][c] = A[c][a];
+    coef = solve(A, b);
+    const res = rows.map((r, i) => r.reduce((t, v, k) => t + v * coef[k], 0) - vals[i]);
+    let sum = 0;
+    let cnt = 0;
+    for (let i = 0; i < n; i++) if (use[i]) [sum, cnt] = [sum + res[i] * res[i], cnt + 1];
+    rms = Math.sqrt(sum / cnt);
+    use = res.map((r, i) => keep[i] && Math.abs(r) <= FIT_REJECT * rms);
+  }
+  return { at: (x, y) => basis(x, y).reduce((t, v, k) => t + v * coef[k], 0), rms };
 }
 
 // Decodes the coded frame against the bare one. Returns per eye (eye layout) or for the whole layer the
@@ -101,13 +146,32 @@ export function decodeUv(layout, coded, bare) {
   const { width: w, height: h } = coded;
   if (bare.width !== w || bare.height !== h) throw Error(`FRAME_SIZE_MISMATCH: ${w}×${h} vs ${bare.width}×${bare.height}`);
   let valid = new Uint8Array(w * h);
+  const coded128 = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) {
     const p = i * 4;
-    const coded128 = Math.abs(coded.data[p + 2] - 128) <= B_TOLERANCE;
+    coded128[i] = Math.abs(coded.data[p + 2] - 128) <= B_TOLERANCE ? 1 : 0;
     const bare128 = Math.abs(bare.data[p + 2] - 128) <= B_TOLERANCE;
     const rgChanged = Math.abs(coded.data[p] - bare.data[p]) + Math.abs(coded.data[p + 1] - bare.data[p + 1]) > B_TOLERANCE;
-    valid[i] = coded128 && (!bare128 || rgChanged) ? 1 : 0;
+    valid[i] = coded128[i] && (!bare128 || rgChanged) ? 1 : 0;
   }
+  // Where the code happens to match the skin, the pixel looks unchanged; those are holes inside the
+  // layer's area. Fill holes (binary hole filling: what the frame border cannot reach through
+  // non-layer pixels) whose B still reads as code.
+  const outside = new Uint8Array(w * h);
+  const queue = [];
+  for (let x = 0; x < w; x++) queue.push(x, (h - 1) * w + x);
+  for (let y = 0; y < h; y++) queue.push(y * w, y * w + w - 1);
+  while (queue.length) {
+    const i = queue.pop();
+    if (outside[i] || valid[i]) continue;
+    outside[i] = 1;
+    const x = i % w;
+    if (x > 0) queue.push(i - 1);
+    if (x < w - 1) queue.push(i + 1);
+    if (i >= w) queue.push(i - w);
+    if (i < w * (h - 1)) queue.push(i + w);
+  }
+  for (let i = 0; i < w * h; i++) if (!valid[i] && !outside[i] && coded128[i]) valid[i] = 1;
   // The window's border and the layer's edge mix code with skin.
   valid = erode(valid, w, h, 2);
   const tx = new Float32Array(w * h);
@@ -115,6 +179,24 @@ export function decodeUv(layout, coded, bare) {
   for (let i = 0; i < w * h; i++) {
     tx[i] = win.x0 + (coded.data[i * 4] / 255) * (win.x1 - win.x0 - 1);
     ty[i] = win.y0 + (coded.data[i * 4 + 1] / 255) * (win.y1 - win.y0 - 1);
+  }
+  // Pixels next to strong edges of the bare frame (Sobel on luma, grown by 2 px), left out of the fits.
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) lum[i] = luma(bare.data, i * 4);
+  let edgy = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    const gx = lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1];
+    const gy = lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1];
+    edgy[i] = Math.hypot(gx, gy) > EDGE_GRADIENT ? 1 : 0;
+  }
+  for (let k = 0; k < 2; k++) {
+    const next = edgy.slice();
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (edgy[i - 1] || edgy[i + 1] || edgy[i - w] || edgy[i + w]) next[i] = 1;
+    }
+    edgy = next;
   }
   const xs = [];
   for (let i = 0; i < w * h; i++) if (valid[i]) xs.push(i % w);
@@ -148,12 +230,36 @@ export function decodeUv(layout, coded, bare) {
       if (y > by1) by1 = y;
     }
     if (n < MIN_PIXELS) throw Error(`CALIBRATION_NOT_VISIBLE: only ${n} frame pixels decode for the ${eye} eye`);
-    const sx = smoothValid(tx, m, w, h, SMOOTH_SIGMA);
-    const sy = smoothValid(ty, m, w, h, SMOOTH_SIGMA);
-    if (flip) for (let i = 0; i < w * h; i++) if (m[i]) sx[i] = tw - 1 - sx[i];
+    const px = [];
+    const py = [];
+    const vx = [];
+    const vy = [];
+    const calm = [];
+    for (let i = 0; i < w * h; i++) {
+      if (!m[i]) continue;
+      const x = i % w;
+      px.push(x + 0.5);
+      py.push((i - x) / w + 0.5);
+      vx.push(tx[i]);
+      vy.push(ty[i]);
+      calm.push(!edgy[i]);
+    }
+    if (calm.filter(Boolean).length < MIN_PIXELS) throw Error(`CALIBRATION_NOT_VISIBLE: only ${calm.filter(Boolean).length} decoded pixels away from edges for the ${eye ?? 'layer'}`);
+    const fx = polyFit(px, py, vx, calm);
+    const fy = polyFit(px, py, vy, calm);
+    const sx = new Float32Array(w * h).fill(NaN);
+    const sy = new Float32Array(w * h).fill(NaN);
+    for (let i = 0; i < w * h; i++) {
+      if (!m[i]) continue;
+      const x = i % w + 0.5;
+      const y = Math.floor(i / w) + 0.5;
+      sx[i] = flip ? tw - 1 - fx.at(x, y) : fx.at(x, y);
+      sy[i] = fy.at(x, y);
+    }
+    const fit_rms = [fx.rms, fy.rms].map((v) => Number(v.toFixed(2)));
     // Texture px per frame px down the middle column, for converting widths.
     const scale = verticalScale(sy, w, Math.round((bx0 + bx1) / 2), by0, by1);
-    return { eye, pixels: n, box: { x0: bx0, y0: by0, x1: bx1, y1: by1 }, tx: sx, ty: sy, texture_px_per_frame_px: scale };
+    return { eye, pixels: n, box: { x0: bx0, y0: by0, x1: bx1, y1: by1 }, tx: sx, ty: sy, texture_px_per_frame_px: scale, fit_rms };
   });
 }
 
@@ -221,6 +327,12 @@ export function textureGrid(part, w, step) {
 // down texture y; `edge` is where it falls fastest (lid skin into the lash line), `rim` its darkest row
 // (the lash-line rim of the eye opening). Method of 工具/eye_calib/lid.py, which placed the 初雪冷白 liner.
 export const LID_SEARCH = { y0: 215, y1: 300, bin: 2 };
+// Picked, checked against eye_calib's readings on models D, E, G, I: lid skin falls into the lash line
+// by 6–14 luma per 2 texture px, the slow shading of the lid by 1–3.
+const LID_FALL = 5;
+// Picked: the lash line sat 8–11 texture px below the lid edge on those models (edge 233–239, rim
+// 241–247); 16 leaves room for thicker lash lines without reaching the iris middle.
+const LID_RIM_PX = 16;
 
 export function upperLid(part, bare, columns) {
   const w = bare.width;
@@ -270,18 +382,20 @@ export function upperLid(part, bare, columns) {
       return s / t;
     });
     const centre = (b) => LID_SEARCH.y0 + (b + 0.5) * LID_SEARCH.bin;
-    // Edge and rim sit above the eye's middle; the window matches lid.py (texture y 220–285).
+    const g = (b) => (sm[Math.min(nb - 1, b + 1)] - sm[Math.max(0, b - 1)]) / 2;
+    // Scanning down from the lid skin: the edge is the first clear fall (a local extreme of the slope
+    // steeper than LID_FALL), not the steepest one, which over the iris is the pupil's rim; the rim is
+    // the first dip within LID_RIM_PX below it (the lash line), left out where the lash line runs
+    // straight into the iris without a dip.
     const lo = Math.ceil((220 - LID_SEARCH.y0) / LID_SEARCH.bin);
     const hi = Math.floor((285 - LID_SEARCH.y0) / LID_SEARCH.bin);
-    let edge = lo;
-    let rim = lo;
-    for (let b = lo; b <= hi; b++) {
-      const g = (sm[Math.min(nb - 1, b + 1)] - sm[Math.max(0, b - 1)]) / 2;
-      const ge = (sm[Math.min(nb - 1, edge + 1)] - sm[Math.max(0, edge - 1)]) / 2;
-      if (g < ge) edge = b;
-      if (sm[b] < sm[rim]) rim = b;
+    let edge = null;
+    for (let b = lo; b <= hi && edge === null; b++) if (g(b) <= -LID_FALL && g(b) <= g(b - 1) && g(b) <= g(b + 1)) edge = b;
+    let rim = null;
+    if (edge !== null) {
+      for (let b = edge + 1; b <= Math.min(nb - 2, edge + LID_RIM_PX / LID_SEARCH.bin) && rim === null; b++) if (sm[b] <= sm[b - 1] && sm[b] < sm[b + 1]) rim = b;
     }
-    out.push({ x: X, edge: centre(edge), rim: centre(rim) });
+    out.push({ x: X, edge: edge === null ? null : centre(edge), rim: rim === null ? null : centre(rim) });
   }
   return out;
 }

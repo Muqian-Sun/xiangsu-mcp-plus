@@ -37,7 +37,7 @@ class FilterComponentEditor extends EyeColorComponentEditor {}
 
 function setup() {
   const projectDir = tmpdir('xs-mk-');
-  const calls = { undo: [], imports: [], paused: [] };
+  const calls = { undo: [], imports: [] };
   const group = { name: '面部面具', parent: null };
   const set = { name: '清冷_美妆', parent: group };
   const texItem = (assetPath) => ({ assetPath, mainObject: { tex: assetPath }, compressMaxResolution: 512 });
@@ -63,22 +63,6 @@ function setup() {
   };
   const project = { path: projectDir, resourceManager };
   const bus = new EventEmitter();
-  let playing = true;
-  class PreviewManager {
-    pause() {
-      playing = false;
-      calls.paused.push('pause');
-    }
-    resume() {
-      playing = true;
-      calls.paused.push('resume');
-    }
-    getPlaystate() {
-      return playing;
-    }
-  }
-  const pm = new PreviewManager();
-  PreviewManager.getInstance = () => pm;
   const modules = {
     [M.ef]: {
       ProjectManager: { getInstance: () => ({ hasActiveProject: () => true, getCurrentActiveProject: () => project }) },
@@ -86,7 +70,6 @@ function setup() {
       Resource: { ResourceUndoManager: { createImportUndoID: (k) => `undo:${k}` } },
     },
     [M.scene]: { SceneModule: { getEditingSceneService: () => ({ sceneEditor: { getAllComponentEditors: () => editors } }) } },
-    [M.preview]: { PreviewManager },
     [M.events]: { BusinessEventManager: { TypeGuard: () => bus } },
   };
   const lib = new Library((name) => {
@@ -158,11 +141,8 @@ test('makeup_add_layer adds the region menu item and returns the FaceMask it cre
   await assert.rejects(lib.makeupAddLayer({ region: 'face' }), /ADD_LAYER_NO_FACE_MASK: FaceMask added 空/);
 });
 
-test('preview_hold pauses and plays the preview; preview_fresh waits for new frames and says when none come', async () => {
-  const { lib, calls, bus } = setup();
-  assert.deepEqual(lib.previewHold({ hold: true }), { held: true });
-  assert.deepEqual(lib.previewHold({ hold: false }), { held: false });
-  assert.deepEqual(calls.paused, ['pause', 'resume']);
+test('preview_fresh waits for new frames and says when none come', async () => {
+  const { lib, bus } = setup();
   const waiting = lib.previewFresh({ frames: 2, timeout_ms: 1000 });
   bus.emit('PreviewTextureUpdated');
   bus.emit('PreviewTextureUpdated');
@@ -174,6 +154,19 @@ test('preview_hold pauses and plays the preview; preview_fresh waits for new fra
 
 test('makeup calls refuse to run when the editor lacks what they need', async () => {
   const { lib, modules } = setup();
-  delete modules[M.preview];
-  assert.throws(() => lib.makeupList(), /INCOMPATIBLE_EDITOR: missing .*PreviewManager/);
+  delete modules[M.events];
+  assert.throws(() => lib.makeupList(), /INCOMPATIBLE_EDITOR: missing .*BusinessEventManager/);
+});
+
+test('makeup_set finds an imported texture by its path when the import does not hand the item back', async () => {
+  const { lib, items, modules } = setup();
+  const rm = modules[M.ef].ProjectManager.getInstance().getCurrentActiveProject().resourceManager;
+  rm.importResourceFileAsync = async (p) => {
+    setTimeout(() => items.push({ assetPath: p, mainObject: { tex: p }, compressMaxResolution: 512 }), 250);
+    return undefined;
+  };
+  const out = await lib.makeupSet({ changes: [{ object_path: '眼线', texture: '/p/Assets/late.png' }] });
+  assert.equal(out.after[0].texture, '/p/Assets/late.png');
+  rm.importResourceFileAsync = async () => undefined;
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', texture: '/p/Assets/never.png' }] }), /TEXTURE_IMPORT_FAILED: \/p\/Assets\/never.png/);
 });
