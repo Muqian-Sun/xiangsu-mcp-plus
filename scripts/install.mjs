@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Installs (idempotently) the editor plugin into 像塑's local plugin folder on macOS.
 // Other plugins listed in plugins.config.json are preserved; older versions of this plugin are replaced.
 import fs from 'node:fs';
@@ -9,6 +10,11 @@ import { fileURLToPath } from 'node:url';
 const NAME = 'XiangsuMcpExt';
 const VERSION = '0.3.0';
 const repo = fileURLToPath(new URL('..', import.meta.url));
+// The plugin requires this checkout by absolute path, so it must stay put; npx's cache does not.
+if (repo.split(path.sep).includes('_npx')) {
+  console.error(`refusing to install from the npx cache (${repo}); run: npm install -g ${JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).name}`);
+  process.exit(1);
+}
 const appRoot = process.env.XIANGSU_APP ?? '/Applications/Douyin AR.app';
 const editorVersion = execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', path.join(appRoot, 'Contents/Info.plist')], { encoding: 'utf8' }).trim();
 const pluginRoot = path.join(os.homedir(), 'Library/Application Support/DouyinAR/Plugins', `v${editorVersion}`, 'Local');

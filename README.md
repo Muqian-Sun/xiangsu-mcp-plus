@@ -18,6 +18,8 @@
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
 
 > 非官方项目，与字节跳动 / 抖音无关。依赖像塑编辑器的内部模块（9.7.2 实测），像塑升级后可能失效；`ext_status` 会逐项自检并列出缺失的接口。仓库不包含任何像塑的程序、代码或素材。
+>
+> **只用于学习和个人制作，禁止用来抄袭他人作品**（详见[协议与声明](#协议与声明)）。npm 包名 `@muqian-sun/xiangsu-mcp-plus`。
 
 ## 工作方式
 
@@ -113,23 +115,33 @@
 
 ## 安装（macOS）
 
-需要 Node.js 24+ 和已安装的像塑。
+需要 Node.js 24+ 和已安装的像塑。安装即表示你同意下面「协议与声明」里的用途限制：只用于学习和个人制作，不得用来抄袭他人作品。
+
+从 npm 安装（必须全局安装：插件按绝对路径加载这份代码，`npx` 的临时缓存会被清理，安装命令在那里会直接拒绝）：
+
+```bash
+npm install -g @muqian-sun/xiangsu-mcp-plus
+xiangsu-mcp-ext-install   # 装到 ~/Library/Application Support/DouyinAR/Plugins/v<版本>/Local
+echo "$(npm root -g)/@muqian-sun/xiangsu-mcp-plus/src/server.mjs"   # MCP 配置里 args 用这个路径
+```
+
+或从源码安装：
 
 ```bash
 git clone https://github.com/Muqian-Sun/xiangsu-mcp-ext.git
 cd xiangsu-mcp-ext
 npm ci
-node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugins/v<版本>/Local
+node scripts/install.mjs
 ```
 
-在 MCP 客户端配置里加一个 stdio 服务（`command` 用 `which node` 的绝对路径）：
+在 MCP 客户端配置里加一个 stdio 服务（`command` 用 `which node` 的绝对路径，`args` 用上面的 `server.mjs` 路径或源码目录下的 `src/server.mjs`）：
 
 ```json
 {
   "mcpServers": {
     "xiangsu": {
       "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/xiangsu-mcp-ext/src/server.mjs"]
+      "args": ["/absolute/path/to/src/server.mjs"]
     }
   }
 }
@@ -137,7 +149,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 它已经包含官方工具，不必再单独配置官方的 `xiangsu-mcp-manager`。如果你还在用像塑自带的 `xiangsu-effect-editor` skill，它要求客户端里存在名为 `xiangsu-mcp-manager` 的服务；这种情况下保留官方配置即可，两者可以并存。
 
-插件只在安装后**新打开的工程窗口**里加载；已开着的窗口要保存后重开。插件直接 `require` 本仓库的代码，安装后不要挪动仓库目录。
+插件只在安装后**新打开的工程窗口**里加载；已开着的窗口要保存后重开。插件直接 `require` 这份代码（源码目录或 npm 全局目录），安装后不要挪动；用 `npm install -g` 升级时路径不变，不用重新运行安装命令。
 
 ### 更新后怎么生效
 
@@ -174,13 +186,14 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 代码以 [MIT 协议](LICENSE) 开源。另外请注意：
 
+- **用途限制：本工具只用于学习和个人制作。禁止用它抄袭他人作品**：不得把通过本工具看到、下载或套用的他人作品（首页作品工程、排行榜特效、素材广场里其他创作者分享的素材等）原样或稍作修改后发布、投稿、商用，或当作自己的原创。参考别人的做法学习思路可以，作品要自己做。MIT 协议针对的是本项目自己的代码，不改变他人作品的权利归属。
 - 本项目是个人开发的非官方工具，与字节跳动、抖音、像塑没有任何关联，也未获其认可或支持。「像塑」「抖音」「Douyin AR」等名称和商标归各自权利人所有。
 - 仓库只包含本项目自己的代码，不包含像塑的程序、源码或任何素材。通过本工具访问的官方素材、首页作品，其版权归像塑或原作者所有，使用须遵守像塑 / 抖音的用户协议和平台规则。
-- 首页作品只建议用于学习参考：不要把下载的工程、素材原样或稍作修改后重新发布，也不要把它们放进公开仓库。学完用 `works_cleanup` 删除。
+- 首页作品只用于学习参考：不要把下载的工程、素材放进公开仓库或转发给他人，学完用 `works_cleanup` 删除。
 - 本工具调用的是编辑器内部接口，可能随像塑升级失效，也可能被平台限制。使用风险自负，作者不对因使用本工具造成的账号、数据或作品损失负责（详见 MIT 协议的免责条款）。
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), create AI combine workflows (the photo is sent to the cloud and generated from the workflow) and apply them to the scene the way the AI effect window does, leaving node editing and preview generation to the official workflow tools, list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, filling in the submit window — name, trigger hint, camera, inspiration, task — up to its final step, where pressing 提交审核 stays a user click, phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, list the account's submitted effects with their review status and, for rejected ones, the reviewer's reason and full review timeline, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), create AI combine workflows (the photo is sent to the cloud and generated from the workflow) and apply them to the scene the way the AI effect window does, leaving node editing and preview generation to the official workflow tools, list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, filling in the submit window — name, trigger hint, camera, inspiration, task — up to its final step, where pressing 提交审核 stays a user click, phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, list the account's submitted effects with their review status and, for rejected ones, the reviewer's reason and full review timeline, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm install -g @muqian-sun/xiangsu-mcp-plus && xiangsu-mcp-ext-install` (a global install is required: the editor plugin loads this code by absolute path, so the npx cache is refused), or from source with `npm ci && node scripts/install.mjs`; then register `node <package>/src/server.mjs` as a stdio MCP server.
 
-Licensed under [MIT](LICENSE). Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.
+**For learning and personal creation only. Do not use it to copy other creators' works**: works you view, download or apply through this tool (homepage projects, ranked effects, assets other creators shared) must not be republished, submitted, used commercially or passed off as your own, as is or modified. Licensed under [MIT](LICENSE), which covers this project's own code only. Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.
