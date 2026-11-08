@@ -139,6 +139,17 @@ const REQUIRED = {
     [M.orionui, 'WindowState.Minimized'],
     [M.editWindow, 'EditWindowController.getInstance'],
   ],
+  makeup: [
+    [M.scene, 'SceneModule.getEditingSceneService'],
+    [M.ef, 'UndoSystem.instance.start'],
+    [M.ef, 'UndoSystem.instance.end'],
+    [M.ef, 'Resource.ResourceUndoManager.createImportUndoID'],
+    [M.preview, 'PreviewManager.getInstance'],
+    [M.preview, 'PreviewManager.prototype.pause'],
+    [M.preview, 'PreviewManager.prototype.resume'],
+    [M.preview, 'PreviewManager.prototype.getPlaystate'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+  ],
   aiCombine: [
     [M.aiGraphProject, 'createAIGraph'],
     [M.aiGraphManager, 'AIGraphManager.getInstance'],

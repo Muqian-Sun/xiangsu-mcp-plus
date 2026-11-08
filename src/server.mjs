@@ -18,7 +18,10 @@ import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
-import { makeupLayers } from './makeup.mjs';
+import { makeupLayers, pixelStats } from './makeup.mjs';
+import { BLENDS, CURVES, LAYOUTS, LIMITS as PAINT_LIMITS, paint, previewPng, writeTexture } from './paint.mjs';
+import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
+import { LID_SEARCH, WINDOWS, decodeUv, encodeUv, overlay, textureGrid, upperLid } from './calib.mjs';
 import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
@@ -41,6 +44,88 @@ const target = {
 };
 
 const saveTo = z.string().min(1).optional().describe('另存到这个目录（绝对路径，不存在会创建），长期保留。');
+
+// makeup_texture's shapes. Nested objects are strict too: a misspelt key would otherwise be dropped
+// and the shape drawn with defaults.
+const pt = z.tuple([z.number(), z.number()]);
+const line = z.array(pt).min(2).max(PAINT_LIMITS.points);
+const pos = z.number().gt(0);
+const mirror = z.boolean().optional().describe('同时画一份左右镜像（关于贴图竖直中线）：另一只眼、另一侧脸颊。');
+const range = (what) => z.tuple([z.number().min(0), z.number().min(0)]).describe(what);
+const paintShape = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('spot'),
+    x: z.number(),
+    y: z.number(),
+    rx: pos.describe('横向 σ（像素），高斯点约 3σ 处淡到看不见。'),
+    ry: pos.optional().describe('纵向 σ，默认同 rx。'),
+    angle: z.number().optional().describe('旋转角度（度），默认 0。'),
+    peak: z.number().gt(0).max(1).optional().describe('中心不透明度，默认 1。'),
+    mirror,
+  }),
+  z.strictObject({
+    type: z.literal('stroke'),
+    points: line,
+    radius: z.union([pos, z.array(z.number().min(0)).min(2)]).describe('半径（像素，线宽的一半）：一个数；[起点, 终点] 按长度渐变；或每个点一个。'),
+    tail: z
+      .strictObject({
+        length: pos.describe('尾巴长度（像素）。'),
+        lift: z.number().min(-90).max(90).describe('尾尖相对线末端走向往上挑的角度（度），负数往下。'),
+        radius: z.number().min(0).optional().describe('尾尖半径，默认 0.2；粗细从线末端的半径渐变过去。'),
+      })
+      .optional()
+      .describe('从最后一个点顺着线的走向接出一条尾巴（眼线的上扬眼尾），接头处方向连续；眼尾不要另画一笔，两笔的接头会折。'),
+    curve: z.enum(CURVES).optional().describe('线怎么走：arc（默认，4 个点以上）用一条三次贝塞尔曲线拟合这些点，像一笔画下来（整体一条弧，最多一个反弯），首尾落在第一个和最后一个点上，中间不逐个经过（实测点带一两像素的误差，逐点经过会把误差画成折角），点不在一条弧上时 warnings 里会说；through 平滑地穿过每个点；straight 直线连接，要尖角（如翼尖）时用。3 个点时 arc 按 through 画。'),
+    mirror,
+  }),
+  z.strictObject({ type: z.literal('polygon'), points: z.array(pt).min(3).max(PAINT_LIMITS.points), mirror }),
+  z.strictObject({
+    type: z.literal('band'),
+    top: line.describe('上沿，从左到右。'),
+    bottom: line.describe('下沿，从左到右。'),
+    curve: z.enum(CURVES).optional().describe('上下沿各自怎么走：arc（默认，4 个点以上）用一条三次贝塞尔曲线拟合这些点，像一笔画下来（整体一条弧，最多一个反弯），首尾落在第一个和最后一个点上，中间不逐个经过（实测点带一两像素的误差，逐点经过会把误差画成折角），点不在一条弧上时 warnings 里会说；through 平滑地穿过每个点；straight 直线连接，要尖角（如翼尖）时用。3 个点时 arc 按 through 画。'),
+    mirror,
+  }),
+  z.strictObject({
+    type: z.literal('scatter'),
+    x: z.number(),
+    y: z.number(),
+    rx: pos,
+    ry: pos.optional(),
+    count: z.number().int().min(1).max(PAINT_LIMITS.count),
+    radius: range('每个点的 σ 范围 [最小, 最大]（像素）。'),
+    peak: range('每个点的中心不透明度范围，默认 [1, 1]。').optional(),
+    avoid: z.array(z.strictObject({ x: z.number(), y: z.number(), rx: pos, ry: pos.optional() })).max(16).optional().describe('不放点的椭圆（如眼睛、鼻翼）。'),
+    seed: z.number().int().optional().describe('随机种子，同一个种子画出同样的点，默认 1。'),
+    mirror,
+  }),
+  z.strictObject({
+    type: z.literal('strands'),
+    along: line.describe('发根所在的线（如睫毛根），角度和长度从它的第一个点线性变到最后一个点。'),
+    count: z.number().int().min(1).max(PAINT_LIMITS.count),
+    length: range('长度 [第一个点处, 最后一个点处]（像素）。'),
+    angle: z.tuple([z.number(), z.number()]).describe('方向 [第一个点处, 最后一个点处]（度，0 朝右、-90 朝上）。'),
+    radius: range('半径 [发根, 发梢]（像素）。'),
+    curl: z.number().optional().describe('发根到发梢转过的角度（度），默认 12。'),
+    jitter: z.strictObject({ angle: z.number().min(0).optional(), length: z.number().min(0).optional(), position: z.number().min(0).optional() }).optional().describe('随机扰动：角度 ± 度（默认 6）、长度 ± 比例（默认 0.2）、位置 ± 间距比例（默认 0.3）。'),
+    seed: z.number().int().optional(),
+    curve: z.enum(CURVES).optional().describe('发根线怎么走（同 stroke 的 curve）；每根发丝都是弯曲的弧，straight 时发丝也是折线。'),
+    mirror,
+  }),
+]);
+const paintLayer = z
+  .strictObject({
+    color: z.union([z.string(), z.tuple([z.number(), z.number(), z.number()])]).optional().describe('颜色 "#RRGGBB" 或 [r, g, b]（0–255）；erase 层不用。'),
+    opacity: z.number().min(0).max(1).optional().describe('整层不透明度，默认 1。'),
+    blur: z.number().min(0).max(64).optional().describe('整层高斯模糊 σ（像素），默认 0。'),
+    erase: z.boolean().optional().describe('擦除：按形状降低下面（base 和前面各层）的不透明度，不上色。'),
+    clip: z
+      .strictObject({ x_min: z.number().optional(), x_max: z.number().optional(), y_min: z.number().optional(), y_max: z.number().optional(), feather: z.number().min(0).optional() })
+      .optional()
+      .describe('只保留框内的部分，feather 是边缘渐变的像素数：如整脸贴图里下眼睑粉用 y_min 488、feather 3 清掉眼裂。'),
+    shapes: z.array(paintShape).min(1).max(PAINT_LIMITS.shapes),
+  })
+  .refine((l) => l.erase || l.color !== undefined, { message: 'color is required unless erase is true' });
 // Picked, not measured: four videos covers 正脸、摇头、点头、双人; 24 full-size frames (about 75 KB
 // each, measured) keep one answer at about 1.8 MB of images.
 const MAX_FRAME_VIDEOS = 4;
@@ -50,6 +135,18 @@ const RESET_TIMEOUT_MS = 20000;
 // Picked, not measured: on top of the reset and the frame intervals, room for the frame calls
 // (about 0.2 s each, measured) and the next video switch before the hold is renewed.
 const HOLD_SLACK_MS = 30000;
+// Derived from practice (project notes): AI face effects show fully in the second frame taken 3 s apart
+// after a reset, so a held frame is taken this long after the reset by default.
+const HOLD_AT_MS = 3000;
+// Picked, not measured: as many states and regions as fit a readable answer.
+const MAX_COMPARE_VARIANTS = 6;
+const MAX_COMPARE_REGIONS = 6;
+// Picked: a held frame that changes by more than this (max luma step in a region) between the first and
+// the last baseline was not held (an effect that animates by itself), and the comparison is reported as such.
+const DRIFT_MAX = 8;
+// Where the eye layout's lid is read: every 15 texture px across the left eye's coded window (lid.py's
+// columns, 135–330), and the same columns mirrored for the right eye.
+const LID_COLUMNS = Array.from({ length: 14 }, (_, i) => 135 + 15 * i);
 // The official screenshot's size: it scales the preview down to 320×569.
 const OFFICIAL_SHOT_SIDE = 569;
 // Measured: the preview service answers ttl 604800 (a week); used when an answer carries no ttl.
@@ -183,6 +280,44 @@ export function createServer(deps = {}) {
   const holdFullRate = (projectPath, hold_ms) => d.callPlugin('preview_full_rate', { hold_ms }, { projectPath, timeoutMs: 15000 });
   const releaseFullRate = (projectPath) => holdFullRate(projectPath, 0).catch(() => {});
   const resetPreview = (projectPath) => d.callPlugin('preview_reset', {}, { projectPath, timeoutMs: RESET_TIMEOUT_MS + 5000 });
+  const pngFrame = async (projectPath) => {
+    await holdFullRate(projectPath, HOLD_SLACK_MS);
+    return decodePng(Buffer.from((await d.callPlugin('preview_frame', { format: 'png' }, { projectPath, timeoutMs: 15000 })).data, 'base64'));
+  };
+  const makeupSet = (projectPath, changes, label) => d.callPlugin('makeup_set', { changes, label }, { projectPath, timeoutMs: 60000 });
+  const freshFrames = (projectPath) => d.callPlugin('preview_fresh', {}, { projectPath, timeoutMs: 15000 });
+  // Runs fn(video) once per preview video (or once on the current one), switching back afterwards.
+  const eachVideo = async (instance_id, videos, tracking_type, fn) => {
+    if (!videos) return [await fn(null)];
+    const original = await d.official.callJson('get_current_preview_video', { instance_id, intention: '记下当前预览视频，用完切回' });
+    const out = [];
+    try {
+      for (const video_name of videos) {
+        await d.official.callJson('set_preview_video', { instance_id, tracking_type, video_name, intention: '临时切换预览视频' });
+        out.push(await fn(video_name));
+      }
+    } finally {
+      const back = original.video_name ? { video_name: original.video_name } : { resource_url: original.resource_url };
+      await d.official.callJson('set_preview_video', { instance_id, tracking_type: original.tracking_type, ...back, intention: '切回原预览视频' });
+    }
+    return out;
+  };
+  // Resets the preview, plays it for at_ms, holds that video frame while fn runs, then plays again.
+  const onHeldFrame = async (projectPath, at_ms, fn) => {
+    await holdFullRate(projectPath, RESET_TIMEOUT_MS + at_ms + HOLD_SLACK_MS);
+    try {
+      await resetPreview(projectPath);
+      await d.sleep(at_ms);
+      await d.callPlugin('preview_hold', { hold: true }, { projectPath, timeoutMs: 15000 });
+      try {
+        return await fn();
+      } finally {
+        await d.callPlugin('preview_hold', { hold: false }, { projectPath, timeoutMs: 15000 });
+      }
+    } finally {
+      await releaseFullRate(projectPath);
+    }
+  };
 
   // Forwards to the plugin window showing the target project.
   const plugin = (method, timeoutMs) => async (args) => {
@@ -870,6 +1005,240 @@ export function createServer(deps = {}) {
         const res = text(makeupLayers(project_dir));
         if (save_to) res.content.push({ type: 'text', text: `已保存：${saveFile(save_to, 'makeup_layers.json', res.content[0].text)}` });
         return res;
+      },
+    },
+    {
+      name: 'makeup_texture',
+      description: `按形状画一张妆容层（FaceMask）贴图，写成 PNG：官方单品做不出的眼线、下眼睑粉、水光点、遮瑕、红晕、雀斑、睫毛等。layout 决定贴图布局和尺寸（坐标都按这个尺寸的像素写）：${Object.entries(LAYOUTS)
+        .map(([k, v]) => `${k} ${v.width}×${v.height}`)
+        .join('、')}，分别对应整脸、眼部、唇部区域的妆容层。layers 从下往上按标准方式叠加；每层一个颜色，形状有 spot（高斯点）、stroke（渐细的圆头线，默认用一条平滑的弧拟合给的点）、polygon、band（上下两条线围成的带）、scatter（椭圆里随机撒点，如雀斑）、strands（沿一条线长出的渐细发丝，如睫毛）；mirror 的形状再画一份左右镜像，mirror_dy 让镜像那份整体下移（眼部贴图右半边在画面上比左半边高约 3 贴图像素，实测 4 位模特里 3 位如此）。blend 填妆容层要用的混合模式：透明像素按它填「不改变皮肤」的颜色（正片叠底填白、滤色填黑、柔光填中灰，普通混合填最近的上色像素的颜色），边缘不会被纹理过滤混出一圈别的颜色。base 给一张现有贴图时在它上面画，erase 层按形状擦掉它的一部分。实测坐标（模特 D、E、G、I，整脸 1024）：眉 y≈410；眼裂 y≈465–485，左眼 x≈375–455（外眼角在小 x 一侧，右眼关于 x=512 对称）；上眼皮 430–455；下睫毛线≈490；卧蚕≈500；颧骨高点 (350, 545)；鼻尖 (512, 590)；上唇≈690，唇心≈720，下唇下缘≈760。眼部 900×460 的左半边是画面左眼，上眼缘暗边中段 y≈247、眼尾 263–266，眼皮皮肤结束处中段≈236。要精确到像素用 makeup_calibrate 在自己的模特上量。返回文件路径、贴图上色部分的平均色和范围、warnings（如整脸贴图画进了眼裂），以及贴图叠在中灰上的预览图。贴图写到工程 Assets 里、覆盖已有文件时编辑器几秒后热更新；新文件要挂到妆容层上用 attach。`,
+      shape: {
+        out: z.string().min(1).describe('输出 PNG 的绝对路径；已存在会覆盖。'),
+        layout: z.enum(Object.keys(LAYOUTS)).describe('贴图布局：face 整脸、eye 眼部、lips 唇部。'),
+        blend: z.enum(Object.keys(BLENDS)).describe('这张贴图在妆容层上用的混合模式（决定透明像素填什么颜色）。'),
+        layers: z.array(paintLayer).min(1).max(PAINT_LIMITS.layers),
+        mirror_dy: z.number().min(-20).max(20).optional().describe('镜像那份的下移量（贴图像素，可为负），默认 0。'),
+        base: z.string().min(1).optional().describe('在这张 PNG（绝对路径）上画；尺寸不同时先缩放到 layout 的尺寸。'),
+        attach: z
+          .strictObject({
+            object_path: z.string().min(1).optional().describe('换这个已有妆容层的贴图（层级路径或能唯一定位的末尾几段）；它的区域要和 layout 一致。'),
+            add: z.boolean().optional().describe('新建一个和 layout 同区域的妆容层（添加对象菜单的面部 / 眼部 / 唇部妆容）再挂上。'),
+            female: z.number().min(0).max(1).optional().describe('女生强度；不给时保留层上原来的值。'),
+            male: z.number().min(0).max(1).optional().describe('男生强度；不给时保留层上原来的值。'),
+            texture_size: z.union([z.literal(512), z.literal(1024), z.literal(2048)]).optional().describe('贴图导入后的最大分辨率；编辑器默认压到 512，雀斑、光点这类细小的点用 1024。'),
+          })
+          .refine((a) => !a.object_path !== !a.add, { message: 'give object_path or add: true, not both' })
+          .optional()
+          .describe('写完后挂到目标工程的妆容层上，混合模式设成 blend（可撤销）。out 在工程 Assets 里时原地登记，不在时编辑器复制一份进工程。'),
+        ...target,
+      },
+      run: async ({ out, attach, project_path, instance_id, ...spec }) => {
+        const painted = paint(spec);
+        const file = writeTexture(out, painted);
+        const { color, hsl, coverage, cx, cy, width, height } = pixelStats(painted);
+        const summary = {
+          file,
+          size: [painted.width, painted.height],
+          blend: spec.blend,
+          // pixelStats averages pixel indices; shapes put pixel (x, y)'s centre at (x + 0.5, y + 0.5).
+          painted: {
+            color,
+            hsl,
+            coverage: Number(coverage.toFixed(4)),
+            center: [cx * painted.width + 0.5, cy * painted.height + 0.5].map((v) => Number(v.toFixed(1))),
+            extent: [Math.round(width * painted.width), Math.round(height * painted.height)],
+          },
+          warnings: painted.warnings,
+        };
+        if (attach) {
+          const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+          let object_path = attach.object_path;
+          if (attach.add) object_path = (await d.callPlugin('makeup_add_layer', { region: spec.layout }, { projectPath, timeoutMs: 180000 })).object_path;
+          else {
+            const { layers } = await d.callPlugin('makeup_list', {}, { projectPath, timeoutMs: 15000 });
+            const hits = layers.filter((l) => l.kind === 'face_mask' && (l.object_path === object_path || l.object_path.endsWith(`/${object_path}`)));
+            if (hits.length !== 1) throw Error(`MAKEUP_LAYER_NOT_FOUND: ${object_path} matches ${hits.length} makeup layers${hits.length ? `: ${hits.map((l) => l.object_path).join(' | ')}` : ''}`);
+            if (hits[0].region !== LAYOUTS[spec.layout].region) throw Error(`LAYOUT_MISMATCH: ${hits[0].object_path} is region ${hits[0].region}, the ${spec.layout} layout is for region ${LAYOUTS[spec.layout].region}`);
+            object_path = hits[0].object_path;
+          }
+          const change = Object.fromEntries(
+            Object.entries({ object_path, texture: file, blend: BLENDS[spec.blend], female: attach.female, male: attach.male, texture_size: attach.texture_size }).filter(([, v]) => v !== undefined),
+          );
+          const { after } = await makeupSet(projectPath, [change], `makeup_texture: ${path.basename(file)}`);
+          summary.attached = { ...after[0], note: '改动在编辑器里，可撤销；要落盘请 save_project' };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, { type: 'text', text: '预览（贴图叠在中灰上）：' }, { type: 'image', mimeType: 'image/png', data: previewPng(painted).toString('base64') }] };
+      },
+    },
+    {
+      name: 'makeup_compare',
+      description: `在同一个视频帧上比较几种妆容状态：重置预览、播放到 at_ms 后让预览停在这一帧，截基线（当前状态），再依次把每个 variant 的改动临时套上、截一帧、改回去，最后再截一次基线（两次基线不一致说明画面没停住，如自带动画的特效，返回 drift 和提示）。改动只能是强度：妆容层的 female / male、美瞳和滤镜的 intensity（用来「关掉这层看看」「强度 0.3 和 0.6 比一比」；换贴图、换混合模式会让预览重载，停不住画面）。整套妆的子项也可以这样调，强度改回原值，不会删层。regions 是按画面比例（0–1）给的区域，如眼下、脸颊、唇：每个区域返回每种状态的平均色 RGB / HSL、亮度 luma（Rec.601）、皮肤细节 detail（亮度减去 σ ${DETAIL_SIGMA} px 高斯模糊后的平均绝对差，越高纹理越多），以及相对基线的差值；再给一张并排放大图（基线在最左，之后按 variants 顺序，像素直接放大不插值）。截图是无损 PNG。videos 依次在几个预览视频上各比一次，完了切回原视频。跑完所有改动都已改回；切换过视频或改过参数后工程会显示「已修改」。`,
+      shape: {
+        ...target,
+        variants: z
+          .array(
+            z.strictObject({
+              label: z.string().min(1).max(20),
+              changes: z
+                .array(
+                  z.strictObject({
+                    object_path: z.string().min(1).describe('妆容层、美瞳或滤镜对象的层级路径（或能唯一定位的末尾几段）。'),
+                    female: z.number().min(0).max(1).optional(),
+                    male: z.number().min(0).max(1).optional(),
+                    intensity: z.number().min(0).max(1).optional().describe('美瞳、滤镜的强度。'),
+                  }),
+                )
+                .min(1)
+                .max(40),
+            }),
+          )
+          .min(1)
+          .max(MAX_COMPARE_VARIANTS),
+        regions: z
+          .array(z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
+          .min(1)
+          .max(MAX_COMPARE_REGIONS),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（list_preview_videos 返回的 video_name）；不给就用当前视频。'),
+        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
+        at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再停住（毫秒），默认 ${HOLD_AT_MS}（AI 变脸要过一会儿才完全生效）。`),
+        zoom: z.number().int().min(1).max(8).optional().describe('并排图的放大倍数，默认 3。'),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { variants, regions, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, zoom = 3, save_to } = a;
+        const instance_id = await officialInstance(a);
+        const projectPath = await projects.resolveProjectPath({ instance_id });
+        const dir = save_to ? saveDir(save_to) : d.framesDir();
+        const runs = await eachVideo(instance_id, videos, tracking_type, (video) =>
+          onHeldFrame(projectPath, at_ms, async () => {
+            const frames = [await pngFrame(projectPath)];
+            for (const v of variants) {
+              const { before } = await makeupSet(projectPath, v.changes, `makeup_compare: ${v.label}`);
+              try {
+                await freshFrames(projectPath);
+                frames.push(await pngFrame(projectPath));
+              } finally {
+                await makeupSet(projectPath, before.map(({ object_path, kind, female, male, intensity }) => (kind === 'face_mask' ? { object_path, female, male } : { object_path, intensity })), 'makeup_compare: restore');
+              }
+            }
+            await freshFrames(projectPath);
+            const again = await pngFrame(projectPath);
+            return { video, frames, again };
+          }),
+        );
+        const labels = ['基线', ...variants.map((v) => v.label)];
+        const out = [];
+        const content = [];
+        for (const [k, { video, frames, again }] of runs.entries()) {
+          const prefix = videos ? `v${k + 1}-` : '';
+          const regionsOut = regions.map((r, j) => {
+            const states = frames.map((f, i) => ({ label: labels[i], ...regionStats(f, r) }));
+            const base = states[0];
+            for (const s of states.slice(1)) {
+              s.delta = { rgb: s.rgb.map((v, c) => Number((v - base.rgb[c]).toFixed(1))), luma: Number((s.luma - base.luma).toFixed(1)), detail: Number((s.detail - base.detail).toFixed(2)) };
+            }
+            const drift = frameDiff(frames[0], again, r);
+            const file = path.join(dir, `${prefix}compare-${j + 1}.png`);
+            fs.writeFileSync(file, sideBySide(frames, r, zoom));
+            const box = pixelBox(frames[0], r);
+            return { label: r.label, box_px: [box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0], states, drift, ...(drift.max > DRIFT_MAX ? { warning: '前后两次基线不一样，画面在停住期间还在变，各状态之间的差别不全是改动造成的' } : {}), image: file };
+          });
+          out.push({ video, regions: regionsOut });
+          for (const r of regionsOut) {
+            content.push({ type: 'text', text: `${video ? `${video} ` : ''}${r.label}：${labels.join(' | ')}` });
+            content.push({ type: 'image', ...(await d.readImageFile(r.image)) });
+          }
+        }
+        const summary = { states: labels, runs: out, ...(save_to ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 save_to' }), note: '所有改动都已改回；工程可能显示「已修改」，不需要的话不用保存' };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
+      },
+    },
+    {
+      name: 'makeup_calibrate',
+      description: `量出妆容贴图在当前预览模特脸上落在哪里。临时加一个 layout 区域的妆容层，贴上「颜色就是贴图坐标」的标定贴图（R=x、G=y），截图期间把其它妆容层、美瞳、滤镜的强度临时调成 0（整套妆的子项也只是调强度，不删不关），在 at_ms 那一帧截一张带标定层的、一张不带的（即这张脸只有 AI 脸、美型时的样子），逐像素解码出每个画面像素对应的贴图坐标；截完改回所有强度，删掉临时层和标定贴图。返回每个预览视频（eye 布局下每只眼）的：画面上的范围 box_px、每画面像素对应多少贴图像素、标注图（不带妆的脸放大 4 倍，红线 / 青线是贴图 y 每 ${5} 像素的等高线，红线标了数值；黄色刻度是贴图 x 每 30 像素），以及 textures_grid（贴图上每 10 像素的格点落在画面哪个像素，写进 calibration.json）。eye 布局另返回上眼皮：每一列贴图 x 上，眼皮皮肤结束处 edge（亮度下降最快处）和上眼缘最暗处 rim 的贴图 y（右眼的 x 已换算成贴图右半边的坐标），画内眼线时线的上沿放在 rim 上方几像素、下沿到 rim。坐标的解码误差约 1 贴图像素（8 位编码，eye 布局 1.4 贴图像素一级，平滑后）。滤镜以外还有会改颜色的后处理（自写的 .omtl 等）时解码会失败并说明，先把它们关掉再标定。`,
+      shape: {
+        ...target,
+        layout: z.enum(Object.keys(LAYOUTS)).describe('要标定的贴图布局：face 整脸、eye 眼部、lips 唇部。'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次在这些预览视频上标定（list_preview_videos 的 video_name），如几位模特的正脸视频；不给就用当前视频。'),
+        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
+        at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再停住截图（毫秒），默认 ${HOLD_AT_MS}。`),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { layout, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, save_to } = a;
+        const instance_id = await officialInstance(a);
+        const projectPath = await projects.resolveProjectPath({ instance_id });
+        const dir = save_to ? saveDir(save_to) : d.framesDir();
+        const uvFile = path.join(projectPath, 'Assets', `xs-calibration-${layout}-${Date.now()}.png`);
+        fs.writeFileSync(uvFile, encodeUv(layout));
+        let temp = null;
+        let restore = null;
+        const cleanup = [];
+        let runs;
+        try {
+          const { layers } = await d.callPlugin('makeup_list', {}, { projectPath, timeoutMs: 15000 });
+          temp = (await d.callPlugin('makeup_add_layer', { region: layout }, { projectPath, timeoutMs: 180000 })).object_path;
+          const mute = layers.map((l) => (l.kind === 'face_mask' ? { object_path: l.object_path, female: 0, male: 0 } : { object_path: l.object_path, intensity: 0 }));
+          await makeupSet(projectPath, [{ object_path: temp, texture: uvFile, blend: BLENDS.normal, female: 1, male: 1 }], 'makeup_calibrate: calibration layer');
+          if (mute.length) restore = (await makeupSet(projectPath, mute, 'makeup_calibrate: mute makeup')).before;
+          runs = await eachVideo(instance_id, videos, tracking_type, (video) =>
+            onHeldFrame(projectPath, at_ms, async () => {
+              await freshFrames(projectPath);
+              const coded = await pngFrame(projectPath);
+              await makeupSet(projectPath, [{ object_path: temp, female: 0, male: 0 }], 'makeup_calibrate: bare');
+              try {
+                await freshFrames(projectPath);
+                return { video, coded, bare: await pngFrame(projectPath) };
+              } finally {
+                await makeupSet(projectPath, [{ object_path: temp, female: 1, male: 1 }], 'makeup_calibrate: calibration layer');
+              }
+            }),
+          );
+        } finally {
+          if (restore) await makeupSet(projectPath, restore.map(({ object_path, kind, female, male, intensity }) => (kind === 'face_mask' ? { object_path, female, male } : { object_path, intensity })), 'makeup_calibrate: restore');
+          if (temp) {
+            const removed = await d.callPlugin('object_remove', { object_path: temp, delete_unused_resources: true }, { projectPath, timeoutMs: 60000 });
+            cleanup.push(...removed.resources_deleted);
+          }
+          // Still there when the layer never got it (a failure before the texture was set), or the
+          // editor imported it but kept it: delete it as a resource, or as a plain file if it is none.
+          const rel = path.relative(projectPath, uvFile);
+          if (fs.existsSync(uvFile)) {
+            try {
+              cleanup.push(...(await d.callPlugin('resource_delete_unused', { paths: [rel] }, { projectPath, timeoutMs: 30000 })).deleted);
+            } catch (e) {
+              if (!/RESOURCE_NOT_FOUND/.test(e.message)) throw e;
+              fs.rmSync(uvFile, { force: true });
+              cleanup.push(rel);
+            }
+          }
+        }
+        const leftover = fs.existsSync(uvFile) ? [path.relative(projectPath, uvFile)] : [];
+        const win = WINDOWS[layout];
+        const out = [];
+        const content = [];
+        for (const [k, { video, coded, bare }] of runs.entries()) {
+          const parts = decodeUv(layout, coded, bare);
+          const prefix = videos ? `v${k + 1}-` : '';
+          const partsOut = parts.map((p) => {
+            const file = path.join(dir, `${prefix}calibration${p.eye ? `-${p.eye}` : ''}.png`);
+            fs.writeFileSync(file, overlay(p, bare));
+            const res = { ...(p.eye ? { eye: p.eye } : {}), box_px: [p.box.x0, p.box.y0, p.box.x1 - p.box.x0 + 1, p.box.y1 - p.box.y0 + 1], pixels: p.pixels, texture_px_per_frame_px: p.texture_px_per_frame_px, overlay: file };
+            if (layout === 'eye') res.upper_lid = upperLid(p, bare, p.eye === 'right' ? LID_COLUMNS.map((x) => LAYOUTS.eye.width - 1 - x) : LID_COLUMNS);
+            res.texture_grid = textureGrid(p, bare.width, 10);
+            return res;
+          });
+          out.push({ video, parts: partsOut });
+          for (const p of partsOut) {
+            content.push({ type: 'text', text: `${video ? `${video} ` : ''}${p.eye ? `${p.eye === 'left' ? '左' : '右'}眼` : ''}标注图` });
+            content.push({ type: 'image', ...(await d.readImageFile(p.overlay)) });
+          }
+        }
+        const json = path.join(dir, `calibration-${layout}.json`);
+        fs.writeFileSync(json, JSON.stringify({ layout, window: win, lid_search: LID_SEARCH, runs: out }, null, 2));
+        const brief = out.map((r) => ({ video: r.video, parts: r.parts.map(({ texture_grid, ...p }) => p) }));
+        const summary = { layout, runs: brief, calibration_json: json, cleaned_up: cleanup, ...(leftover.length ? { leftover, warning: '标定贴图没删掉，请用 resource_delete_unused 删除' } : {}), note: '所有强度都已改回，临时层已删除；工程会显示「已修改」，不需要的话不用保存' };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
       },
     },
     {

@@ -1,0 +1,179 @@
+import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { Library, M } = require('../editor-plugin/library.cjs');
+
+class FaceMaskComponentEditor {
+  constructor(so, props) {
+    this.sceneObject = so;
+    this.enabled = true;
+    Object.assign(this, { externalFemaleIntensity: 1, externalMaleIntensity: 1, ...props });
+  }
+  setProperty(k, v) {
+    if (this.ignore) return undefined;
+    if (k === 'readonlyKey') return Error('readonly');
+    this[k] = v;
+    return undefined;
+  }
+}
+class EyeColorComponentEditor {
+  constructor(so, intensity) {
+    this.sceneObject = so;
+    this.enabled = true;
+    this.values = { intensity };
+  }
+  getProperty(k) {
+    return this.values[k];
+  }
+  setProperty(k, v) {
+    this.values[k] = v;
+  }
+}
+class FilterComponentEditor extends EyeColorComponentEditor {}
+
+function setup() {
+  const projectDir = tmpdir('xs-mk-');
+  const calls = { undo: [], imports: [], paused: [] };
+  const group = { name: '面部面具', parent: null };
+  const set = { name: '清冷_美妆', parent: group };
+  const texItem = (assetPath) => ({ assetPath, mainObject: { tex: assetPath }, compressMaxResolution: 512 });
+  const items = [texItem('/p/Assets/liner.png'), texItem('/p/Assets/blush.png')];
+  const so = (name, parent) => ({ name, parent });
+  const editors = [
+    new FaceMaskComponentEditor(so('眼线', set), { regionType: 1, blendMode: 1, femaleIntensity: 0.7, maleIntensity: 0, makeupTexture: items[0].mainObject }),
+    new FaceMaskComponentEditor(so('腮红', set), { regionType: 0, blendMode: 1, femaleIntensity: 0.4, maleIntensity: 0.05, externalFemaleIntensity: 0.5, makeupTexture: items[1].mainObject }),
+    new FaceMaskComponentEditor(so('腮红', group), { regionType: 0, blendMode: 0, femaleIntensity: 1, maleIntensity: 0, makeupTexture: null }),
+    new EyeColorComponentEditor(so('美瞳', set), 0.8),
+    new FilterComponentEditor(so('冷白皮', { name: '滤镜', parent: null }), 1),
+    { constructor: { name: 'OtherEditor' }, sceneObject: so('别的', null) },
+  ];
+  const resourceManager = {
+    getResourceItemByObject: (o) => items.find((i) => i.mainObject === o) || null,
+    getResourceItemByAssetPath: (p) => items.find((i) => i.assetPath === p) || null,
+    importResourceFileAsync: async (p, opts) => {
+      calls.imports.push([p, opts.undoID]);
+      const item = texItem(p.startsWith('/p/Assets/') ? p : `/p/Assets/Textures/${p.split('/').pop()}`);
+      items.push(item);
+      return item;
+    },
+  };
+  const project = { path: projectDir, resourceManager };
+  const bus = new EventEmitter();
+  let playing = true;
+  class PreviewManager {
+    pause() {
+      playing = false;
+      calls.paused.push('pause');
+    }
+    resume() {
+      playing = true;
+      calls.paused.push('resume');
+    }
+    getPlaystate() {
+      return playing;
+    }
+  }
+  const pm = new PreviewManager();
+  PreviewManager.getInstance = () => pm;
+  const modules = {
+    [M.ef]: {
+      ProjectManager: { getInstance: () => ({ hasActiveProject: () => true, getCurrentActiveProject: () => project }) },
+      UndoSystem: { instance: { start: (n) => calls.undo.push(`start:${n}`), end: () => calls.undo.push('end') } },
+      Resource: { ResourceUndoManager: { createImportUndoID: (k) => `undo:${k}` } },
+    },
+    [M.scene]: { SceneModule: { getEditingSceneService: () => ({ sceneEditor: { getAllComponentEditors: () => editors } }) } },
+    [M.preview]: { PreviewManager },
+    [M.events]: { BusinessEventManager: { TypeGuard: () => bus } },
+  };
+  const lib = new Library((name) => {
+    if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
+    return modules[name];
+  });
+  return { lib, calls, editors, items, bus, modules };
+}
+
+test('makeup_list describes the makeup layers, eye colour and filters with their strengths and textures', () => {
+  const { lib } = setup();
+  assert.deepEqual(lib.makeupList().layers, [
+    { object_path: '面部面具/清冷_美妆/眼线', kind: 'face_mask', enabled: true, region: 1, blend: 1, female: 0.7, male: 0, external: [1, 1], texture: '/p/Assets/liner.png' },
+    { object_path: '面部面具/清冷_美妆/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 1, female: 0.4, male: 0.05, external: [0.5, 1], texture: '/p/Assets/blush.png' },
+    { object_path: '面部面具/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 0, female: 1, male: 0, external: [1, 1], texture: null },
+    { object_path: '面部面具/清冷_美妆/美瞳', kind: 'eye_color', enabled: true, intensity: 0.8 },
+    { object_path: '滤镜/冷白皮', kind: 'filter', enabled: true, intensity: 1 },
+  ]);
+});
+
+test('makeup_set changes strengths, blend and texture in one undo step and returns the layers before and after', async () => {
+  const { lib, calls, editors } = setup();
+  const out = await lib.makeupSet({
+    label: 'try',
+    changes: [
+      { object_path: '眼线', female: 0.2, blend: 0, texture: '/p/Assets/new.png', texture_size: 1024 },
+      { object_path: '美瞳', intensity: 0 },
+      { object_path: '滤镜/冷白皮', intensity: 0.3 },
+    ],
+  });
+  assert.deepEqual(calls.undo, ['start:try', 'end']);
+  assert.deepEqual(calls.imports, [['/p/Assets/new.png', 'undo:makeup_set:/p/Assets/new.png']]);
+  assert.deepEqual([out.before[0].female, out.before[0].texture, out.after[0].female, out.after[0].blend, out.after[0].texture], [0.7, '/p/Assets/liner.png', 0.2, 0, '/p/Assets/new.png']);
+  assert.deepEqual([out.after[1].intensity, out.after[2].intensity], [0, 0.3]);
+  assert.equal(editors[0].maleIntensity, 0);
+});
+
+test('makeup_set imports a texture outside Assets into the project, sets its size once, and reuses it for several layers', async () => {
+  const { lib, calls, items } = setup();
+  const out = await lib.makeupSet({ changes: [{ object_path: '清冷_美妆/腮红', texture: '/tmp/x.png', texture_size: 1024 }, { object_path: '面部面具/腮红', texture: '/tmp/x.png' }] });
+  assert.equal(calls.imports.length, 1);
+  assert.deepEqual(out.after.map((a) => a.texture), ['/p/Assets/Textures/x.png', '/p/Assets/Textures/x.png']);
+  assert.equal(items.find((i) => i.assetPath === '/p/Assets/Textures/x.png').compressMaxResolution, 1024);
+});
+
+test('makeup_set refuses ambiguous paths, keys a layer does not take, and writes that did not land', async () => {
+  const { lib, editors } = setup();
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '腮红', female: 0 }] }), /AMBIGUOUS_OBJECT_PATH: 腮红 matches/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', intensity: 0 }] }), /NOT_SETTABLE: 面部面具\/清冷_美妆\/眼线 is a face_mask; it takes female, male, blend, texture, not intensity/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '冷白皮', female: 0 }] }), /NOT_SETTABLE: .* is a filter/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线' }] }), /NOTHING_TO_SET/);
+  await assert.rejects(lib.makeupSet({ changes: [] }), /INVALID_CHANGES/);
+  editors[0].ignore = true;
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', female: 0.1 }] }), /WRITE_NOT_APPLIED: 面部面具\/清冷_美妆\/眼线: female=0.7/);
+});
+
+test('makeup_add_layer adds the region menu item and returns the FaceMask it created', async () => {
+  const { lib, editors } = setup();
+  const added = [];
+  lib.menuAdd = async ({ menu_id }) => {
+    added.push(menu_id);
+    editors.push(new FaceMaskComponentEditor({ name: '眼部妆容', parent: { name: '面部面具', parent: null } }, { regionType: 1, blendMode: 1, femaleIntensity: 0.8, maleIntensity: 0, makeupTexture: null }));
+    return { added_objects: [{ name: '眼部妆容', object_path: '面部面具/眼部妆容' }] };
+  };
+  assert.deepEqual(await lib.makeupAddLayer({ region: 'eye' }), { object_path: '面部面具/眼部妆容', added_objects: [{ name: '眼部妆容', object_path: '面部面具/眼部妆容' }] });
+  assert.deepEqual(added, ['FaceEye']);
+  await assert.rejects(lib.makeupAddLayer({ region: 'cheek' }), /INVALID_REGION/);
+  lib.menuAdd = async () => ({ added_objects: [{ name: '空', object_path: '空' }] });
+  await assert.rejects(lib.makeupAddLayer({ region: 'face' }), /ADD_LAYER_NO_FACE_MASK: FaceMask added 空/);
+});
+
+test('preview_hold pauses and plays the preview; preview_fresh waits for new frames and says when none come', async () => {
+  const { lib, calls, bus } = setup();
+  assert.deepEqual(lib.previewHold({ hold: true }), { held: true });
+  assert.deepEqual(lib.previewHold({ hold: false }), { held: false });
+  assert.deepEqual(calls.paused, ['pause', 'resume']);
+  const waiting = lib.previewFresh({ frames: 2, timeout_ms: 1000 });
+  bus.emit('PreviewTextureUpdated');
+  bus.emit('PreviewTextureUpdated');
+  assert.deepEqual(await waiting, { frames: 2 });
+  assert.equal(bus.listenerCount('PreviewTextureUpdated'), 0);
+  await assert.rejects(lib.previewFresh({ frames: 2, timeout_ms: 30 }), /NO_FRESH_PREVIEW_FRAME: the preview drew 0 of 2 frames within 30 ms/);
+  assert.equal(bus.listenerCount('PreviewTextureUpdated'), 0);
+});
+
+test('makeup calls refuse to run when the editor lacks what they need', async () => {
+  const { lib, modules } = setup();
+  delete modules[M.preview];
+  assert.throws(() => lib.makeupList(), /INCOMPATIBLE_EDITOR: missing .*PreviewManager/);
+});
