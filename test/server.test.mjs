@@ -21,6 +21,10 @@ const OWN = [
   'ai3d_tasks',
   'ai_combine_apply',
   'ai_combine_new',
+  'ar_video_cancel',
+  'ar_video_import',
+  'ar_video_submit',
+  'ar_video_tasks',
   'effect_check',
   'ext_status',
   'face_warp_list',
@@ -462,4 +466,34 @@ test('ai3d tools route account calls to any window and keep the found subject fo
   const tooMany = await call('ai3d_tasks', { kind: 'image', count: 21 });
   assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): count/);
   assert.equal(seen.length, 6);
+});
+
+test('ar_video tools go to the target project window, where the task is composed', async () => {
+  const seen = [];
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 30 }, { pid: 20 }],
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { ok: method }),
+  });
+  const call = async (name, args) => client.callTool({ name, arguments: { project_path: '/proj/B', ...args } });
+  const submit = { subject: '/a/cat.png', mode: 'motion', prompt: '扭屁股', reference_images: ['/a/hat.png'], shadow: false, duration_s: 10 };
+  await call('ar_video_submit', submit);
+  assert.deepEqual(seen[0], { method: 'ar_video_submit', params: submit, opts: { projectPath: '/proj/B', timeoutMs: 1200000 } });
+  await call('ar_video_tasks', { count: 5 });
+  assert.deepEqual(seen[1], { method: 'ar_video_tasks', params: { offset: undefined, count: 5 }, opts: { projectPath: '/proj/B' } });
+  await call('ar_video_tasks', { task_id: 'wf1', wait_s: 300 });
+  assert.deepEqual(seen[2], { method: 'ar_video_task', params: { task_id: 'wf1', wait_s: 300 }, opts: { projectPath: '/proj/B', timeoutMs: 420000 } });
+  await call('ar_video_import', { task_id: 'wf1' });
+  assert.deepEqual(seen[3], { method: 'ar_video_import', params: { task_id: 'wf1' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
+  await call('ar_video_cancel', { task_id: 'wf1' });
+  assert.deepEqual(seen[4], { method: 'ar_video_cancel', params: { task_id: 'wf1' }, opts: { projectPath: '/proj/B', timeoutMs: undefined } });
+
+  for (const [args, re] of [
+    [{ task_id: 'wf1', wait_s: 601 }, /INVALID_ARGUMENTS\(ar_video_tasks\): wait_s/],
+    [{ count: 21 }, /INVALID_ARGUMENTS\(ar_video_tasks\): count/],
+    [{ wait_s: 10 }, /wait_s only applies together with task_id/],
+  ]) assert.match((await call('ar_video_tasks', args)).content[0].text, re);
+  assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'dance' })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): mode/);
+  assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'motion', duration_s: 9.5 })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): duration_s/);
+  assert.equal(seen.length, 5);
 });

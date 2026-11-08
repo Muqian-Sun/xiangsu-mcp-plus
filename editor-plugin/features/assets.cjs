@@ -181,6 +181,31 @@ const REQUIRED = {
     [M.orionui, 'I18n.t'],
     [M.globalConfig, 'url'],
   ],
+  arVideo: [
+    [M.assetsLibrary, 'AssetsLibrary.getInstance'],
+    [M.arVideoManager, 'AR_VIDEO_MAX_CONCURRENT_TASKS'],
+    [M.arVideoManager, 'AR_VIDEO_CONCURRENT_LIMIT_MESSAGE'],
+    ...['refreshRecords', 'loadMoreRecords', 'captureInput', 'discardAudit', 'getAuditState', 'generate', 'closeEditor', 'clearError', 'cancelTask', 'updateTask'].map((p) => [M.arVideoManager, `default.prototype.${p}`]),
+    ...[
+      'AR_VIDEO_MIN_DURATION_SECONDS',
+      'AR_VIDEO_DEFAULT_DURATION_SECONDS',
+      'AR_VIDEO_MAX_IMAGE_COUNT',
+      'AR_VIDEO_MAX_VIDEO_COUNT',
+      'AR_VIDEO_MAX_PROMPT_LENGTH',
+      'AR_VIDEO_VIDEO_AUDIT_TIMEOUT_MS',
+      'getARVideoMaxOutputDurationSeconds',
+      'getARVideoMaxTotalVideoDurationMs',
+      'getARVideoWithShadowDefault',
+      'classifyARVideoMedia',
+      'validateARVideoInputCounts',
+    ].map((p) => [M.arVideoContract, p]),
+    [M.arVideoAudit, 'ARVideoAuditStatus.Rejected'],
+    [M.arVideoAudit, 'isAuditPending'],
+    [M.arVideoAnalytics, 'arVideoInputFields'],
+    [M.arVideoProject, 'importARVideosToCurrentProject'],
+    [M.nav, 'isARVideoEntryEnabled'],
+    [M.ffmpeg, 'ffmpegExec'],
+  ],
 };
 
 // Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)

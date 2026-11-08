@@ -25,12 +25,12 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具。';
+  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具。';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -64,6 +64,13 @@ const AI3D_MAX_WAIT_S = 600;
 const AI3D_SUBMIT_TIMEOUT_MS = 300000;
 // Picked, not measured: the result download (30 s in the editor) plus the import.
 const AI3D_IMPORT_TIMEOUT_MS = 180000;
+// Derived: the editor's video audit (900 s at most) plus the plugin's 240 s wait for the cloud to accept
+// the task, with a minute to spare.
+const AR_VIDEO_SUBMIT_TIMEOUT_MS = 1200000;
+// Picked: covers the one 10 s generation measured (6 min from submit to the composed result, 2026-11-08).
+const AR_VIDEO_MAX_WAIT_S = 600;
+// Picked, not measured: importing the video and audio resources and building the AR plane.
+const AR_VIDEO_IMPORT_TIMEOUT_MS = 180000;
 // Picked, not measured: as many images per image_view call as the old preview tools showed.
 const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
@@ -1076,6 +1083,53 @@ export function createServer(deps = {}) {
         const { project_path, instance_id, task_id } = a;
         return text(await d.callPlugin('ai3d_cancel', { task_id }, await homeWindow({ project_path, instance_id })));
       },
+    },
+    {
+      name: 'ar_video_submit',
+      description:
+        '素材库「AI 素材 › AR 视频」（AR 视频贴片）：提交一次生成，等同面板上的「立即生成」，云端（Seedance）接受任务后返回 task_id。编辑器没有单独的模式开关，由输入决定：mode=direct 只抠像、不改动作，主体须是视频，不能带 prompt 和参考素材；mode=motion 由 prompt（必填）描述新动作或样式，主体可以是图片或视频，可加参考图（如给主体加道具）和一段参考动作视频。输入先交给编辑器自己的素材检查和转换（与面板上传素材相同：只认 JPG / JPEG / PNG / MP4 / MOV，包括主体最多 9 张图、3 段视频，视频每段至少 2 秒、合计不超过编辑器开关给的上限，主体视频原长须小于 60 秒；不合规格的图片自动缩放压缩、视频自动转码裁剪，转不了时报 AR_VIDEO_INPUT_INVALID 并带编辑器原话），视频还要先过编辑器的内容审核（最长 15 分钟）。动作时长 duration_s 默认 10 秒，最短 4 秒，上限由编辑器开关决定（2026-11-08 为 15 秒，以 ar_video_tasks 返回的 limits 为准）。shadow 是「添加投影」，省略时用编辑器默认（开关 dyeh_enable_ar_video_shadow，2026-11-08 为开）；开着时结果是带投影的幕底视频。同时最多 10 个任务在跑。会占用账号的 AI 模型使用次数（按特效师等级给），编辑器里查不到剩余次数和单次扣多少，用完时报「模型使用次数达到上限」。任务在哪个工程窗口提交，就在那个窗口里下载并合成结果，之后的 ar_video_tasks / ar_video_import 用同一个窗口最快；实测一段 10 秒的图片生成动作从提交到合成完约 6 分钟。',
+      shape: {
+        ...target,
+        subject: z.string().min(1).describe('主体图片或视频的绝对路径（面板文案「上传图片或视频」）。'),
+        mode: z.enum(AR_VIDEO_MODES).describe('direct：主体视频直接生成 AR 视频贴片，只抠像不改动作；motion：按 prompt 和参考素材生成新动作。'),
+        prompt: z.string().optional().describe('动作描述（最多 2000 字），mode=motion 时必填，mode=direct 时不能给。任务文档的建议：写上「生成高清视频」这类话会出高清。'),
+        reference_images: z.array(z.string().min(1)).min(1).optional().describe('参考图的绝对路径（JPG / JPEG / PNG），如给主体加道具；仅 mode=motion。'),
+        reference_video: z.string().min(1).optional().describe('参考动作视频的绝对路径（MP4 / MOV），动作迁移用；仅 mode=motion。'),
+        shadow: z.boolean().optional().describe('「添加投影」，省略时用编辑器默认；前置自拍类效果一般关掉。'),
+        duration_s: z.number().int().positive().optional().describe('输出动作时长（秒），默认 10，范围见 ar_video_tasks 返回的 limits。'),
+      },
+      run: plugin('ar_video_submit', AR_VIDEO_SUBMIT_TIMEOUT_MS),
+    },
+    {
+      name: 'ar_video_tasks',
+      description: `素材库「AR 视频」的生成任务（当前账号，与面板右侧的生成记录同一份）。不传 task_id 时按 offset / count 分页列出，最新的在前，并带上当前的输入限制 limits；传 task_id 时只查这一个，再给 wait_s 就一直等到它合成完、失败或时间到（最多 ${AR_VIDEO_MAX_WAIT_S} 秒）。status：running 云端生成中、restoring 云端已完成，正在本机下载并合成、succeeded 可以导入、failed 失败（failure 里是编辑器给的原因和错误码）、unconfirmed 暂时查不到云端状态。每条带 name（工具栏后台任务里显示的名字）、mode、主体类型、参考素材类型、prompt、时长、投影；succeeded 的另有实际时长 seconds、尺寸、是否幕底 green_screen、原声 audio、本机的预览视频 preview_video_file（抠像后叠在 #1b1b1b 背景上）、要导入的视频 video_file，以及一张横排 6 帧的预览图 preview_image_file（交给 image_view 看动作，不用打开视频）。在别的窗口提交的任务，这个窗口第一次看到时要自己下载并合成，会先显示 restoring。`,
+      shape: {
+        ...target,
+        task_id: z.string().min(1).optional().describe('只查这个任务（ar_video_submit 返回的 task_id）。'),
+        wait_s: z.number().int().min(0).max(AR_VIDEO_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(AR_VIDEO_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AR_VIDEO_HISTORY_PAGE}。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        if (task_id !== undefined) return text(await d.callPlugin('ar_video_task', { task_id, wait_s }, { projectPath, timeoutMs: wait_s * 1000 + 120000 }));
+        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        return text(await d.callPlugin('ar_video_tasks', { offset, count }, { projectPath }));
+      },
+    },
+    {
+      name: 'ar_video_import',
+      description:
+        '把一个 succeeded 的 AR 视频任务导入目标工程并放进场景，等同面板上勾选它后点「导入素材」（只导这一个，面板里其它勾选的结果不受影响）：视频（和原声）导入为工程资源，场景里建 AR 平面上的视频贴片对象。返回 added_objects（新对象名和 object_path）、package_folders 和 plane_guid（编辑器选中的平面对象）。之后用 scene_tree / inspect_many 看建了哪些对象和组件，capture_preview 看位置和大小，save_project。',
+      shape: { ...target, task_id: z.string().min(1).describe('ar_video_submit / ar_video_tasks 返回的 task_id（须 status=succeeded）。') },
+      run: plugin('ar_video_import', AR_VIDEO_IMPORT_TIMEOUT_MS),
+    },
+    {
+      name: 'ar_video_cancel',
+      description: '取消一个还在 running（或 unconfirmed）的 AR 视频生成任务，等同面板里的「取消生成」。取消确认后任务从记录里消失（cancelled=true）；取消前它已经结束时返回 cancelled=false 和结束时的 status。',
+      shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
+      run: plugin('ar_video_cancel'),
     },
     {
       name: 'face_warp_list',

@@ -26,10 +26,11 @@ const preview = require('./features/preview.cjs');
 const search = require('./features/search.cjs');
 const aicombine = require('./features/aicombine.cjs');
 const ai3d = require('./features/ai3d.cjs');
+const arvideo = require('./features/arvideo.cjs');
 const dev = require('./features/dev.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, aicombine, ai3d, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, aicombine, ai3d, arvideo, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -57,4 +58,6 @@ module.exports = {
   AI3D_MAX_RUNNING: ai3d.MAX_RUNNING,
   AI3D_PRESET_MODELS: ai3d.PRESET_MODELS,
   AI3D_HISTORY_PAGE: ai3d.HISTORY_PAGE,
+  AR_VIDEO_MODES: arvideo.MODES,
+  AR_VIDEO_HISTORY_PAGE: arvideo.HISTORY_PAGE,
 };
