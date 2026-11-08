@@ -101,7 +101,7 @@ const methods = {
     return { items: raw.map((t) => slimWork(t, transform)), raw, next, has_more: !!next };
   },
 
-  async worksList({ category_id, cursor, count = 30, sort } = {}) {
+  async worksList({ category_id, cursor, count = 20, sort } = {}) {
     const ranker = sortValue(sort);
     const state = decodeCursor(cursor);
     const nav = await this.worksNav();
@@ -159,7 +159,7 @@ const methods = {
   // Matched on the project name, like the homepage search box's default 特效名称 option. Without a
   // category every category is searched; works are merged in the order 推荐 returns them, then the
   // ones only other categories have, category by category (sort applies within each category).
-  async worksSearch({ query, queries, category_id, offset = 0, count = 30, sort } = {}) {
+  async worksSearch({ query, queries, category_id, offset = 0, count = 20, sort } = {}) {
     if (query !== undefined && queries !== undefined) throw Error('INVALID_QUERY: pass query or queries, not both');
     const list = queries !== undefined ? queries : query !== undefined ? [query] : [];
     if (!Array.isArray(list) || !list.length || list.length > MAX_TERMS) throw Error(`INVALID_QUERY: pass query, or 1-${MAX_TERMS} queries`);

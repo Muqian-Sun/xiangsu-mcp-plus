@@ -135,7 +135,7 @@ const methods = {
     return { hits, expanded, related };
   },
 
-  async search({ query, queries, panel_key, offset = 0, count = 50 }) {
+  async search({ query, queries, panel_key, offset = 0, count = 20 }) {
     this.ensureCompatible();
     const list = queries !== undefined ? queries : query !== undefined ? [query] : [];
     if (query !== undefined && queries !== undefined) throw Error('INVALID_QUERY: pass query or queries, not both');

@@ -239,7 +239,7 @@ class Library {
     return { panels: this.navEntries().filter((e) => e.applicable).map(({ applicable, ...e }) => e) };
   }
 
-  async list({ panel_key, category_id, cursor, count = 30 }) {
+  async list({ panel_key, category_id, cursor, count = 20 }) {
     this.ensureCompatible();
     const panels = this.nav().panels;
     const panel = panels.find((p) => p.panel_key === panel_key);

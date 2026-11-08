@@ -205,7 +205,7 @@ test('square list asks its category with the card ranker, fills in the category 
   const { lib, calls } = setup();
   const out = await lib.list({ panel_key: 'aigc_material' });
   assert.deepEqual(calls.categoryParams, { cursor: 0, count: 50, panelKey: 'aigc_material' });
-  assert.deepEqual(calls.list[0], { panelKey: 'aigc_material', count: 30, cursor: 0, categoryIds: '["45004"]', ranker: 5 });
+  assert.deepEqual(calls.list[0], { panelKey: 'aigc_material', count: 20, cursor: 0, categoryIds: '["45004"]', ranker: 5 });
   assert.deepEqual(out.categories, [{ id: '45004', name: '图片' }, { id: '45003', name: '妆容' }]);
   assert.deepEqual(out.items.map((i) => [i.template_id, i.kind, i.cover_url]), [['901', 'ai_image', 'https://c/901.png']]);
   assert.equal(out.unsupported, 1);
@@ -296,9 +296,9 @@ test('square apply refuses what the card cannot do and fails when nothing arrive
 test('library_images resolves the result images of an AI image card', async () => {
   const { lib, calls } = setup();
   assert.deepEqual(await lib.libraryImages({ item: CARDS.aiImage }), [
-    { image_index: 0, url: 'https://img/u0.png' },
-    { image_index: 1, url: 'https://img/u1.png' },
-    { image_index: 2, url: 'https://img/u2.png' },
+    { image_index: 0, image_url: 'https://img/u0.png' },
+    { image_index: 1, image_url: 'https://img/u1.png' },
+    { image_index: 2, image_url: 'https://img/u2.png' },
   ]);
   assert.deepEqual(calls.urls, [{ uriList: ['u0', 'u1', 'u2'] }]);
   await assert.rejects(lib.libraryImages({ item: CARDS.aiMakeup }), /NOT_AN_AI_IMAGE/);

@@ -174,17 +174,70 @@ function slimTaskEffect(e) {
     track: e.sub_track_name || null,
     shoots: str(e.shoot_num),
     views: str(e.vv_num),
-    peak_pub: str(e.pub_peak_num),
-    award: e.award_amount || null,
+    publish_peak: str(e.pub_peak_num),
+    award_amount: e.award_amount || null,
     icon_url: first(e.icon && e.icon.url_list),
   };
 }
 
+// Task page text marks a link as $A$$HREF$url$HREF$$TEXT$label$TEXT$$A$.
+const TASK_LINK = /\$A\$\$HREF\$(.*?)\$HREF\$\$TEXT\$(.*?)\$TEXT\$\$A\$/g;
+// The lists a task content block holds its entries in (参与要求, 奖项详情, 近期热门, 任务说明 and the like).
+const TASK_LISTS = ['demandList', 'awardList', 'inspirationList', 'baseList'];
+
+function readTaskText(src, links) {
+  return String(src || '')
+    .replace(TASK_LINK, (_, url, label) => (links.push({ text: label, url }), label))
+    .trim();
+}
+
+// mediaType 1 marks mp4 videos; pictures come with 0 or none. Empty and blob: addresses do not show on
+// the task page either, so they are only counted. Award amounts pass as the page sends them: no page
+// code was found to tell their unit.
+function taskItem(it) {
+  const links = [];
+  const out = {};
+  const title = readTaskText(it.tit, links);
+  const text = readTaskText(it.desc, links);
+  if (title) out.title = title;
+  if (text) out.text = text;
+  const urls = (it.source || []).map((s) => (s && typeof s.url === 'string' ? s.url : ''));
+  const media = urls.filter((u) => /^https?:\/\//.test(u));
+  if (media.length) out[it.mediaType === 1 ? 'videos' : 'images'] = media;
+  if (urls.length > media.length) out.unusable_media = urls.length - media.length;
+  if (it.money !== undefined) {
+    out.money = it.money;
+    out.money_mode = it.money_mode ?? null;
+    out.people = it.people_mode === 'infinite' ? 'unlimited' : (it.peope ?? null);
+  }
+  if (links.length) out.links = links;
+  return out;
+}
+
+// One content block of the task page, read into its entries and links. Fields this reader does not
+// know are kept as they came under `unread`, not dropped.
+function taskBlock(b) {
+  const out = { name: b.contentBlockName || '' };
+  const links = [];
+  const unread = {};
+  for (const [key, v] of Object.entries(b)) {
+    if (key === 'type' || key === 'contentBlockName') continue;
+    if (TASK_LISTS.includes(key)) out.items = (v || []).map(taskItem).filter((x) => Object.keys(x).length);
+    else if (key === 'link' && v && v.url) links.push({ text: v.desc || '', url: v.url });
+    else if (key === 'statement' && v && v.link && v.link.url) links.push({ text: b.contentBlockName || '', url: v.link.url });
+    else if (key === 'recommendProject') out.project_ids = ((v && v.ids) || []).map(String);
+    else unread[key] = v;
+  }
+  if (links.length) out.links = links;
+  if (Object.keys(unread).length) out.unread = unread;
+  return out;
+}
+
 function slimGrowthLevel(l) {
-  const level = { level: l.layer, name: l.layer_name, award: l.award || null, status: GROWTH_STATES[l.status] ?? l.status };
+  const level = { level: l.layer, name: l.layer_name, award_text: l.award || null, status: GROWTH_STATES[l.status] ?? l.status };
   if (l.sub_tasks) {
     level.goals = l.sub_tasks.flatMap((t) =>
-      (t.progresses || []).map((p) => ({ text: p.goal_text, current: p.curr_num, target: p.goal_num, reward: p.desc_text || null, status: GROWTH_STATES[t.status] ?? t.status })),
+      (t.progresses || []).map((p) => ({ text: p.goal_text, current: p.curr_num, target: p.goal_num, reward_text: p.desc_text || null, status: GROWTH_STATES[t.status] ?? t.status })),
     );
   }
   if (l.rights) level.rights = l.rights.flatMap((r) => (r.right_cards || []).map((c) => c.title));
@@ -216,8 +269,8 @@ function slimRankItem(e, rank) {
     icon_url: e.effect_icon || null,
     level: LEVEL_LABELS[e.effect_lv] ?? null,
     is_new: e.is_new_inc ?? null,
-    pub_peak: e.peak_pub_val ?? null,
-    pub_total: e.all_pub_val ?? null,
+    publish_peak: e.peak_pub_val ?? null,
+    publish_total: e.all_pub_val ?? null,
     follow_shoot: e.follow_shoot_pub_val ?? null,
     follow_shoot_30d: e.follow_shoot_pub_val_30d ?? null,
     follow_shoot_60d: e.follow_shoot_pub_val60d ?? null,
@@ -309,7 +362,7 @@ function slimArtwork(e) {
     can_delete: !!e.can_delete,
     can_appeal: !!e.can_appeal,
     appeal_types: (e.appeal_types || []).map((t) => t.appeal_type_text),
-    pub_count: e.pub_num ?? null,
+    publish_count: e.pub_num ?? null,
     icon_url: e.icon || null,
   };
 }
@@ -484,6 +537,7 @@ const methods = {
         request(this, 'GET_EFFECT_TASK', '/effectcam/v2/effect_task_detail', { query }),
         request(this, 'GET_EFFECT_TASK_CONTENT', '/effectcam/v2/effect_task_content', { query }),
       ]);
+      const modules = (c.modules || []).map((m) => JSON.parse(m.render_content));
       return {
         kind,
         title: d.title,
@@ -497,7 +551,8 @@ const methods = {
         finish_status: d.fin_status || null,
         level_task: !!d.is_level_task,
         my_effects: (d.task_effect_list || []).map(slimTaskEffect),
-        content: (c.modules || []).map((m) => JSON.parse(m.render_content)),
+        content: modules.map(taskBlock),
+        raw: { detail: d, content: modules },
       };
     }
     if (kind === 'growth') {
@@ -585,7 +640,8 @@ const methods = {
     };
   },
 
-  async rankHotspots({ count, topic_id } = {}) {
+  // The board is one short list (79 hotspots, measured), read whole and paged here.
+  async rankHotspots({ offset = 0, count = 20, topic_id } = {}) {
     if (topic_id !== undefined) {
       const id = requireId(topic_id, 'INVALID_TOPIC_ID');
       const d = await request(this, 'GET_HOTSPOT_INSPIRATIONS', '/cam_api/hotspot/v1/insp_tabs', { query: { topic_id: id } });
@@ -601,9 +657,9 @@ const methods = {
       }));
       return { topic_id: id, tabs };
     }
-    const d = await request(this, 'GET_HOTSPOTS', '/cam_api/hotspot/v1/rank', { query: { count } });
+    const d = await request(this, 'GET_HOTSPOTS', '/cam_api/hotspot/v1/rank');
     // Hotspots arrive ordered by heat; rank_num is not their position.
-    const items = (d.hotspots || []).map((h, i) => ({
+    const all = (d.hotspots || []).map((h, i) => ({
       rank: i + 1,
       topic_id: String(h.topic_id),
       title: h.title,
@@ -613,7 +669,8 @@ const methods = {
       inspirations_text: h.subtitle_text || null,
       cover_url: first(h.cover && h.cover.urlList),
     }));
-    return { rank_time: d.rank_time || null, subtitle: d.subtitle || null, items };
+    const next = offset + count;
+    return { rank_time: d.rank_time || null, subtitle: d.subtitle || null, total: all.length, items: all.slice(offset, next), next_offset: next, has_more: next < all.length };
   },
 
   async subjectPage(kind, cursor, count) {
@@ -655,8 +712,8 @@ const methods = {
       name: u.username,
       avatar_url: u.avatar || null,
       material_count: u.material_cnt ?? null,
-      follow_pub: u.display_follow_pub ?? null,
-      follow_pub_count: u.follow_pub_val ?? null,
+      follow_shoot: u.follow_pub_val ?? null,
+      follow_shoot_text: u.display_follow_pub ?? null,
       award_text: u.display_val || null,
       // fen: 300000 comes with 「预计奖3000元」
       award_yuan: u.award_num != null ? u.award_num / 100 : null,
@@ -675,7 +732,7 @@ const methods = {
       name: e.name,
       icon_url: e.icon || null,
       label: e.label || null,
-      pub_count: e.pub_val ?? null,
+      publish_count: e.pub_val ?? null,
       revenue_total: e.total_rev ?? null,
       reviewed_on: e.review_date || null,
       cover_url: e.cover_img || null,
