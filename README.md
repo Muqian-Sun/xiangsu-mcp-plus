@@ -90,6 +90,15 @@
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。
 - 做 AI 组合效果：`ai_combine_new` → 官方 `get_workflow_capabilities`（选生图基模）→ `apply_workflow_patch`（加生图节点、写 prompt、连「输入图 → 生图 → 效果组合」）→ 要看效果时官方 `generate_workflow`（扣额度）→ `ai_combine_apply` → `save_project`。别人的作品怎么搭的，用 `works_download` 下载「AI玩法」分类里的工程，看 `Assets/AI 组合效果/*.oAICombineTextureJSA` 里的 `workflow` 和 `Graph/graph.json` 里的 AI Graph。
 
+相近工具的分工（每个工具只做一件事，这些也写进了工具说明；和官方工具重叠的，在官方工具的说明末尾补了一句指向这里）：
+
+- 看场景：`scene_tree` 先摸清结构（紧凑文本，也能读下载的工程目录）→ `inspect_many` 一次看多个对象的参数；要完整 JSON 才用官方 `get_scene` / `inspect`。
+- 删对象：只删对象用官方 `edit_by_dsl`；要知道删完哪些资源没人用了、连带清理，用 `object_remove`（→ `resource_delete_unused`）。
+- 绑灵感：`inspiration_bind` 按 ID 写进工程，提交窗口自动带出；只在提交时选，给 `submit_prepare` 传 `inspiration`（在收藏的灵感和热点里按名称选）。
+- 绑任务：`task_bind` 重开窗口把任务写进工程；只在提交时选，给 `submit_prepare` 传 `task`，不用重开窗口。
+- 成长：`tasks_list` 的 `kind=growth` 是活动中心里一个个成长任务（参考工程、教程）；特效师等级和每级目标进度看 `growth_route`。
+- 素材库：知道要找什么用 `library_search`；按面板和子分类浏览用 `library_list`。
+
 几点约定：
 
 - `library_apply` / `library_images` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`；`works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。

@@ -401,10 +401,15 @@ test('the call log writes one line per call, with the error of a failed one', as
   assert.equal(lines[2].event, 'client_closed');
 });
 
-test('capture_preview is listed with a note on when its picture can be stale', async () => {
-  const official = fakeOfficial({ tools: [{ name: 'capture_preview', description: '截图', inputSchema: { type: 'object' } }, { name: 'get_scene', description: 'official', inputSchema: { type: 'object' } }] });
+test('official tools that overlap ours are listed with a note naming ours; the rest stay unchanged', async () => {
+  const names = ['capture_preview', 'get_scene', 'inspect', 'edit_by_dsl', 'list_resources'];
+  const official = fakeOfficial({ tools: names.map((name) => ({ name, description: `官方${name}`, inputSchema: { type: 'object' } })) });
   const { client } = await connect({ official, callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
-  assert.match(tools.find((t) => t.name === 'capture_preview').description, /^截图[\s\S]*preview_frames/);
-  assert.equal(tools.find((t) => t.name === 'get_scene').description, 'official');
+  const desc = (name) => tools.find((t) => t.name === name).description;
+  assert.match(desc('capture_preview'), /^官方capture_preview\n\n（xiangsu-mcp-plus）.*preview_frames/);
+  assert.match(desc('get_scene'), /^官方get_scene\n\n（xiangsu-mcp-plus）.*scene_tree.*inspect_many/);
+  assert.match(desc('inspect'), /（xiangsu-mcp-plus）.*inspect_many/);
+  assert.match(desc('edit_by_dsl'), /（xiangsu-mcp-plus）.*object_remove/);
+  assert.equal(desc('list_resources'), '官方list_resources');
 });

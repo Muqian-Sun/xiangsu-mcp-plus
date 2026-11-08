@@ -62,8 +62,14 @@ const IMAGE_VIEW_BYTES = 8 * 1024 * 1024;
 // Cursor ends a tool call that sends nothing for a while ("MCP tool call timed out (idle)", seen on a
 // submit_prepare that waited for the page's checks). Picked: well inside the 25 s calls that went through.
 const PROGRESS_MS = 5000;
-const CAPTURE_PREVIEW_NOTE =
-  '\n\n（xiangsu-mcp-plus）窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。';
+// Appended to official tools whose work overlaps ours, saying which one to reach for.
+const OFFICIAL_NOTES = {
+  capture_preview:
+    '窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。',
+  get_scene: '先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。',
+  inspect: '一次看多个对象、按组件类型或属性名过滤、只留关键参数时用 inspect_many（逐个调用本工具并整理结果）。',
+  edit_by_dsl: '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。',
+};
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -304,7 +310,7 @@ export function createServer(deps = {}) {
     {
       name: 'library_list',
       refs: true,
-      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、封面 cover_ref 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_ref 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
+      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、封面 cover_ref 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_ref 交给 image_view 看；知道要找什么时用 library_search 按关键词搜，本工具适合按面板和子分类浏览。拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
       shape: {
         ...target,
         panel_key: z.string().optional().describe('面板，取不传 panel_key 时返回的 panels 里的 panel_key；省略时只返回面板清单。'),
@@ -569,7 +575,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_bind',
-      description: '把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），提交时会带上它。之后 save_project 落盘。',
+      description:
+        '按 inspiration_id 把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），之后 save_project 落盘，打开提交窗口时会自动带出。只在提交时选灵感的话，也可以直接给 submit_prepare 传 inspiration：它在提交窗口的下拉里按名称选，只列当前账号收藏的灵感和热点。',
       shape: { ...target, inspiration_id: z.string().min(1).describe('要绑定的 inspiration_id。') },
       run: plugin('inspiration_bind'),
     },
@@ -577,7 +584,7 @@ export function createServer(deps = {}) {
       name: 'tasks_list',
       refs: true,
       description:
-        '按 offset / count 分页列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
+        '按 offset / count 分页列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为活动中心里的成长任务：奖励金额、参考工程（特效师等级、每级目标和进度在 growth_route）。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
       shape: {
         ...target,
         kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。'),
@@ -622,7 +629,7 @@ export function createServer(deps = {}) {
     {
       name: 'task_bind',
       description:
-        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。task_id 须来自本会话的 tasks_list。',
+        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。task_id 须来自本会话的 tasks_list。只在提交时选任务的话，直接给 submit_prepare 传 task（已领取任务的标题），不用重开窗口。',
       shape: {
         path: z.string().min(1).describe('工程文件夹的绝对路径。'),
         task_id: z.string().min(1).describe('tasks_list 返回的 task_id（须 bindable=true）。'),
@@ -639,7 +646,7 @@ export function createServer(deps = {}) {
     {
       name: 'growth_route',
       description:
-        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。',
+        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。活动中心里一个个带参考工程和教程的成长任务用 tasks_list 的 kind=growth。',
       shape: { ...target },
       run: community('growth_route'),
     },
@@ -760,7 +767,7 @@ export function createServer(deps = {}) {
     {
       name: 'scene_tree',
       description:
-        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
+        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比官方 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数；要渲染组和对象的完整 JSON 用 get_scene。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
@@ -788,7 +795,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guids 用 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guids 用 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
@@ -984,7 +991,7 @@ export function createServer(deps = {}) {
     {
       name: 'object_remove',
       description:
-        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 delete_render_group）。',
+        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 delete_render_group）。只删对象、不关心资源时官方 edit_by_dsl 也能删；要知道删完哪些资源没人用了，用本工具。',
       shape: {
         ...target,
         object_path: z.string().min(1).describe('对象的层级路径，如「面部拉伸/小屁桃_美型」，或能唯一定位的末尾几段。'),
@@ -1038,7 +1045,7 @@ export function createServer(deps = {}) {
     const mine = [...own.values()].map((t) => ({ name: t.name, description: t.refs ? `${t.description}${REF_NOTE}` : t.description, inputSchema: z.toJSONSchema(t.schema) }));
     const official = (await d.official.listTools())
       .filter((t) => !own.has(t.name))
-      .map((t) => (t.name === 'capture_preview' ? { ...t, description: `${t.description || ''}${CAPTURE_PREVIEW_NOTE}` } : t));
+      .map((t) => (Object.prototype.hasOwnProperty.call(OFFICIAL_NOTES, t.name) ? { ...t, description: `${t.description || ''}\n\n（xiangsu-mcp-plus）${OFFICIAL_NOTES[t.name]}` } : t));
     return { tools: [...mine, ...official] };
   });
 
