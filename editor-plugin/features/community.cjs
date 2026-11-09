@@ -43,6 +43,11 @@ const MOBILE_APP_VERSION = '17.7.0';
 // 成长之路 states, read off a live answer: the finished goal (1/1) was 1, the current level and its open goals
 // 2, every later level 3.
 const GROWTH_STATES = { 1: 'done', 2: 'in_progress', 3: 'locked' };
+// 我的作品 rows of a task page, read off live answers against the mobile app's tags (2026-11-09): task_status
+// and is_fit_theme came back equal on every effect; 1 shows no tag (effects still in review are 1 too), 2
+// shows 主题不符合 and 任务未完成, 3 shows 任务已完成.
+const TASK_EFFECT_STATES = { 1: 'pending', 2: 'unfinished', 3: 'done' };
+const OFF_THEME = 2;
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -170,7 +175,8 @@ function slimTaskEffect(e) {
     type: e.type_desc || null,
     status: e.effect_status_desc || null,
     status_code: e.effect_status ?? null,
-    fits_theme: e.is_fit_theme === 1,
+    task_state: TASK_EFFECT_STATES[e.task_status] ?? e.task_status ?? null,
+    off_theme: e.is_fit_theme === OFF_THEME,
     track: e.sub_track_name || null,
     shoots: str(e.shoot_num),
     views: str(e.vv_num),
