@@ -59,6 +59,8 @@ const MESSAGE_GROUPS = { all: '0', service: '1', official: '2' };
 const MESSAGE_GROUP_NAMES = { 1: '服务', 2: '官方' };
 // Picked: 50 came back whole (2026-11-09); more was not tried.
 const MESSAGE_MAX = 50;
+// 实时热点 list versions are Beijing time: the 16:25 version came back at 16:40 local (2026-11-09).
+const HOT_LIST_TZ = '+08:00';
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -426,6 +428,14 @@ function messageEffectId(page) {
     return null;
   }
 }
+
+function hotListTime(v) {
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(String(v || ''));
+  return m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${HOT_LIST_TZ}`).toISOString() : null;
+}
+
+// One heat reading of a hotspot: by day (date) or by hour (date with the hour).
+const heatPoint = (p) => ({ at: p.date, heat: p.h_v === undefined || p.h_v === null || p.h_v === '' ? null : Number(p.h_v), heat_text: p.h_v_text ?? null });
 
 function slimMessage(m) {
   return {
@@ -1004,6 +1014,53 @@ const methods = {
     return { group, items, next_cursor: next, has_more: next !== null };
   },
 
+  // The mobile app's 实时热点 list: 抖音's hot topics with their category and heat. Each entry's t and v
+  // go back with its detail and videos requests, as the 热点详情 page sends them.
+  async douyinHotList() {
+    const d = (await request(this, 'GET_REAL_TIME_HOTS', '/effectcam/v1/real_time_hots')) || {};
+    const list = d.ls || [];
+    return {
+      updated_at: hotListTime(d.v),
+      items: list.map((h) => ({ hot_id: String(h.id), rank: h.r ?? null, name: h.n || '', categories: h.cs || [], heat_text: h.h_v || null })),
+      raw: list.map((h) => ({ t: h.t, v: h.v })),
+    };
+  },
+
+  // The 热点详情 page: when the topic got on the list, its heat by day and by hour, and how many effects it has.
+  async douyinHotDetail({ hot_id, t, v } = {}) {
+    const id = requireId(hot_id, 'INVALID_HOT_ID');
+    const d = (await request(this, 'GET_HOT_DETAIL', '/effectcam/v1/hot_detail', { query: { id, t, v, d: '' } })) || {};
+    const { id: _id, n, o_at, tag_name, b_e_text, b_s_text, d_ts, h_ts, ...unread } = d;
+    return {
+      hot_id: id,
+      name: n || '',
+      category: tag_name || null,
+      listed_at_text: o_at || null,
+      effects_text: b_e_text || null,
+      status_text: b_s_text || null,
+      days: (d_ts || []).map(heatPoint),
+      hours: (h_ts || []).map(heatPoint),
+      unread,
+    };
+  },
+
+  // The 热点详情 page's videos of the topic.
+  async douyinHotVideos({ hot_id, t, v } = {}) {
+    const id = requireId(hot_id, 'INVALID_HOT_ID');
+    const list = (await request(this, 'GET_HOT_VIDEOS', '/effectcam/v1/hot_detail_videos', { query: { id, t, v, d: '' } })) || [];
+    return {
+      hot_id: id,
+      items: list.map((x) => ({
+        video_id: str(x.id),
+        video_url: x.url || null,
+        cover_url: x.icon || null,
+        likes: x.digg_v ?? null,
+        likes_text: x.digg || null,
+        author: x.author ? { id: str(x.author.id), name: x.author.name || '', avatar_url: x.author.avatar || null } : null,
+      })),
+    };
+  },
+
   // Every received effect task's 我的作品 rows in one list, as task_detail reads them one task at a time.
   async myTaskStatus() {
     const d = await request(this, 'GET_EFFECT_TASKS', this.mod(M.urls).DomainPath.kTaskListAPI);
@@ -1041,6 +1098,9 @@ const METHODS = {
   my_revenue: 'myRevenue',
   messages_list: 'messagesList',
   my_task_status: 'myTaskStatus',
+  douyin_hot_list: 'douyinHotList',
+  douyin_hot_detail: 'douyinHotDetail',
+  douyin_hot_videos: 'douyinHotVideos',
 };
 
 module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX };

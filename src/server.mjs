@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
+import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
@@ -241,6 +242,7 @@ export function createServer(deps = {}) {
     listInstances,
     fetchImage,
     readImageFile,
+    fetchJson,
     openWithApp,
     prepareIcon,
     cropImage,
@@ -275,6 +277,8 @@ export function createServer(deps = {}) {
   const seenWorks = new Seen('UNKNOWN_WORK', 'works_list, works_search or works_by_effect');
   const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
   const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
+  // 实时热点 entries carry t and v that their detail and video requests must send back.
+  const seenHots = new Seen('UNKNOWN_HOT', 'douyin_hot_list', 'hot_id');
   // Subjects found by ai3d_gs_segment, kept here so ai3d_gs_submit only needs the segment task id.
   const segments = new Map();
 
@@ -852,7 +856,7 @@ export function createServer(deps = {}) {
     {
       name: 'rank_hotspots',
       refs: true,
-      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_ref，交给 image_view 看）。',
+      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_ref，交给 image_view 看）。抖音全站的实时热点榜见 douyin_hot_list。',
       shape: {
         ...target,
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
@@ -860,6 +864,56 @@ export function createServer(deps = {}) {
         topic_id: z.string().min(1).optional().describe('只看这个热点下的灵感（rank_hotspots 返回的 topic_id）。'),
       },
       run: community('rank_hotspots'),
+    },
+    {
+      name: 'douyin_hot_list',
+      description:
+        '抖音实时热点榜（像塑移动版「实时热点」同一接口，约 5 分钟一版）：前 20 条的 hot_id、名次、名称、分类 categories（娱乐、站内玩法、话题互动、二次元等；「站内玩法」多是正在火的梗、手势舞和跟拍玩法）、热度文字。榜单版本时间 updated_at。看一个热点的热度走势和站内已有特效数用 douyin_hot_detail，看它的热门视频用 douyin_hot_videos。像塑官方挑过、适合做特效的话题见 rank_hotspots。',
+      shape: { ...target },
+      run: async ({ project_path, instance_id }) => text(seenHots.keep(await d.callPlugin('douyin_hot_list', {}, await homeWindow({ project_path, instance_id })))),
+    },
+    {
+      name: 'douyin_hot_detail',
+      description:
+        '一个抖音实时热点的详情（像塑移动版「热点详情」页同一接口）：名称、分类、上榜时间 listed_at_text、站内已有的特效数 effects_text（如「上线特效0个，等级特效0个」，0 说明还没人做）、近 7 天每天的热度 days 和今天每小时的热度 hours（heat 数值、heat_text 页面文字）。hot_id 须来自本会话的 douyin_hot_list。服务端偶尔答「网络开小差了」，隔几秒再调。',
+      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
+      run: async ({ project_path, instance_id, hot_id }) => {
+        const { raw } = seenHots.get(hot_id);
+        return text(await d.callPlugin('douyin_hot_detail', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })));
+      },
+    },
+    {
+      name: 'douyin_hot_videos',
+      refs: true,
+      description: '一个抖音实时热点下的热门视频（像塑移动版「热点详情」页同一接口）：视频 ID、播放地址 video_ref、封面 cover_ref、点赞数、作者（昵称、头像）。用来看这个梗、玩法实际怎么拍。hot_id 须来自本会话的 douyin_hot_list。',
+      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
+      run: async ({ project_path, instance_id, hot_id }) => {
+        const { raw } = seenHots.get(hot_id);
+        return text(await d.callPlugin('douyin_hot_videos', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })));
+      },
+    },
+    {
+      name: 'baidu_hot_list',
+      refs: true,
+      description: '百度热搜榜（top.baidu.com，不用登录、不用开像塑）：置顶条 pinned 和 50 条热搜，每条有名次、词、摘要、热度、配图 image_ref、链接 link，榜单更新时间 updated_at。看站外正在发生的社会、娱乐话题。',
+      shape: {},
+      run: async () => text(await baiduHotList(d.fetchJson)),
+    },
+    {
+      name: 'bilibili_popular',
+      refs: true,
+      description: 'B 站「热门」视频（不用登录、不用开像塑）：标题、BV 号、链接、封面 cover_ref、分区、UP 主、播放 / 点赞 / 评论 / 弹幕数、时长、发布时间、上热门的理由（如「百万播放」）。按 page 翻页。看年轻人在 B 站追的梗和内容。',
+      shape: {
+        page: z.number().int().min(1).optional().describe('页码，默认 1，取上一页的 next_page。'),
+        count: z.number().int().min(1).max(BILIBILI_POPULAR_MAX).optional().describe(`每页数量，默认 20（最大 ${BILIBILI_POPULAR_MAX}）。`),
+      },
+      run: async (a) => text(await bilibiliPopular(a, d.fetchJson)),
+    },
+    {
+      name: 'bilibili_hot_search',
+      description: 'B 站搜索框下的热搜词（不用登录、不用开像塑）：名次、关键词、展示名、热度分，更新时间 updated_at。',
+      shape: {},
+      run: async () => text(await bilibiliHotSearch(d.fetchJson)),
     },
     {
       name: 'rank_subjects',

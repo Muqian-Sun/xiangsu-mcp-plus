@@ -14,6 +14,7 @@
 - 交付：设置并上传图标、特效检测（和编辑器里点「特效检测」一样，云端检测）、填好提交窗口（名称、触发提示、摄像头方向、灵感、任务，一直走到「提交审核」页并等检测跑完；最后的「提交审核」由你来点）、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划月榜和官方精选）和成长之路（特效师等级、奖励和各目标进度），用编辑器里登录的账号读取；可收藏灵感、领取任务。
+- 热点和热梗：抖音实时热点榜（每条的分类、热度走势、站内已有特效数、热门视频，用像塑移动版的接口），以及不用登录的百度热搜、B 站热门视频和热搜词。
 - 我的特效审核：自己提交过的特效和审核状态，审核不通过的具体原因和完整审核记录（编辑器里只显示「审核未通过」，原因原本只能在像塑移动版的审核记录页看到）。
 - 我的数据：像塑移动版「作品详情」「我的」「钱包」「消息」页的内容：每个特效的曝光、投稿、播放、按天的趋势、投稿等级和升级还差的投稿、流量状态、收益明细；账号的总览数字和收入；站内信（上线、冷启动流量提示、精选审核、任务完成、获奖公布等）；所有任务里自己作品的评定。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
@@ -65,6 +66,12 @@
 | `task_bind` | 已领取的任务按任务详情页「去创作」的方式重开工程绑定 |
 | `rank_list` | 分页读移动版排行榜（榜单和筛选项写在参数说明里），可按日期、每级一个分类、特效等级、面板、偏好、来自工具、年轻喜爱度过滤；每页带上该榜当天的两级分类（大类如人像美化、细类如美妆） |
 | `rank_hotspots` | 热点榜（按 `offset` / `count` 分页）；带 `topic_id` 时返回该热点下的灵感 |
+| `douyin_hot_list` | 抖音实时热点榜（约 5 分钟一版）前 20 条：名次、名称、分类（娱乐、站内玩法、话题互动、二次元等）、热度 |
+| `douyin_hot_detail` | 一个抖音实时热点的上榜时间、近 7 天每天和今天每小时的热度、站内已有的特效数（「上线特效0个」说明还没人做） |
+| `douyin_hot_videos` | 一个抖音实时热点下的热门视频：播放地址、封面、点赞、作者 |
+| `baidu_hot_list` | 百度热搜榜：置顶条和 50 条热搜，每条有摘要、热度、配图、链接（不用登录、不用开像塑） |
+| `bilibili_popular` | B 站「热门」视频：标题、链接、封面、分区、UP 主、播放 / 点赞 / 评论 / 弹幕、上热门的理由，分页（不用登录、不用开像塑） |
+| `bilibili_hot_search` | B 站热搜词和热度（不用登录、不用开像塑） |
 | `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），分页或按 `keyword` 搜榜名；带 `subject_id` 时返回该榜全部特效 |
 | `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）和创作者月榜（`kind=creators`） |
 | `my_effects` | 自己提交过的特效，最新的在前：审核状态、绑定的任务和灵感、能否编辑 / 申诉；审核未通过、测试未通过、申诉审核未通过的带上最近一条审核记录（去掉标记的原因正文、分条原因、链接） |
@@ -108,6 +115,7 @@
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，在窗口里点「提交审核」。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
+- 找热梗：`douyin_hot_list` 看抖音正在火什么（分类「站内玩法」多是梗和跟拍玩法）→ `douyin_hot_detail` 看热度是在涨还是在落、站内有没有人做过特效 → `douyin_hot_videos` 看实际怎么拍；站外话题用 `baidu_hot_list`、`bilibili_popular`、`bilibili_hot_search`；梗的出处和用法用联网搜索查。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 - 查审核结果：`my_effects` 看哪些没过、`review.text` 是原因 → 要看整条时间线用 `my_effect_reviews`；`can_edit=true` 的在编辑器「拍摄特效管理」里点「编辑」改完重新提交。
