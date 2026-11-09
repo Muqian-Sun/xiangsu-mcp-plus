@@ -69,8 +69,11 @@
 | `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）和创作者月榜（`kind=creators`） |
 | `my_effects` | 自己提交过的特效，最新的在前：审核状态、绑定的任务和灵感、能否编辑 / 申诉；审核未通过、测试未通过、申诉审核未通过的带上最近一条审核记录（去掉标记的原因正文、分条原因、链接） |
 | `my_effect_reviews` | 一个自己的特效的完整审核记录：「上线审核」和「精选审核」两条时间线 |
-| `my_effect_stats` | 一个自己已上线特效的「作品详情」数据（要 `effect_id` 和 `app_effect_id`，都在 `my_effects` 里）：各 App 的上线状态和投稿、用到的功能、数据卡片（累计曝光 / 投稿 / 播放 / 跟拍、平台判定的特效类型、等级、年轻喜爱度）、投稿等级和升级还差的投稿、近 7 日或上线后的按天曝光和投稿、流量状态、播放数、收益明细、绑定的任务和灵感 |
-| `my_overview` | 账号总览：昵称、粉丝、特效作者 / 模板作者等级，「我的」页数字（开拍、播放、本月提交 / 上线、收入），本月数据，钱包收益（累计和当月、按来源、按天） |
+| `my_effect_data` | 一个自己已上线特效的「作品详情」数据卡片（要 `effect_id` 和 `app_effect_id`，都在 `my_effects` 里）：各 App 的上线状态和投稿、用到的功能、累计曝光 / 投稿 / 播放 / 跟拍、平台判定的特效类型、等级、年轻喜爱度、流量状态、播放数、绑定的任务和灵感 |
+| `my_effect_trend` | 同一个特效近 7 日或上线后的按天曝光和投稿，投稿等级和升级还差的投稿 |
+| `my_effect_revenue` | 同一个特效的收益明细（基础等级奖、年轻奖、跟拍奖、精选奖，各带说明） |
+| `my_profile` | 账号资料：昵称、粉丝、特效作者 / 模板作者等级，「我的」页数字（开拍、播放、本月提交 / 上线、收入），本月数据 |
+| `my_revenue` | 钱包收益：累计和某个月的总额、按来源、按天 |
 | `messages_list` | 移动版「消息」页的站内信（全部 / 服务 / 官方），每条的标题、正文、时间、是否已读、审核状态和对应的 `effect_id`、链接，按 `cursor` 翻页 |
 | `my_task_status` | 一次列出所有已领取任务里自己的作品和任务评定（`task_state`、`off_theme`），并按评定计数 |
 | `music_list` / `music_apply` | 抖音音乐分类（不带参数时）、按分类列出或搜索（带版权标记），按音乐库「使用」套用，可截取片段 |
@@ -108,7 +111,7 @@
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 - 查审核结果：`my_effects` 看哪些没过、`review.text` 是原因 → 要看整条时间线用 `my_effect_reviews`；`can_edit=true` 的在编辑器「拍摄特效管理」里点「编辑」改完重新提交。
-- 看作品表现：`my_effects` 拿 `effect_id` 和 `app_effect_id` → `my_effect_stats` 看曝光、投稿趋势、等级和收益；账号整体用 `my_overview`；上线、精选、获奖等通知用 `messages_list`；交了哪些任务、评定如何用 `my_task_status`。
+- 看作品表现：`my_effects` 拿 `effect_id` 和 `app_effect_id` → `my_effect_data` 看曝光和数据卡片、`my_effect_trend` 看按天趋势和离下一级还差多少、`my_effect_revenue` 看收益；账号用 `my_profile`，收入用 `my_revenue`；上线、精选、获奖等通知用 `messages_list`；交了哪些任务、评定如何用 `my_task_status`。
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。
 - 自绘一层妆：`makeup_calibrate`（`layout="eye"`，`videos` 给几位模特的正脸视频）看眼皮边和上眼缘在贴图上的 y → `makeup_texture`（按量出的坐标画，`attach` 挂到层上）→ `preview_frames`（`format="png"`、`crop` 裁眼睛）看效果 → 改坐标重画（覆盖同一个文件，编辑器几秒后热更新）→ `save_project`。
 - 画眼妆：`makeup_calibrate`（`layout="eye"`，`videos` 给几位模特的照片视频）→ `makeup_eye`（`anatomy` 给存下的 `calibration-eye.json`，`attach.add` 挂层）→ `makeup_compare`（区域给 `eye` + 同一个标定文件，每位模特按自己的眼睛裁图）看每件在几位模特上贴不贴、浓不浓 → 调参数再画（`attach` 指定上次的层，覆盖贴图）→ `save_project`。
@@ -132,14 +135,14 @@
 - 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。
 - 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方的 `delete_render_group`。
 - 素材库的搜索接口只匹配标题，很多素材的名字里没有人们会搜的词（美妆 › 腮红里是「雾堇胭」「红玫瑰」，没有素材叫「滤镜」），所以 `library_search` 还会展开名字与搜索词相同的面板或子分类，以及「子分类 + 面板」组合（「复古滤镜」）；「面板 + 其它词」（「韩系滤镜」）只在该面板里按标题搜「韩系」。名字只是包含搜索词的子分类不展开，列在 `related_categories`。每个面板或子分类最多取 300 条（实测子分类 17–125 条）。什么都没匹配到时返回 `hint`。
-- `works_*`、`inspiration_*`、`task_*`、`rank_*`、`my_effects`、`my_effect_reviews`、`my_effect_stats`、`my_overview`、`messages_list`、`my_task_status`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
+- `works_*`、`inspiration_*`、`task_*`、`rank_*`、`my_effects`、`my_effect_reviews`、`my_effect_data`、`my_effect_trend`、`my_effect_revenue`、`my_profile`、`my_revenue`、`messages_list`、`my_task_status`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - 返回资料的方式：
   - 列表默认每页 20 条（服务端上限更小的按上限），只给挑选时要看的字段；要细节用对应的详情工具。
   - 列表里的图片、视频、音频不给地址，给短引用 `*_ref` / `*_refs`（`img:12`、`video:3`、`audio:5`），交给 `image_view`：一个签名 CDN 地址有几百字，实测占列表每条的 43%–93%。引用记在 MCP 服务里，这次运行期间有效（最多记 2 万个，超出时忘掉最久没用的）；详情工具（`inspiration_detail`、`menu_list` 的 `details`）给的是这个对象自己的图，仍给地址。
   - 我们自己的工具回答超过 3 万字时，全文写进 `~/.xiangsu-mcp-ext/outputs/`（24 小时后删除），回答换成文件路径和结构概要（每个字段的值或条数，列表给每条有哪些字段），用读文件的工具按需读，或用分页参数分几次取。3 万是拍的：`task_detail` 原来一次回 4.8 万字，读不全。官方工具原样转发，不受影响。
   - 字段命名：投稿量统一叫 `publish_*`（`publish_count`、`publish_peak`、`publish_total`），跟拍量叫 `follow_shoot`，页面原样给的展示文字（如「1.2万」「¥50」）以 `_text` 结尾，换算过的金额以 `_yuan` 结尾；看不出单位的数（任务奖项的 `money`、`award_amount`）原样给，不换算。
 - 灵感、任务、排行榜按编辑器首页活动中心的方式请求（编辑器的登录 Cookie 和签名请求头），读写的都是编辑器里登录的账号。排行榜和成长之路用的是像塑移动版的接口，榜单名和筛选项取值与移动版一致，后端改版时可能失效。灵感和任务详情的接口移动版和编辑器是同一个（2026-11-08 对照移动版 v17.7.0 安装包里的接口逐个实测，返回完全相同），移动版看到的内容都在工具的返回里；活动详情、热点内容流、任务筛选、每日任务、创新任务这几个移动版接口暂未接入（参数未知，或当前账号没有内容可核对）。
-- 作品数据、总览和消息（`my_effect_stats`、`my_overview`、`messages_list`）的参数取自移动版 v17.7.0 安装包反编译出的 Dart 代码，2026-11-09 用自己的账号逐个实测：作品详情的接口都要 `effect_id`、`app_effect_id` 和 `app_id`（抖音是 184），只给其中一两个时服务端答「参数错误」；数据趋势的 `cycle` 是页面「近7日」「上线后」两个标签的序号加 1，其它值答「参数不正确」；消息按上一页最后一条的 ID 翻页。趋势里按天的曝光和投稿是逐日累计值，数据隔天才更新。等级是数字代码，接口不给对应的字母；投稿门槛以移动版「激励规则」页为准。作品详情里的 `tips` 和 `scarce_category` 两张卡片对试过的特效都没返回内容，有内容时原样放在 `unread`。
+- 作品数据、账号和消息（`my_effect_*`、`my_profile`、`my_revenue`、`messages_list`）的参数取自移动版 v17.7.0 安装包反编译出的 Dart 代码，2026-11-09 用自己的账号逐个实测：作品详情的接口都要 `effect_id`、`app_effect_id` 和 `app_id`（抖音是 184），只给其中一两个时服务端答「参数错误」；数据趋势的 `cycle` 是页面「近7日」「上线后」两个标签的序号加 1，其它值答「参数不正确」；消息按上一页最后一条的 ID 翻页。趋势里按天的曝光和投稿是逐日累计值，数据隔天才更新。等级是数字代码，接口不给对应的字母；投稿门槛以移动版「激励规则」页为准。作品详情里的 `tips` 和 `scarce_category` 两张卡片对试过的特效都没返回内容，有内容时原样放在 `unread`。
 - 几处上限是在服务端实测的：`rank_list` 和 `rank_subjects` 每页最多 20、`inspiration_list` 每页最多 50（100 会报错）、专题榜详情一次最多 20。移动版的「特效优秀视频榜」接口对所有榜单都返回空，没有提供。
 - 审核记录：编辑器的「拍摄特效管理」（`/creator/v1/effect_list`）只有状态码，原因在像塑移动版的审核记录页（站内信「点击查看未过审原因」打开的 `effect.douyin.com/m/detail?showReviewList=1`）。工具按那个页面的方式取：「上线审核」先读 `review_nodes`（`review_type=1`），没有记录再读 `effect_reviews`；「精选审核」读 `review_nodes`（`review_type=2`）。2026-11-07 实测，被驳回的特效 `review_nodes` 不返回记录，原因来自 `effect_reviews`，如「特效不符合规范：特效中可能含有涉及展示或宣扬不同群体攻击对立类内容」。正文里的 `|<b>…<b>|`、`|<a><href>链接<href>文字<a>|` 等标记按页面的规则去掉，链接放进 `links`。分条原因 `refuse_reasons` 的结构取自页面代码，实测的特效还没带过。别人的特效和不存在的 ID，服务端一律报 `code=1301`（「参数不正确，请正确访问」）。
 - `my_effects` 翻页要把上一页返回的 `sort` 原样传回，`next_cursor` 就是它（传 `cursor` 或 `offset` 都只会拿到第一页，2026-11-07 实测）。服务端不给「还有没有」，工具按「这页满了就还有」判断，所以最后一页正好满页时 `has_more` 仍是 `true`，再翻一页得到空列表。每页上限 50 是拍的：每个未通过的特效要多一到两次请求。
