@@ -366,6 +366,7 @@ function fakeProject() {
   put('Graph/ScriptTemplate/OnStart/CGOnStart.js', 'js');
   put('Library/CacheData', 'cache');
   put('Assets/Library/keep.txt', 'not the cache');
+  put('Assets/_DynamicAsset/7374456022703865908/脸蛋天才.algo.folder/yunfu_fengying_liuchang.js', 'official package script');
   return root;
 }
 
@@ -377,8 +378,8 @@ test('outline lists project files without the Library cache', () => {
     o.key_files.map((f) => f.path),
     ['Assets/main.scene', 'effect.dyehpj', 'Graph/ScriptTemplate/OnStart/CGOnStart.js'].sort((a, b) => a.localeCompare(b)),
   );
-  assert.equal(o.file_count, 4);
-  assert.deepEqual(o.by_extension, { '.txt': 1, '.scene': 1, '.dyehpj': 1, '.js': 1 });
+  assert.equal(o.file_count, 5);
+  assert.deepEqual(o.by_extension, { '.txt': 1, '.scene': 1, '.dyehpj': 1, '.js': 2 });
   assert.equal(o.key_files_truncated, false);
 });
 
@@ -526,7 +527,7 @@ test('works_download with dest moves the work there and deletes the editor copy 
   const res = JSON.parse((await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } })).content[0].text);
   assert.deepEqual(seen.find((s) => s.method === 'works_download'), { method: 'works_download', params: { item: { templateId: '1', title: 'AI 修仙合掌转场' } }, opts: { pid: 7, timeoutMs: 600000 } });
   assert.equal(res.project_path, dest);
-  assert.equal(res.outline.file_count, 4);
+  assert.equal(res.outline.file_count, 5);
   assert.ok(res.expires_at);
   assert.equal(fs.existsSync(dl.guid), false);
   assert.deepEqual(deps.downloads.list().map((e) => e.path), [dest]);

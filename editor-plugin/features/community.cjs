@@ -271,7 +271,15 @@ function templateIds(list) {
       return { unparsed: list };
     }
   }
-  return Array.isArray(ids) ? ids.map(String) : { unparsed: list };
+  return Array.isArray(ids) ? [...new Set(ids.map(String))] : { unparsed: list };
+}
+// Picked: a task page can recommend over a hundred templates (108117: 120, 2026-11-09) that no tool
+// downloads by id, so the first few stand for them; save_to keeps the whole list.
+const MAX_TEMPLATE_IDS = 20;
+
+function recommendedTemplates(ids) {
+  if (!Array.isArray(ids)) return { recommended_template_ids: ids };
+  return { recommended_template_ids: ids.slice(0, MAX_TEMPLATE_IDS), recommended_template_total: ids.length };
 }
 
 function slimGrowthLevel(l) {
@@ -657,7 +665,7 @@ const methods = {
       finish_status: d.fin_status || null,
       level_task: !!d.is_level_task,
       my_effects: (d.task_effect_list || []).map(slimTaskEffect),
-      recommended_template_ids: templateIds(d.template_id_list),
+      ...recommendedTemplates(templateIds(d.template_id_list)),
       content: modules.map(taskBlock),
       raw: { detail: d, content: modules },
     };

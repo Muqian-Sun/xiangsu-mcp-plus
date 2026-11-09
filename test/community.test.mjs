@@ -548,6 +548,7 @@ test('task_detail reads an effect task like the task window, and growth_task_det
       })),
     ],
     recommended_template_ids: ['7408401210929053711', '7411422748410609714'],
+    recommended_template_total: 2,
     content: [{ name: '参与要求', items: [{ title: '主题要求', text: '年轻美妆' }] }],
   });
   assert.deepEqual(raw.content, [{ type: 3, contentBlockName: '参与要求', demandList: [{ tit: '主题要求', desc: '年轻美妆' }] }]);
@@ -568,7 +569,19 @@ test('task_detail hands on recommended template ids it cannot read as they came'
   const { lib } = setup({ 'GET /effectcam/v2/effect_task_detail': ok({ title: '征集赛', tags: [], template_id_list: '7408,' }), 'GET /effectcam/v2/effect_task_content': ok({ modules: [] }) });
   assert.deepEqual((await lib.taskDetail({ id: '1' })).recommended_template_ids, { unparsed: '7408,' });
   const none = setup({ 'GET /effectcam/v2/effect_task_detail': ok({ title: '征集赛', tags: [] }), 'GET /effectcam/v2/effect_task_content': ok({ modules: [] }) });
-  assert.deepEqual((await none.lib.taskDetail({ id: '1' })).recommended_template_ids, []);
+  const empty = await none.lib.taskDetail({ id: '1' });
+  assert.deepEqual([empty.recommended_template_ids, empty.recommended_template_total], [[], 0]);
+});
+
+test('task_detail lists the first 20 recommended templates once each, with how many there are', async () => {
+  // 108117 recommended 120, some twice (2026-11-09).
+  const ids = Array.from({ length: 30 }, (_, i) => String(7400000000000000000n + BigInt(i)));
+  const list = JSON.stringify([...ids, ids[0], ids[5]]);
+  const { lib } = setup({ 'GET /effectcam/v2/effect_task_detail': ok({ title: '征集赛', tags: [], template_id_list: list }), 'GET /effectcam/v2/effect_task_content': ok({ modules: [] }) });
+  const out = await lib.taskDetail({ id: '1' });
+  assert.deepEqual(out.recommended_template_ids, ids.slice(0, 20));
+  assert.equal(out.recommended_template_total, 30);
+  assert.equal(out.raw.detail.template_id_list, list);
 });
 
 test('task_detail reads each content block into entries, media, awards and links, keeping what it does not know', async () => {

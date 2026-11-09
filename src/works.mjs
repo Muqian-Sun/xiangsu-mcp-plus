@@ -7,9 +7,14 @@ import path from 'node:path';
 // Editor cache, regenerated on open and useless as a reference.
 const SKIP_DIRS = new Set(['Library']);
 const MAX_FILES = 500;
-// What studying a work reads: the project file, the scenes and the scripts. A work lists hundreds of
-// textures and models besides (500 entries, 69 KB, in the trial), which only the counts stand for.
-const isKeyFile = (rel) => rel === 'effect.dyehpj' || /\.scene(\.extra)?$/.test(rel) || rel.startsWith(`Graph${path.sep}`) || /\.(js|ts)$/.test(rel);
+// What studying a work reads: the project file, the scenes and the author's scripts. A work lists
+// hundreds of textures and models besides (500 entries, 69 KB, in the trial), which only the counts
+// stand for; the scripts inside official packages (_DynamicAsset, 脸蛋天才's algorithm and the like)
+// are the same in every work that uses them.
+const isKeyFile = (rel) => {
+  if (rel.split(path.sep).includes('_DynamicAsset')) return false;
+  return rel === 'effect.dyehpj' || /\.scene(\.extra)?$/.test(rel) || rel.startsWith(`Graph${path.sep}`) || /\.(js|ts)$/.test(rel);
+};
 // Picked, not measured: long enough to study a work within a working day, short enough that other
 // people's projects do not pile up. works_cleanup deletes earlier.
 export const DOWNLOAD_TTL_MS = 24 * 60 * 60 * 1000;
