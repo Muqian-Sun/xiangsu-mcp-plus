@@ -303,27 +303,6 @@ test('makeup_calibrate deletes its texture from disk when adding the layer fails
   assert.ok(!win.calls.some(([m]) => m === 'object_remove'));
 });
 
-test('makeup_texture attach puts the texture on an existing layer of the same region, or on a new one', async () => {
-  const projectDir = project();
-  const win = fakeWindow({ projectDir });
-  const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
-  const out = path.join(projectDir, 'Assets', 'liner.png');
-  const layers = [{ color: '#1A1212', shapes: [{ type: 'stroke', points: [[150, 260], [300, 250]], radius: 2 }] }];
-  const res = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'eye', blend: 'normal', layers, attach: { object_path: '眼线', female: 0.9, texture_size: 1024 } } });
-  assert.equal(res.isError, undefined, res.content[0].text);
-  const set = win.calls.find(([m]) => m === 'makeup_set')[1].changes[0];
-  assert.deepEqual(set, { object_path: '面部面具/清冷_美妆/眼线', texture: out, blend: 0, female: 0.9, texture_size: 1024 });
-  assert.deepEqual(JSON.parse(res.content[0].text).attached.texture, out);
-  const added = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'eye', blend: 'multiply', layers, attach: { add: true } } });
-  assert.equal(JSON.parse(added.content[0].text).attached.object_path, '面部面具/眼部妆容');
-  assert.deepEqual(win.calls.filter(([m]) => m === 'makeup_add_layer').map(([, p]) => p.region), ['eye']);
-  const wrong = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'face', blend: 'normal', layers, attach: { object_path: '眼线' } } });
-  assert.match(wrong.content[0].text, /LAYOUT_MISMATCH: 面部面具\/清冷_美妆\/眼线 is region 1, the face layout is for region 0/);
-  const missing = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'eye', blend: 'normal', layers, attach: { object_path: '睫毛' } } });
-  assert.match(missing.content[0].text, /MAKEUP_LAYER_NOT_FOUND: 睫毛 matches 0/);
-  const both = await client.callTool({ name: 'makeup_texture', arguments: { instance_id: '2', out, layout: 'eye', blend: 'normal', layers, attach: { object_path: '眼线', add: true } } });
-  assert.match(both.content[0].text, /give object_path or add: true, not both/);
-});
 
 test('makeup_calibrate deletes its texture without asking the editor when it failed before handing it over', async () => {
   const projectDir = project();

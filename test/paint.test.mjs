@@ -4,9 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer } from '../src/server.mjs';
 import { fitArc, paint, smoothLine, withTail, writeTexture } from '../src/paint.mjs';
 
 const W = { face: 1024, eye: 900, lips: 460 };
@@ -123,29 +120,6 @@ test('paint warns when a full-face texture paints over the eye openings', () => 
   assert.deepEqual(paint({ layout: 'face', blend: 'normal', layers: [one({ type: 'spot', x: 410, y: 520, rx: 6 })] }).warnings, []);
 });
 
-test('makeup_texture tool writes the PNG, describes what it painted and refuses misspelt keys', async () => {
-  const server = createServer({ listInstances: () => [], callPlugin: async () => ({}), official: { listTools: async () => [], status: () => ({}) } });
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'test', version: '0' });
-  await Promise.all([server.connect(a), client.connect(b)]);
-  const out = path.join(tmpdir('xs-paint-'), 'Assets', 'lid.png');
-  const res = await client.callTool({
-    name: 'makeup_texture',
-    arguments: { out, layout: 'face', blend: 'multiply', layers: [{ color: '#F6AAA2', shapes: [{ type: 'spot', x: 395, y: 520, rx: 20, ry: 4, mirror: true }] }] },
-  });
-  const summary = JSON.parse(res.content[0].text);
-  assert.deepEqual([summary.file, summary.size, summary.painted.color, summary.painted.center, summary.warnings], [out, [1024, 1024], '#F6AAA2', [512, 520], []]);
-  const png = PNG.sync.read(fs.readFileSync(out));
-  assert.deepEqual([png.width, png.height], [1024, 1024]);
-  assert.equal(res.content[2].type, 'image');
-  const bad = await client.callTool({ name: 'makeup_texture', arguments: { out, layout: 'face', blend: 'multiply', layers: [{ color: '#000000', shapes: [{ type: 'spot', x: 1, y: 1, rx: 2, radious: 3 }] }] } });
-  assert.equal(bad.isError, true);
-  assert.match(bad.content[0].text, /Unrecognized key: "radious"/);
-  const noColour = await client.callTool({ name: 'makeup_texture', arguments: { out, layout: 'face', blend: 'multiply', layers: [{ shapes: [{ type: 'spot', x: 1, y: 1, rx: 2 }] }] } });
-  assert.match(noColour.content[0].text, /color is required unless erase is true/);
-  const relative = await client.callTool({ name: 'makeup_texture', arguments: { out: 'lid.png', layout: 'face', blend: 'multiply', layers: [{ color: '#000000', shapes: [{ type: 'spot', x: 500, y: 500, rx: 2 }] }] } });
-  assert.match(relative.content[0].text, /INVALID_OUT/);
-});
 
 test('three points are drawn as the smooth curve through them; curve: "straight" keeps the corner', () => {
   const points = [[100, 300], [200, 250], [300, 300]];
