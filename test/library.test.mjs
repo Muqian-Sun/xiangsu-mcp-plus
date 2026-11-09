@@ -181,7 +181,8 @@ test('apply downloads, verifies and imports through AssetPackageManager', async 
   assert.deepEqual(calls.lock, ['lock:ImportAssetFromAssetLibrary', 'unlock:ImportAssetFromAssetLibrary']);
   assert.equal(calls.reload, 1);
   assert.deepEqual(out.resources, [{ name: '芒果脸', path: null }]);
-  assert.deepEqual(out.added_objects, [{ name: '芒果脸', object_path: '面部拉伸/芒果脸' }]);
+  // The new object and what came with it under it.
+  assert.deepEqual(out.added_objects, [{ name: '芒果脸', object_path: '面部拉伸/芒果脸', contents: [{ name: '芒果脸', object_path: '面部拉伸/芒果脸/芒果脸' }] }]);
   assert.deepEqual(out.package_folders, []);
 
   const again = await lib.apply({ item: raw[0], auto_instantiate: false });

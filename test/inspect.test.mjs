@@ -722,9 +722,12 @@ test('resolveObject takes a guid, a name or the tail of a path, and lists the ca
   assert.throws(() => resolveObject(same, '面部面具/面部妆容'), /AMBIGUOUS_OBJECT: 面部面具\/面部妆容 matches 2 objects: s1 面部面具\/面部妆容 \| s2 面部面具\/面部妆容; they share the same path, so only the guid tells them apart$/);
 });
 
-function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {} } = {}) {
+// changed: what project_state says on each call in turn, the last one repeating.
+function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {}, changed = [false] } = {}) {
   const calls = [];
+  let states = 0;
   const answers = {
+    project_state: () => ({ changed: changed[Math.min(states++, changed.length - 1)] }),
     preview_frame: () => ({ mimeType: 'image/jpeg', data: JPG }),
     preview_reset: () => ({ reloaded_ms: 700, ready_ms: 1100 }),
     preview_full_rate: ({ hold_ms }) => ({ held: hold_ms > 0 }),
@@ -775,18 +778,38 @@ test('preview_frames resets, takes full-size frames from the plugin, saves and c
 test('preview_frames shoots each video in turn, switches back once even on failure, and notes the save', async () => {
   const official = fakeOfficial();
   const keep = path.join(tmpdir('xs-keep-'), 'frames');
-  const plugin = framePlugin();
+  // Clean before; the switch back reaches the project info a moment later.
+  const plugin = framePlugin({ changed: [false, true, true, false] });
   const client = await connect({ official, ...plugin, sleep: async () => {} });
   const res = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 2, videos: ['preview_single_shake_head||女', 'preview_double||双人'], reset: false, save_to: keep } });
   const sets = official.calls.filter((c) => c[0] === 'set_preview_video').map((c) => c[1].video_name);
   assert.deepEqual(sets, ['preview_single_shake_head||女', 'preview_double||双人', 'preview_single_blink||女']);
-  assert.deepEqual(plugin.calls.map((c) => c[0]), ['preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate']);
-  assert.equal(plugin.calls.at(-1)[2], 0);
+  const shots = plugin.calls.filter((c) => c[0] !== 'project_state');
+  assert.deepEqual(shots.map((c) => c[0]), ['preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate']);
+  assert.equal(shots.at(-1)[2], 0);
+  assert.equal(plugin.calls.filter((c) => c[0] === 'project_state').length, 4);
   const summary = JSON.parse(res.content[0].text);
   assert.deepEqual(summary.files, ['v1-frame-1.jpg', 'v1-frame-2.jpg', 'v2-frame-1.jpg', 'v2-frame-2.jpg'].map((f) => path.join(keep, f)));
   for (const f of summary.files) assert.ok(fs.existsSync(f));
   assert.equal(summary.note_files, undefined);
-  assert.match(summary.note, /save_project/);
+  assert.match(summary.note, /已切回 preview_single_blink\|\|女；工程没有因为切换变成「已修改」/);
+  // Still changed when the wait is up, or changed before the shots.
+  let now = 0;
+  const realNow = Date.now;
+  Date.now = () => now;
+  try {
+    const stuck = framePlugin({ changed: [false, true] });
+    const cs = await connect({ official: fakeOfficial(), ...stuck, sleep: async (ms) => (now += ms), framesDir: () => tmpdir('xs-f-') });
+    const r1 = JSON.parse((await cs.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 1, videos: ['a'], reset: false } })).content[0].text);
+    assert.match(r1.note, /工程仍显示「已修改」，需要 save_project/);
+  } finally {
+    Date.now = realNow;
+  }
+  const before = framePlugin({ changed: [true] });
+  const cb = await connect({ official: fakeOfficial(), ...before, sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
+  const r2 = JSON.parse((await cb.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 1, videos: ['a'], reset: false } })).content[0].text);
+  assert.match(r2.note, /工程在截图前就有未保存的改动/);
+  assert.equal(before.calls.filter((c) => c[0] === 'project_state').length, 1);
   assert.match(res.content[1].text, /^preview_single_shake_head\|\|女 第 1 帧/);
 
   const failing = fakeOfficial({ failSet: 'preview_double||双人' });
@@ -795,7 +818,7 @@ test('preview_frames shoots each video in turn, switches back once even on failu
   const bad = await c2.callTool({ name: 'preview_frames', arguments: { instance_id: '2', videos: ['preview_single_shake_head||女', 'preview_double||双人'] } });
   assert.equal(bad.isError, true);
   assert.deepEqual(failing.calls.filter((c) => c[0] === 'set_preview_video').map((c) => c[1].video_name), ['preview_single_shake_head||女', 'preview_double||双人', 'preview_single_blink||女']);
-  assert.deepEqual(p2.calls.at(-1), ['preview_full_rate', '/proj/A', 0]);
+  assert.deepEqual(p2.calls.filter((c) => c[0] !== 'project_state').at(-1), ['preview_full_rate', '/proj/A', 0]);
 
   const tooMany = await c2.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 7, videos: ['a', 'b', 'c', 'd'] } });
   assert.match(tooMany.content[0].text, /TOO_MANY_FRAMES: 28/);

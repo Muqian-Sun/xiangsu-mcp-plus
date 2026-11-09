@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { M, body, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
+const { M, body, editingScene, sceneObjectSet, addedObjectEditors, describeAdded, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
 const { SQUARE_PANEL } = require('./square.cjs');
 
 // Editor internals each feature relies on; checked up front so an editor upgrade fails with a precise list.
@@ -232,7 +232,8 @@ function slim(item, kind) {
     kind,
     desc: item.desc || '',
     material_type: extra.originalMaterialType || null,
-    file_size: file.fileSize ?? null,
+    // Square cards all carry 3409 here (2026-11-09), the size of no file the apply downloads.
+    file_size: item.panelKey === SQUARE_PANEL ? null : file.fileSize ?? null,
     cover_url: cover.url || null,
   };
 }
@@ -388,7 +389,7 @@ class Library {
         package_cached: cached,
         kind: 'package',
         auto_instantiated: !!auto_instantiate,
-        added_objects: added.map((o) => ({ name: o.name, object_path: sceneObjectPath(o) })),
+        added_objects: describeAdded(added, before, sceneEditor),
         package_folders: packageFolders,
         resources,
       };

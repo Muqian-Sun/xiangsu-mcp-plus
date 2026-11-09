@@ -3,7 +3,7 @@ import './tmp.mjs';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
 import { frameDiff, regionStats, sideBySide } from '../src/measure.mjs';
-import { decodeUv, encodeUv } from '../src/calib.mjs';
+import { RAMP_LEVELS, decodeUv, encodeUv, overlay, toneCurve, undoTone } from '../src/calib.mjs';
 
 function frame(w, h, at) {
   const img = new PNG({ width: w, height: h });
@@ -93,4 +93,51 @@ test('decodeUv fits the mapping on pixels away from strong edges, where JPEG err
     }
     assert.ok(worst < 1.5, `${p.eye}: off by ${worst.toFixed(2)} texture px`);
   }
+});
+
+// A frame of grey stripes, 12 px each, at the given frame values (one per ramp level), over a skin-coloured bare frame.
+function rampFrames(values, { w = 216, h = 40 } = {}) {
+  const ramp = new PNG({ width: w, height: h });
+  const bare = new PNG({ width: w, height: h });
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const v = values[Math.floor(x / 12) % values.length];
+      ramp.data.set(Array.isArray(v) ? [...v, 255] : [v, v, v, 255], i);
+      bare.data.set([200, 150, 130, 255], i);
+    }
+  }
+  return { ramp, bare };
+}
+
+test('toneCurve reads each channel of the preview curve off the ramp, and undoTone maps frame values back', () => {
+  const f = (v) => Math.round(10 + 245 * (v / 255) ** 0.85);
+  const { ramp, bare } = rampFrames(RAMP_LEVELS.map(f));
+  const tone = toneCurve(ramp, bare);
+  assert.deepEqual(tone.r, RAMP_LEVELS.map(f));
+  const back = undoTone({ width: 1, height: 1, data: Buffer.from([f(128), f(64), f(255), 255]) }, tone);
+  assert.deepEqual([...back.data], [128, 64, 255, 255]);
+});
+
+test('toneCurve fails when a level does not show or the curve does not rise', () => {
+  const f = (v) => Math.round(10 + 0.96 * v);
+  const eight = RAMP_LEVELS.slice(0, 8).map(f);
+  assert.throws(() => toneCurve(...Object.values(rampFrames(eight))), /TONE_RAMP_LEVEL_MISSING: the ramp shows 8 grey levels/);
+  // Brighter overall at every step, but red stays where it was at the 5th level (still grey within the
+  // JPEG allowance, so it is not taken for skin).
+  const values = RAMP_LEVELS.map((v, n) => (n === 4 ? [f(RAMP_LEVELS[3]), f(RAMP_LEVELS[3]) + 20, f(RAMP_LEVELS[3]) + 20] : [f(v), f(v), f(v)]));
+  assert.throws(() => toneCurve(...Object.values(rampFrames(values))), /TONE_CURVE_NOT_RISING: channel R/);
+  const { bare } = rampFrames([0]);
+  assert.throws(() => toneCurve(bare, bare), /CALIBRATION_NOT_VISIBLE: only 0 frame pixels show the tone ramp/);
+});
+
+test('overlay labels iso-lines whose texture y is negative (fitted past the face layout\'s edge)', () => {
+  const w = 40;
+  const h = 40;
+  const tx = new Float32Array(w * h);
+  const ty = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) [tx[y * w + x], ty[y * w + x]] = [x * 10, (y - 20) * 2];
+  const bare = frame(w, h, () => [120, 120, 120]);
+  const png = PNG.sync.read(overlay({ box: { x0: 0, y0: 0, x1: w - 1, y1: h - 1 }, tx, ty }, bare));
+  assert.equal(png.width, (w + 0) * 4);
 });

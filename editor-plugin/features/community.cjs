@@ -575,14 +575,18 @@ const methods = {
     };
   },
 
-  // The editor's own agent hook: records the inspiration on the open project (saved with it).
-  inspirationBind({ inspiration_id } = {}) {
+  // The editor's own agent hook: records the inspiration on the open project (saved with it). The submit
+  // window lists only collected inspirations, so a bound one that is not collected would not show there;
+  // it is collected too.
+  async inspirationBind({ inspiration_id } = {}) {
     this.ensureCompatible('community');
     const id = requireId(inspiration_id, 'INVALID_INSPIRATION_ID');
     const EF = this.mod(M.ef);
     if (!EF.ProjectManager.getInstance().hasActiveProject()) throw Error('NO_ACTIVE_PROJECT');
     this.mod(M.inspirationBridge).markAgentInspirationUsed({ inspirationId: id });
-    return { bound: id, next: 'save_project to keep it' };
+    const wasCollected = await this.inspirationCollected(id);
+    if (!wasCollected) await this.inspirationCollect({ inspiration_id: id });
+    return { bound: id, collected: true, newly_collected: !wasCollected, next: 'save_project to keep it' };
   },
 
   async inspirationCollect({ inspiration_id, collect = true } = {}) {

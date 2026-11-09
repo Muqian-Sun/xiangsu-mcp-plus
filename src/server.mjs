@@ -23,7 +23,7 @@ import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
 import { BLENDS, LAYOUTS } from './paint.mjs';
 import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
-import { LID_SEARCH, WINDOWS, decodeUv, encodeUv, overlay, textureGrid, upperLid } from './calib.mjs';
+import { LID_SEARCH, WINDOWS, decodeUv, encodeRamp, encodeUv, overlay, textureGrid, toneCurve, undoTone, upperLid } from './calib.mjs';
 import { cropImage, framesDir, jpegToPng, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
@@ -64,6 +64,9 @@ const HOLD_SLACK_MS = 30000;
 // Derived from practice (project notes): AI face effects show fully in the second frame taken 3 s apart
 // after a reset, so a held frame is taken this long after the reset by default.
 const HOLD_AT_MS = 3000;
+// Picked: after switching back, the editor wrote the last video back into the project info within 3 s
+// (measured 2026-11-09), which is when the project shows as unchanged again.
+const PREVIEW_INFO_SETTLE_MS = 5000;
 // Picked, not measured: as many states and regions as fit a readable answer.
 const MAX_COMPARE_VARIANTS = 6;
 const MAX_COMPARE_REGIONS = 6;
@@ -394,6 +397,7 @@ export function createServer(deps = {}) {
     const next = offset + count;
     return { ...rest, total: items.length, items: items.slice(offset, next), next_offset: next, has_more: next < items.length };
   };
+  const musicCursor = z.union([z.number(), z.string()]).optional().describe('下一页：上一页返回的 next_cursor；省略时从第一页开始。');
   const pageShape = {
     offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
     count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
@@ -744,7 +748,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_detail',
-      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
+      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程 project（服务端只给标题、图标和「可在像塑桌面端搜索使用」，没有工程 id，2026-11-09 查了 13 个带工程的灵感都是这样；要下载就拿标题去 works_search）、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
       shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / inspiration_search / hotspot_inspirations / growth_task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
       run: community('inspiration_detail'),
     },
@@ -759,9 +763,15 @@ export function createServer(deps = {}) {
       run: community('inspiration_collect'),
     },
     {
+      name: 'submit_close',
+      description: '关掉这个工程窗口里开着的提交窗口（submit_prepare 打开、用户还没点提交的），不打开新的；返回关掉的个数 closed。要改填内容不用先关，直接再调 submit_prepare，它会先关掉旧的。',
+      shape: { ...target },
+      run: plugin('submit_close'),
+    },
+    {
       name: 'inspiration_bind',
       description:
-        '按 inspiration_id 把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），之后 save_project 落盘，打开提交窗口时会自动带出。只在提交时选灵感的话，也可以直接给 submit_prepare 传 inspiration：它在提交窗口的下拉里按名称选，只列当前账号收藏的灵感和热点。',
+        '按 inspiration_id 把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），之后 save_project 落盘，打开提交窗口时会自动带出。提交窗口的下拉只列已收藏的灵感，没收藏的会带不出来，所以本工具会顺手收藏它（newly_collected=true 表示这次收藏的，不要了可用 inspiration_collect 取消）。只在提交时选灵感的话，也可以直接给 submit_prepare 传 inspiration：它在提交窗口的下拉里按名称选，只列当前账号收藏的灵感和热点。',
       shape: { ...target, inspiration_id: z.string().min(1).describe('要绑定的 inspiration_id。') },
       run: plugin('inspiration_bind'),
     },
@@ -825,7 +835,7 @@ export function createServer(deps = {}) {
     {
       name: 'task_bind',
       description:
-        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。task_id 须来自本会话的 tasks_list。只在提交时选任务的话，直接给 submit_prepare 传 task（已领取任务的标题），不用重开窗口。',
+        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。带任务的打开要经由另一个开着的窗口发起，这个工程是唯一的窗口时，会先开一个不保存的空工程当跳板，绑完关掉。task_id 须来自本会话的 tasks_list。只在提交时选任务的话，直接给 submit_prepare 传 task（已领取任务的标题），不用重开窗口。',
       shape: {
         path: z.string().min(1).describe('工程文件夹的绝对路径。'),
         task_id: z.string().min(1).describe('tasks_list 返回的 task_id（须 bindable=true）。'),
@@ -837,14 +847,23 @@ export function createServer(deps = {}) {
           t = seenTasks.get(task_id);
         }
         if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it with task_receive first`);
-        const open = (await projects.windows()).some((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
+        const windows = await projects.windows();
+        const mine = windows.find((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
+        const open = !!mine;
+        if (open && (await d.callPlugin('project_state', {}, { pid: mine.pid, timeoutMs: 5000 })).changed) throw Error(`PROJECT_HAS_UNSAVED_CHANGES: ${projectDir}; save it first (task_bind closes and reopens the window)`);
+        // A task launch goes through another open window; when this project's is the only one, an
+        // unsaved empty project stands in for it until the project is back, then is closed unsaved.
+        const bridge = open && windows.length === 1 ? await projects.newUnsaved() : null;
         if (open) await projects.close({ project_path: projectDir });
+        let opened;
         try {
-          return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
+          opened = await projects.open({ path: projectDir, activity: t.raw.extra });
         } catch (e) {
           if (!open) throw e;
-          throw Error(`BIND_REOPEN_FAILED: ${projectDir} was closed to bind the task but did not reopen (${e.message}); the task is not bound: reopen it with project_open, then task_bind again`);
+          throw Error(`BIND_REOPEN_FAILED: ${projectDir} was closed to bind the task but did not reopen (${e.message}); the task is not bound: reopen it with project_open, then task_bind again${bridge ? `; the empty stand-in window ${bridge.project_path} is still open, close it with project_close (discard_changes=true)` : ''}`);
         }
+        if (bridge) await projects.close({ project_path: bridge.project_path, discard_changes: true });
+        return text({ task: t.slim, ...opened, ...(bridge ? { stand_in_window: 'closed' } : {}) });
       },
     },
     {
@@ -1086,7 +1105,7 @@ export function createServer(deps = {}) {
     {
       name: 'effect_search',
       refs: true,
-      description: `按关键词搜索像塑全平台已上线的特效或模板（像塑移动版搜索页同一接口）：effect_id、app_effect_id、名称、说明、等级代码、年轻喜爱度、累计投稿（页面原样文字）、图标 icon_ref。特效最多翻到 100 条。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。只搜首页工程用 works_search；拿到特效后用 effect_detail 看详情、effect_videos 看视频、works_by_effect 找工程。搜灵感用 inspiration_search，搜教程用 tutorial_search。`,
+      description: `按关键词搜索像塑全平台已上线的特效或模板（像塑移动版搜索页同一接口）：effect_id、app_effect_id、名称、说明、等级代码、年轻喜爱度、累计投稿（页面原样文字）、图标 icon_ref。特效最多翻到 100 条。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。顺序是服务端定的，前几名多是累计投稿很高的老特效；接口不认排序参数（2026-11-09 试了 sort_type、order_by、sort 等 12 种写法，顺序都不变），要看现在火的用 rank_list / rank_subjects。只搜首页工程用 works_search；拿到特效后用 effect_detail 看详情、effect_videos 看视频、works_by_effect 找工程。搜灵感用 inspiration_search，搜教程用 tutorial_search。`,
       shape: {
         ...target,
         query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
@@ -1160,16 +1179,16 @@ export function createServer(deps = {}) {
     {
       name: 'music_list',
       refs: true,
-      description: '抖音音乐库一个分类的第一页（35 首）：music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。分类 code 从 music_categories 取；按关键词找歌用 music_search。',
-      shape: { ...target, category_code: z.string().min(1).describe('music_categories 返回的分类 code。') },
-      run: async ({ project_path, instance_id, category_code }) => text(seenMusic.keep(await d.callPlugin('music_list', { category_code }, await homeWindow({ project_path, instance_id })), { category_code })),
+      description: '抖音音乐库一个分类的一页（每页约 35 首，按 cursor 翻页）：music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效），以及下一页的 next_cursor、has_more。分类 code 从 music_categories 取；按关键词找歌用 music_search。',
+      shape: { ...target, category_code: z.string().min(1).describe('music_categories 返回的分类 code。'), cursor: musicCursor },
+      run: async ({ project_path, instance_id, category_code, cursor }) => text(seenMusic.keep(await d.callPlugin('music_list', { category_code, ...(cursor === undefined ? {} : { cursor }) }, await homeWindow({ project_path, instance_id })), { category_code })),
     },
     {
       name: 'music_search',
       refs: true,
-      description: '按关键词搜抖音音乐：每首的 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（false 或 null 的不要用于要发布的特效）。',
-      shape: { ...target, query: z.string().min(1).describe('搜索关键词。') },
-      run: async ({ project_path, instance_id, query }) => text(seenMusic.keep(await d.callPlugin('music_search', { query }, await homeWindow({ project_path, instance_id })), { category_code: null })),
+      description: '按关键词搜抖音音乐，一页约 35 首、按 cursor 翻页：每首的 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（false 或 null 的不要用于要发布的特效），以及 next_cursor、has_more。',
+      shape: { ...target, query: z.string().min(1).describe('搜索关键词。'), cursor: musicCursor },
+      run: async ({ project_path, instance_id, query, cursor }) => text(seenMusic.keep(await d.callPlugin('music_search', { query, ...(cursor === undefined ? {} : { cursor }) }, await homeWindow({ project_path, instance_id })), { category_code: null })),
     },
     {
       name: 'music_apply',
@@ -1276,7 +1295,7 @@ export function createServer(deps = {}) {
     {
       name: 'makeup_layers',
       description:
-        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：官方素材包（package_id 是这个包在素材库里的 template_id）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMask 的 intensity 是面板上的「不透明度」：单独加的层实际画出的浓度 opacity = intensity × 男女强度 × 外部强度；挂在整套美妆（AI 实时变脸）下的子项由 GAN 接管，改 intensity 不起作用，opacity 只按男女强度 × 外部强度算。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
+        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）；层上设了着色 tint 时另给贴图色乘上着色的 tinted_color / tinted_hsl（按着色和贴图相乘算的，没有实测核对）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：官方素材包（package_id 是这个包在素材库里的 template_id）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMask 的 intensity 是面板上的「不透明度」：单独加的层实际画出的浓度 opacity = intensity × 男女强度 × 外部强度；挂在整套美妆（AI 实时变脸）下的子项由 GAN 接管，改 intensity 不起作用，opacity 只按男女强度 × 外部强度算。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
       shape: {
         project_dir: z.string().min(1).describe('工程目录的绝对路径（含 Assets/main.scene），如 works_download 返回的 project_path 或自己的工程。'),
         save_to: saveTo,
@@ -1432,7 +1451,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'makeup_calibrate',
-      description: `量出妆容贴图在当前预览模特脸上落在哪里。临时加一个 layout 区域的妆容层，贴上「颜色就是贴图坐标」的标定贴图（R=x、G=y），截图期间把其它妆容层、美瞳、滤镜的强度临时调成 0（整套妆的子项也只是调强度，不删不关），在 at_ms 之后截一张带标定层的、一张不带的（要用静态照片做的模特视频，两张才是同一张脸）（即这张脸只有 AI 脸、美型时的样子），逐像素解码出每个画面像素对应的贴图坐标；截完改回所有强度，删掉临时层和标定贴图。返回每个预览视频（eye 布局下每只眼）的：画面上的范围 box_px、每画面像素对应多少贴图像素、标注图（不带妆的脸放大 4 倍，红线 / 青线是贴图 y 每 ${5} 像素的等高线，红线标了数值；黄色刻度是贴图 x 每 30 像素），以及 textures_grid（贴图上每 10 像素的格点落在画面哪个像素，写进 calibration.json）。eye 布局另返回上眼皮：每一列贴图 x 上，眼皮皮肤结束处 edge（亮度下降最快处）和上眼缘最暗处 rim 的贴图 y（右眼的 x 已换算成贴图右半边的坐标），画内眼线时线的上沿放在 rim 上方几像素、下沿到 rim。预览截图是 JPEG，每只眼的映射用二维多项式拟合（避开素帧里亮度变化剧烈的边缘），fit_rms 是拟合残差（实测 D、E、G、I 约 1–3 贴图像素）；眼皮边、上眼缘读不准的列给 null，不猜。滤镜以外还有会改颜色的后处理（自写的 .omtl 等）时解码会失败并说明，先把它们关掉再标定。`,
+      description: `量出妆容贴图在当前预览模特脸上落在哪里。临时加一个 layout 区域的妆容层（面板不透明度设成 1：新建层默认 0.5，会让标定颜色和皮肤混色、坐标整体偏大），贴上「颜色就是贴图坐标」的标定贴图（R=x、G=y），截图期间把其它妆容层、美瞳、滤镜的强度临时调成 0（整套妆的子项也只是调强度，不删不关），在 at_ms 之后截一张带标定层的、一张不带的（要用静态照片做的模特视频，两张才是同一张脸）（即这张脸只有 AI 脸、美型时的样子），再截一张贴着灰阶条纹的：预览可能给画出来的颜色再套一条色调曲线（不透明度 1 时实测接近直线：0→7、255→254），从条纹量出每个通道的曲线 tone_curve（各灰阶在画面上的值），先把曲线反算回去再逐像素解码出每个画面像素对应的贴图坐标；条纹某一级在画面上看不到、或量出的曲线不单调时报错，不猜；截完改回所有强度，删掉临时层和标定贴图。返回每个预览视频（eye 布局下每只眼）的：画面上的范围 box_px、每画面像素对应多少贴图像素、标注图（不带妆的脸放大 4 倍，红线 / 青线是贴图 y 每 ${5} 像素的等高线，红线标了数值；黄色刻度是贴图 x 每 30 像素），以及 textures_grid（贴图上每 10 像素的格点落在画面哪个像素，写进 calibration.json）。eye 布局另返回上眼皮：每一列贴图 x 上，眼皮皮肤结束处 edge（亮度下降最快处）和上眼缘最暗处 rim 的贴图 y（右眼的 x 已换算成贴图右半边的坐标），画内眼线时线的上沿放在 rim 上方几像素、下沿到 rim。预览截图是 JPEG，每只眼的映射用二维多项式拟合（避开素帧里亮度变化剧烈的边缘），fit_rms 是拟合残差（实测 D、E、G、I 约 1–3 贴图像素）；眼皮边、上眼缘读不准的列给 null，不猜。滤镜以外还有会改颜色的后处理（自写的 .omtl 等）时解码会失败并说明，先把它们关掉再标定。`,
       shape: {
         ...target,
         layout: z.enum(Object.keys(LAYOUTS)).describe('要标定的贴图布局：face 整脸、eye 眼部、lips 唇部。'),
@@ -1446,10 +1465,13 @@ export function createServer(deps = {}) {
         const instance_id = await officialInstance(a);
         const projectPath = await projects.resolveProjectPath({ instance_id });
         const dir = save_to ? saveDir(save_to) : d.framesDir();
-        const uvFile = path.join(projectPath, 'Assets', `xs-calibration-${layout}-${Date.now()}.png`);
+        const stamp = Date.now();
+        const uvFile = path.join(projectPath, 'Assets', `xs-calibration-${layout}-${stamp}.png`);
+        const rampFile = path.join(projectPath, 'Assets', `xs-calibration-ramp-${layout}-${stamp}.png`);
         fs.writeFileSync(uvFile, encodeUv(layout));
+        fs.writeFileSync(rampFile, encodeRamp(layout));
         let temp = null;
-        let imported = false;
+        const imported = new Set();
         let restore = null;
         const cleanup = [];
         let runs;
@@ -1457,18 +1479,29 @@ export function createServer(deps = {}) {
           const { layers } = await d.callPlugin('makeup_list', {}, { projectPath, timeoutMs: 15000 });
           temp = (await d.callPlugin('makeup_add_layer', { region: layout }, { projectPath, timeoutMs: 180000 })).object_path;
           const mute = layers.map((l) => (l.kind === 'face_mask' ? { object_path: l.object_path, female: 0, male: 0 } : { object_path: l.object_path, intensity: 0 }));
-          imported = true;
-          await makeupSet(projectPath, [{ object_path: temp, texture: uvFile, blend: BLENDS.normal, female: 1, male: 1 }], 'makeup_calibrate: calibration layer');
+          imported.add(uvFile);
+          // A new layer's panel opacity is 0.5, which mixes the code half and half with the skin (the
+          // shader draws at intensity × female × external).
+          await makeupSet(projectPath, [{ object_path: temp, texture: uvFile, blend: BLENDS.normal, female: 1, male: 1, intensity: 1 }], 'makeup_calibrate: calibration layer');
           if (mute.length) restore = (await makeupSet(projectPath, mute, 'makeup_calibrate: mute makeup')).before;
           runs = await eachVideo(instance_id, videos, tracking_type, (video) =>
             onPlayingPreview(projectPath, at_ms, async () => {
               const coded = await pngFrame(projectPath);
               await makeupSet(projectPath, [{ object_path: temp, female: 0, male: 0 }], 'makeup_calibrate: bare');
+              let bare;
               try {
                 await freshFrames(projectPath);
-                return { video, coded, bare: await pngFrame(projectPath) };
+                bare = await pngFrame(projectPath);
               } finally {
                 await makeupSet(projectPath, [{ object_path: temp, female: 1, male: 1 }], 'makeup_calibrate: calibration layer');
+              }
+              imported.add(rampFile);
+              await makeupSet(projectPath, [{ object_path: temp, texture: rampFile }], 'makeup_calibrate: tone ramp');
+              try {
+                await freshFrames(projectPath);
+                return { video, coded, bare, ramp: await pngFrame(projectPath) };
+              } finally {
+                await makeupSet(projectPath, [{ object_path: temp, texture: uvFile }], 'makeup_calibrate: calibration layer');
               }
             }),
           );
@@ -1481,28 +1514,32 @@ export function createServer(deps = {}) {
           // Never handed to the editor: a plain file. Handed over but still there (the import or the
           // layer change failed, or removing the layer kept it): a resource, or a plain file if the
           // import never registered it.
-          const rel = path.relative(projectPath, uvFile);
-          if (!imported) fs.rmSync(uvFile, { force: true });
-          else if (fs.existsSync(uvFile)) {
-            try {
-              cleanup.push(...(await d.callPlugin('resource_delete_unused', { paths: [rel] }, { projectPath, timeoutMs: 30000 })).deleted);
-            } catch (e) {
-              if (!/RESOURCE_NOT_FOUND/.test(e.message)) throw e;
-              fs.rmSync(uvFile, { force: true });
-              cleanup.push(rel);
+          for (const file of [uvFile, rampFile]) {
+            const rel = path.relative(projectPath, file);
+            if (!imported.has(file)) fs.rmSync(file, { force: true });
+            else if (fs.existsSync(file)) {
+              try {
+                cleanup.push(...(await d.callPlugin('resource_delete_unused', { paths: [rel] }, { projectPath, timeoutMs: 30000 })).deleted);
+              } catch (e) {
+                if (!/RESOURCE_NOT_FOUND/.test(e.message)) throw e;
+                fs.rmSync(file, { force: true });
+                cleanup.push(rel);
+              }
             }
           }
         }
-        const leftover = fs.existsSync(uvFile) ? [path.relative(projectPath, uvFile)] : [];
+        const leftover = [uvFile, rampFile].filter((f) => fs.existsSync(f)).map((f) => path.relative(projectPath, f));
         const win = WINDOWS[layout];
         const out = [];
         const content = [];
-        for (const [k, { video, coded, bare }] of runs.entries()) {
-          const parts = decodeUv(layout, coded, bare);
+        for (const [k, { video, coded, bare, ramp }] of runs.entries()) {
           const prefix = videos ? `v${k + 1}-` : '';
           const bareFile = path.join(dir, `${prefix}bare.png`);
           fs.writeFileSync(bareFile, PNG.sync.write(bare));
           fs.writeFileSync(path.join(dir, `${prefix}coded.png`), PNG.sync.write(coded));
+          fs.writeFileSync(path.join(dir, `${prefix}ramp.png`), PNG.sync.write(ramp));
+          const tone = toneCurve(ramp, bare);
+          const parts = decodeUv(layout, undoTone(coded, tone), undoTone(bare, tone));
           const partsOut = parts.map((p) => {
             const file = path.join(dir, `${prefix}calibration${p.eye ? `-${p.eye}` : ''}.png`);
             fs.writeFileSync(file, overlay(p, bare));
@@ -1511,7 +1548,7 @@ export function createServer(deps = {}) {
             res.texture_grid = textureGrid(p, bare.width, 10);
             return res;
           });
-          out.push({ video, bare: bareFile, parts: partsOut });
+          out.push({ video, bare: bareFile, tone_curve: tone, parts: partsOut });
           for (const p of partsOut) {
             content.push({ type: 'text', text: `${video ? `${video} ` : ''}${p.eye ? `${p.eye === 'left' ? '左' : '右'}眼` : ''}标注图` });
             content.push({ type: 'image', ...(await d.readImageFile(p.overlay)) });
@@ -1519,7 +1556,7 @@ export function createServer(deps = {}) {
         }
         const json = path.join(dir, `calibration-${layout}.json`);
         fs.writeFileSync(json, JSON.stringify({ layout, window: win, lid_search: LID_SEARCH, runs: out }, null, 2));
-        const brief = out.map((r) => ({ video: r.video, parts: r.parts.map(({ texture_grid, ...p }) => p) }));
+        const brief = out.map((r) => ({ video: r.video, tone_curve: { levels: r.tone_curve.levels, r: r.tone_curve.r, g: r.tone_curve.g, b: r.tone_curve.b }, parts: r.parts.map(({ texture_grid, ...p }) => p) }));
         const summary = { layout, runs: brief, calibration_json: json, cleaned_up: cleanup, ...(leftover.length ? { leftover, warning: '标定贴图没删掉，请用 resource_delete_unused 删除' } : {}), note: '所有强度都已改回，临时层已删除；工程会显示「已修改」，不需要的话不用保存' };
         return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
       },
@@ -1543,7 +1580,7 @@ export function createServer(deps = {}) {
     {
       name: 'preview_frames',
       description:
-        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
+        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 preview_videos，如 preview_single_shake_head||女），全部截完切回原视频，并等编辑器把视频写回工程信息，工程原来没有未保存的改动时，截完仍是干净的（note 里说明）。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
       shape: {
         ...target,
         count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
@@ -1584,8 +1621,10 @@ export function createServer(deps = {}) {
         };
         const groups = [];
         let original = null;
+        let wasChanged = null;
         try {
           if (videos) {
+            wasChanged = (await d.callPlugin('project_state', {}, { projectPath, timeoutMs: 5000 })).changed;
             original = await d.official.callJson('get_current_preview_video', { instance_id, intention: '记下当前预览视频，截图后切回' });
             try {
               for (const [k, video_name] of videos.entries()) {
@@ -1601,6 +1640,17 @@ export function createServer(deps = {}) {
           }
         } finally {
           await releaseFullRate(projectPath);
+        }
+        // Switching back leaves the project unchanged only once the editor has written the last video
+        // back, a moment later; a project that had changes before keeps them.
+        let leftChanged = wasChanged;
+        if (original && !wasChanged) {
+          const end = Date.now() + PREVIEW_INFO_SETTLE_MS;
+          for (;;) {
+            leftChanged = (await d.callPlugin('project_state', {}, { projectPath, timeoutMs: 5000 })).changed;
+            if (!leftChanged || Date.now() >= end) break;
+            await d.sleep(500);
+          }
         }
         const files = [];
         const content = [];
@@ -1618,7 +1668,7 @@ export function createServer(deps = {}) {
           frames: files.length,
           files,
           ...(save_to ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 save_to' }),
-          ...(original ? { note: `预览视频已切回 ${original.video_name || original.resource_url}；切换过预览视频，工程变成了「已修改」，需要 save_project` } : {}),
+          ...(original ? { note: `预览视频已切回 ${original.video_name || original.resource_url}${leftChanged ? (wasChanged ? '；工程在截图前就有未保存的改动' : '；工程仍显示「已修改」，需要 save_project') : '；工程没有因为切换变成「已修改」'}` } : {}),
         };
         return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
       },

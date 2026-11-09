@@ -248,6 +248,9 @@ test('makeupLayers reports blend mode, tint, surface, faces and the strength the
   assert.deepEqual([l['腮红'].female, l['腮红'].external, l['腮红'].opacity, l['腮红'].tint], [0.5, { female: 0.5, male: 1 }, { female: 0.25, male: 0 }, '#FF8080']);
   assert.deepEqual([l['唇部妆容'].surface, l['唇部妆容'].faces], [{ type: '水润', intensity: 0.4 }, [0]]);
   assert.deepEqual([l['面具1'].external, l['面具1'].faces, l['面具1'].surface, l['面具1'].tint], [undefined, undefined, undefined, undefined]);
+  // Texture colour times tint, per channel: #5A4632 × #FF8000.
+  assert.deepEqual([l['美瞳'].tinted_color, l['美瞳'].tinted_hsl], ['#5A2300', [23, 100, 18]]);
+  assert.equal(l['面具1'].tinted_color, undefined);
 });
 
 test('makeupLayers ties the layers of a packaged look to its GAN and treats a look scaled to 0 as off', () => {

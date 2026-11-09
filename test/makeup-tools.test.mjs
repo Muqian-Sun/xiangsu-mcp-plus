@@ -37,7 +37,7 @@ function eyeTexel(u, v) {
 }
 
 // A fake editor window: makeup layers with strengths, a frame rendered from them, and every call logged.
-function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
+function fakeWindow({ projectDir, fail = {}, drift = false, tone = null } = {}) {
   const calls = [];
   const layers = new Map([
     ['面部面具/腮红', { kind: 'face_mask', region: 0, blend: 1, female: 0.6, male: 0.1, texture: '/t/blush.png', enabled: true }],
@@ -68,6 +68,8 @@ function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
         }
       }
     }
+    // The preview's own colour curve over everything it draws.
+    if (tone) for (let i = 0; i < img.data.length; i += 4) for (let c = 0; c < 3; c++) img.data[i + c] = tone(img.data[i + c], c);
     return PNG.sync.write(img).toString('base64');
   };
   const answers = {
@@ -281,12 +283,38 @@ test('makeup_calibrate decodes both eyes on a temporary layer, reads the lid, mu
   assert.ok(Math.abs(g.frame[0] - 60) < 1 && Math.abs(g.frame[1] - 63.3) < 1, JSON.stringify(g));
   assert.ok(fs.existsSync(left.overlay) && left.overlay.startsWith(keep));
   // Everything muted during the shots and back afterwards; the temporary layer and its texture are gone.
+  // The temporary layer draws at full panel opacity: a new layer's 0.5 would mix the code with the skin.
+  const layer = win.calls.find(([m, p]) => m === 'makeup_set' && p.label === 'makeup_calibrate: calibration layer')[1].changes[0];
+  assert.deepEqual([layer.female, layer.male, layer.intensity], [1, 1, 1]);
   const mute = win.calls.find(([m, p]) => m === 'makeup_set' && p.label === 'makeup_calibrate: mute makeup')[1];
   assert.deepEqual(mute.changes.map((c) => c.object_path).sort(), [...Object.keys(original)].sort());
   assert.deepEqual(strengths(win), original);
   assert.equal(win.layers.has('面部面具/眼部妆容'), false);
   assert.deepEqual(fs.readdirSync(path.join(projectDir, 'Assets')), []);
-  assert.equal(out.cleaned_up.length, 1);
+  // The coded texture and the tone ramp.
+  assert.equal(out.cleaned_up.length, 2);
+  assert.deepEqual(out.runs[0].tone_curve.levels, [0, 32, 64, 96, 128, 160, 192, 224, 255]);
+});
+
+test('makeup_calibrate undoes the preview\'s colour curve before decoding', async () => {
+  // Close to the curve measured on the preview (0 → 10, 85 → 98, 128 → 146, 255 → 255), stronger on blue.
+  const curve = (v, c) => Math.round(10 + 245 * (v / 255) ** [0.85, 0.82, 0.78][c]);
+  const projectDir = project();
+  const win = fakeWindow({ projectDir, tone: curve });
+  const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
+  const res = await client.callTool({ name: 'makeup_calibrate', arguments: { instance_id: '2', layout: 'eye' } });
+  assert.equal(res.isError, undefined, res.content[0].text);
+  const out = JSON.parse(res.content[0].text);
+  const json = JSON.parse(fs.readFileSync(out.calibration_json, 'utf8'));
+  // Every grid point against the fake mapping (frame x = 20 + (tx − 120) / 3, y = 30 + (ty − 200) / 1.5).
+  const grid = json.runs[0].parts[0].texture_grid;
+  const off = grid.map(({ texture: [tx, ty], frame: [x, y] }) => Math.hypot(x - (20 + (tx - 120) / 3), y - (30 + (ty - 200) / 1.5)));
+  const sorted = [...off].sort((a, b) => a - b);
+  assert.ok(grid.length >= 100, String(grid.length));
+  assert.ok(sorted[Math.floor(sorted.length / 2)] < 0.6 && sorted.at(-1) < 1.5, `median ${sorted[Math.floor(sorted.length / 2)]}, max ${sorted.at(-1)}`);
+  const tc = out.runs[0].tone_curve;
+  assert.ok(Math.abs(tc.r[4] - curve(128, 0)) <= 2, JSON.stringify(tc));
+  for (const row of out.runs[0].parts[0].upper_lid.filter((r) => r.rim !== null)) assert.equal(row.rim, 246, JSON.stringify(row));
 });
 
 test('makeup_calibrate fails clearly when the code does not show, and still removes what it added', async () => {

@@ -128,9 +128,8 @@ export class Projects {
     return { already_open: false, pid: w.pid, project_path: w.project_path, instance_id: await this.instanceIdForPid(w.pid, this.d.instanceTimeoutMs) };
   }
 
-  async create({ path: target }) {
-    const abs = path.resolve(target);
-    if (fs.existsSync(abs) && (!fs.statSync(abs).isDirectory() || fs.readdirSync(abs).length)) throw Error(`TARGET_NOT_EMPTY: ${abs}`);
+  // A new, never saved project window (像塑 keeps it under ProjectCreatedTmp until it is saved).
+  async newUnsaved() {
     const windows = await this.windows();
     if (!windows.length) throw Error('NO_EDITOR_WINDOW: open any project first; new projects are created through an open editor window');
     const seen = new Set(windows.map((w) => `${w.pid}|${w.project_path}`));
@@ -141,6 +140,13 @@ export class Projects {
     );
     if (!w) throw Error('NEW_PROJECT_TIMEOUT: no new project window appeared');
     await this.waitReady(w.pid);
+    return w;
+  }
+
+  async create({ path: target }) {
+    const abs = path.resolve(target);
+    if (fs.existsSync(abs) && (!fs.statSync(abs).isDirectory() || fs.readdirSync(abs).length)) throw Error(`TARGET_NOT_EMPTY: ${abs}`);
+    const w = await this.newUnsaved();
     const instance_id = await this.instanceIdForPid(w.pid, this.d.instanceTimeoutMs);
     if (instance_id === null) throw Error(`NO_OFFICIAL_INSTANCE: window ${w.pid} is not visible to the official MCP`);
     const saved = await this.d.official.callJson('save_project', { instance_id, path: abs, intention: '新建工程首次保存' });

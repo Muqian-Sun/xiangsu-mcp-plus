@@ -34,6 +34,17 @@ function page(list) {
   return { items: raw.map(slimMusic), raw };
 }
 
+// A fresh list model starts at the first page; one that should start further on gets the cursor the
+// previous page's answer carried, as the model itself keeps it between pages. After the request the
+// model holds the next cursor and whether more follow.
+function startAt(list, cursor) {
+  if (cursor !== undefined) list.cursorInfo.next({ cursor, count: list.pageSize, hasMore: true });
+}
+function nextPage(list) {
+  const c = list.cursorInfo.getValue() || {};
+  return { next_cursor: c.cursor ?? null, has_more: !!c.hasMore };
+}
+
 const methods = {
   async musicCategories() {
     this.ensureCompatible('music');
@@ -41,22 +52,26 @@ const methods = {
     return { categories: (cats || []).map((c) => ({ code: c.codeCategory, name: c.name })) };
   },
 
-  async musicList({ category_code } = {}) {
+  async musicList({ category_code, cursor } = {}) {
     this.ensureCompatible('music');
     if (typeof category_code !== 'string' || !category_code) throw Error('INVALID_CATEGORY: pass category_code from music_categories');
     const categories = new (this.mod(M.musicCategory).MusicCategoryModel)();
     const list = new (this.mod(M.musicList).MusicListModel)(categories);
     list.requestTimestamp = String(Date.now());
     categories.setSelectedCategory({ codeCategory: category_code });
-    return { category_code, ...page(await withTimeout(list.getNextMusicListForDouyin(), 'list')) };
+    startAt(list, cursor);
+    const got = page(await withTimeout(list.getNextMusicListForDouyin(), 'list'));
+    return { category_code, ...got, ...nextPage(list) };
   },
 
-  async musicSearch({ query } = {}) {
+  async musicSearch({ query, cursor } = {}) {
     this.ensureCompatible('music');
     if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
     const list = new (this.mod(M.musicList).MusicListModel)(new (this.mod(M.musicCategory).MusicCategoryModel)());
     list.requestTimestamp = String(Date.now());
-    return { query: query.trim(), ...page(await withTimeout(list.getNextSearchMusicListForDouyin(query.trim()), 'search')) };
+    startAt(list, cursor);
+    const got = page(await withTimeout(list.getNextSearchMusicListForDouyin(query.trim()), 'search'));
+    return { query: query.trim(), ...got, ...nextPage(list) };
   },
 
   // `item` is a raw track from music_list or music_search. The library only applies a track with a clip range set;

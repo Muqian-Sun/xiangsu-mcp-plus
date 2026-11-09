@@ -227,6 +227,8 @@ const methods = {
   async submitChecks() {
     this.ensureCompatible('check');
     const project = activeProject(this);
+    // Read before the export, which can mark the project changed by itself.
+    const unsaved = typeof project.isProjectChanged === 'function' ? project.isProjectChanged() : null;
     const api = this.mod(M.orionui).ExtensionManager.host.getAPI(this.mod(M.submission).EffectSubmissionAPIKey);
     const dir = scratchDir(this, 'check');
     let pkg;
@@ -254,8 +256,13 @@ const methods = {
       icons,
       logged_in: !!isLoggedIn,
       saved: typeof project.isSaved === 'function' ? project.isSaved() : null,
-      unsaved_changes: typeof project.isProjectChanged === 'function' ? project.isProjectChanged() : null,
+      unsaved_changes: unsaved,
     };
+  },
+
+  // Closes the submit windows open in this process without opening another.
+  async submitClose() {
+    return { closed: await closeWindows(openWindows(SUBMIT_WINDOW)) };
   },
 
   // The toolbar's 特效检测 button (PerfTestButton) only opens this window; its page uploads the package
@@ -338,6 +345,7 @@ const METHODS = {
   icon_open: 'iconOpen',
   effect_check: 'effectCheck',
   submit_prepare: 'submitPrepare',
+  submit_close: 'submitClose',
   mobile_preview: 'mobilePreview',
 };
 

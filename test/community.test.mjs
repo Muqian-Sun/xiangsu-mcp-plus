@@ -355,14 +355,25 @@ test('inspiration_detail merges the detail with its collection state and count',
   await assert.rejects(gone.lib.inspirationDetail({ inspiration_id: '1' }), /INSPIRATION_NOT_FOUND: 1/);
 });
 
-test('inspiration_bind records the inspiration on the open project through the editor hook', () => {
-  const { lib, marked, state } = setup();
-  assert.deepEqual(lib.inspirationBind({ inspiration_id: ' 77 ' }), { bound: '77', next: 'save_project to keep it' });
+test('inspiration_bind records the inspiration on the open project and collects it so the submit window lists it', async () => {
+  let collected = true;
+  const { lib, marked, state, to } = setup({
+    'GET /creator_api/inspiration/v1/is_collected': () => ok({ is_collected: collected }),
+    'POST /creator_api/inspiration/v1/collect': (call) => {
+      collected = JSON.parse(call.body).action === 1;
+      return ok({});
+    },
+  });
+  assert.deepEqual(await lib.inspirationBind({ inspiration_id: ' 77 ' }), { bound: '77', collected: true, newly_collected: false, next: 'save_project to keep it' });
   assert.deepEqual(marked, ['77']);
-  assert.throws(() => lib.inspirationBind({ inspiration_id: ' ' }), /INVALID_INSPIRATION_ID/);
+  assert.equal(to('/creator_api/inspiration/v1/collect').length, 0);
+  collected = false;
+  assert.deepEqual(await lib.inspirationBind({ inspiration_id: '77' }), { bound: '77', collected: true, newly_collected: true, next: 'save_project to keep it' });
+  assert.equal(to('/creator_api/inspiration/v1/collect').length, 1);
+  await assert.rejects(lib.inspirationBind({ inspiration_id: ' ' }), /INVALID_INSPIRATION_ID/);
   state.project = false;
-  assert.throws(() => lib.inspirationBind({ inspiration_id: '77' }), /NO_ACTIVE_PROJECT/);
-  assert.deepEqual(marked, ['77']);
+  await assert.rejects(lib.inspirationBind({ inspiration_id: '77' }), /NO_ACTIVE_PROJECT/);
+  assert.deepEqual(marked, ['77', '77']);
 });
 
 test('inspiration_collect posts the inspiration card with the action and confirms the new state', async () => {

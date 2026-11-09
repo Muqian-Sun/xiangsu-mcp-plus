@@ -26,7 +26,8 @@ function card(id, title, { category, ai, info, cover = true } = {}) {
     extra: JSON.stringify(extra),
     businessExtra: {
       coverMap: cover ? { g: { url: `https://c/${id}.gif`, iconType: 'image/gif' }, p: { url: `https://c/${id}.png`, iconType: 'image/png' } } : {},
-      fileMap: { f: { url: `https://cdn/${id}.zip`, md5: 'm' } },
+      // Every square card carries this size (2026-11-09), the size of no file the apply downloads.
+      fileMap: { f: { url: `https://cdn/${id}.zip`, md5: 'm', fileSize: 3409 } },
     },
   };
 }
@@ -208,6 +209,7 @@ test('square list asks its category with the card ranker, fills in the category 
   assert.deepEqual(calls.list[0], { panelKey: 'aigc_material', count: 20, cursor: 0, categoryIds: '["45004"]', ranker: 5 });
   assert.deepEqual(out.categories, [{ id: '45004', name: '图片' }, { id: '45003', name: '妆容' }]);
   assert.deepEqual(out.items.map((i) => [i.template_id, i.kind, i.cover_url]), [['901', 'ai_image', 'https://c/901.png']]);
+  assert.equal(out.items[0].file_size, null);
   assert.equal(out.unsupported, 1);
   assert.deepEqual(out.raw[0].category, { categoryId: 45004 });
   assert.deepEqual({ next: out.next_cursor, more: out.has_more }, { next: 2, more: true });

@@ -3,7 +3,7 @@
 // collected assets). Square assets are applied through the asset library's own objects, the same calls
 // its cards make, so nothing is generated again and no quota is spent; collected assets go back to the
 // flow of the panel they came from.
-const { M, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
+const { M, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, describeAdded, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
 
 const SQUARE_PANEL = 'aigc_material';
 const COLLECTION_PANEL = 'collection';
@@ -150,7 +150,7 @@ const methods = {
       kind,
       ...(kind === 'ai_image' ? { image_index: index } : {}),
       auto_instantiated: !!auto_instantiate,
-      added_objects: added.map((o) => ({ name: o.name, object_path: sceneObjectPath(o) })),
+      added_objects: describeAdded(added, before, sceneEditor),
       package_folders: packageFolders,
     };
   },

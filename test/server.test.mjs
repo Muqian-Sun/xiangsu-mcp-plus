@@ -92,6 +92,7 @@ const OWN = [
   'scene_tree',
   'shoot_activity',
   'shoot_scripts',
+  'submit_close',
   'submit_prepare',
   'task_bind',
   'task_detail',

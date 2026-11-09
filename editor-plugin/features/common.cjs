@@ -150,6 +150,17 @@ function addedObjectEditors(before, sceneEditor) {
   return added.filter((o) => !fresh.has(o.parent));
 }
 
+// A new object as library_apply reports it. Applying to a scene without the render group a material
+// needs creates the group too, so the new object is the group (「面部面具」, 「2D 前景」); what the
+// material itself added sits under it and is listed as contents.
+function describeAdded(roots, before, sceneEditor) {
+  const fresh = sceneEditor.getAllSceneObjectEditors().filter((o) => !before.has(o));
+  return roots.map((o) => {
+    const contents = fresh.filter((c) => c.parent === o).map((c) => ({ name: c.name, object_path: sceneObjectPath(c) }));
+    return { name: o.name, object_path: sceneObjectPath(o), ...(contents.length ? { contents } : {}) };
+  });
+}
+
 function addedObjects(before, sceneEditor) {
   return addedObjectEditors(before, sceneEditor).map((o) => ({ name: o.name, object_path: sceneObjectPath(o) }));
 }
@@ -233,6 +244,7 @@ module.exports = {
   sceneObjectSet,
   addedObjectEditors,
   addedObjects,
+  describeAdded,
   resolveByPath,
   projectResources,
   packageRoot,

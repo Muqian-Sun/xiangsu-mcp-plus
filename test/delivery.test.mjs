@@ -180,15 +180,26 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
       },
     },
     [M.musicList]: {
+      // Two pages: the model keeps the cursor and whether more follow, as the editor's does.
       MusicListModel: class {
         constructor(cat) {
           this.cat = cat;
+          this.pageSize = 35;
+          let info = { cursor: 0, count: 35, hasMore: true };
+          this.cursorInfo = { getValue: () => info, next: (v) => (info = v) };
+        }
+        turn() {
+          const { cursor } = this.cursorInfo.getValue();
+          this.cursorInfo.next({ cursor: cursor + 35, count: 35, hasMore: cursor === 0 });
+          return cursor;
         }
         async getNextMusicListForDouyin() {
-          return [{ id: 7, title: `${this.cat.selected.codeCategory}曲`, author: 'A', duration: 30, cover: ['https://c'], fileUrl: ['https://f'], hasCopyright: true }];
+          const at = this.turn();
+          return [{ id: 7 + at, title: `${this.cat.selected.codeCategory}曲`, author: 'A', duration: 30, cover: ['https://c'], fileUrl: ['https://f'], hasCopyright: true }];
         }
         async getNextSearchMusicListForDouyin(q) {
-          return [{ id: 8, title: `${q}歌`, duration: 12 }, null];
+          const at = this.turn();
+          return [{ id: 8 + at, title: `${q}歌`, duration: 12 }, null];
         }
       },
     },
@@ -266,6 +277,38 @@ test('submitChecks passes a clean project and removes its scratch export', async
   assert.deepEqual(out.icons, ['common']);
   assert.ok(calls.exportDirs[0].startsWith(instance));
   assert.deepEqual(leftovers(instance), []);
+});
+
+test('submitChecks reads the unsaved state before its export, which can mark the project changed by itself', async () => {
+  const { lib, modules, projectDir } = setup();
+  fs.mkdirSync(path.join(projectDir, 'Icon'));
+  fs.writeFileSync(path.join(projectDir, 'Icon/commonIcon.png'), 'x');
+  const project = modules[M.ef].ProjectManager.getInstance().getActiveProject();
+  let changed = false;
+  project.isProjectChanged = () => changed;
+  const exportPackage = project.effectExporter.exportEffectPackage;
+  project.effectExporter.exportEffectPackage = async (...args) => {
+    changed = true;
+    return exportPackage(...args);
+  };
+  assert.equal((await lib.submitChecks()).unsaved_changes, false);
+});
+
+test('submit_close closes the open submit windows and opens none', async () => {
+  const { lib } = setup();
+  class DYEHEffectSubmissionWindow {
+    constructor() {
+      this.isClosed = false;
+    }
+    closeWindow() {
+      setTimeout(() => (this.isClosed = true), 5);
+    }
+  }
+  globalThis.App._windows.push(new DYEHEffectSubmissionWindow(), new DYEHEffectSubmissionWindow());
+  assert.deepEqual(await lib.submitClose(), { closed: 2 });
+  assert.equal(globalThis.App._windows.filter((w) => w.constructor.name === 'DYEHEffectSubmissionWindow' && !w.isClosed).length, 0);
+  assert.deepEqual(await lib.submitClose(), { closed: 0 });
+  assert.equal(globalThis.App._windows.filter((w) => w.constructor.name === 'MainWindow' && !w.isClosed).length, 1);
 });
 
 test('submitChecks reports every reason the submit flow would refuse', async () => {
@@ -365,9 +408,13 @@ test('music lists a category, searches, and applies a track with a clip range', 
   assert.deepEqual(await lib.musicCategories(), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
   const cat = await lib.musicList({ category_code: 'ugc_recommend' });
   assert.deepEqual(cat.items[0], { music_id: '7', title: 'ugc_recommend曲', author: 'A', duration_sec: 30, cover_url: 'https://c', preview_url: 'https://f', has_copyright: true });
+  assert.deepEqual([cat.next_cursor, cat.has_more], [35, true]);
+  const second = await lib.musicList({ category_code: 'ugc_recommend', cursor: 35 });
+  assert.deepEqual([second.items[0].music_id, second.next_cursor, second.has_more], ['42', 70, false]);
   const found = await lib.musicSearch({ query: ' 晴天 ' });
   assert.equal(found.query, '晴天');
   assert.deepEqual(found.items.map((m) => m.music_id), ['8']);
+  assert.deepEqual((await lib.musicSearch({ query: '晴天', cursor: 35 })).items.map((m) => m.music_id), ['43']);
   await assert.rejects(lib.musicList({}), /INVALID_CATEGORY/);
   await assert.rejects(lib.musicList({ query: '晴天' }), /INVALID_CATEGORY/);
   await assert.rejects(lib.musicSearch({ query: '  ' }), /INVALID_QUERY/);
@@ -643,11 +690,51 @@ test('task_bind re-reads the task list once when its copy says not received, and
   const res = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
   assert.equal(seen.filter((m) => m === 'tasks_list').length, 3);
   assert.match(res.content[0].text, /BIND_REOPEN_FAILED: .* was closed to bind the task but did not reopen \(WINDOW_LIMIT: .*; open windows: 9 \/other\); the task is not bound/);
-  // The only window closed: nothing is left to launch from.
-  windows.delete(9);
-  windows.set(7, proj);
-  const alone = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
-  assert.match(alone.content[0].text, /BIND_REOPEN_FAILED: .*\(NO_EDITOR_WINDOW/);
+});
+
+test('task_bind on the only open window launches through an unsaved stand-in project and closes it', async () => {
+  const proj = tmpdir('xs-bind-');
+  fs.writeFileSync(path.join(proj, 'effect.dyehpj'), '{}');
+  const tmp = '/x/Instances/Instance2/ProjectCreatedTmp/未命名';
+  const windows = new Map([[7, proj]]);
+  const extra = { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' };
+  let changed = true;
+  const seen = [];
+  const client = await connect({
+    launchRetryMs: 0,
+    listInstances: () => [...windows.keys()].map((pid) => ({ pid })),
+    callPlugin: async (method, params, opts) => {
+      seen.push([method, params, opts]);
+      if (method === 'status') return { projectPath: windows.get(opts.pid) };
+      if (method === 'project_state') return { scene_ready: true, changed: opts.pid === 7 && changed };
+      if (method === 'tasks_list') return { items: [{ task_id: '22', bindable: true }], raw: [{ kind: 'task', item_id: '2', extra }] };
+      if (method === 'project_close') {
+        windows.delete(opts.pid);
+        return { closing: true, project_path: null, discarded_changes: !!params.discard_changes };
+      }
+      if (method === 'project_launch') {
+        windows.set(params.operation === 'createNew' ? 20 : 21, params.operation === 'createNew' ? tmp : params.path);
+        return {};
+      }
+      throw Error(`unexpected ${method}`);
+    },
+  });
+  await client.callTool({ name: 'tasks_list', arguments: {} });
+  const dirty = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
+  assert.match(dirty.content[0].text, /PROJECT_HAS_UNSAVED_CHANGES/);
+  assert.ok(!seen.some(([m]) => m === 'project_launch' || m === 'project_close'));
+  changed = false;
+  const res = JSON.parse((await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } })).content[0].text);
+  assert.deepEqual([res.pid, res.stand_in_window], [21, 'closed']);
+  const steps = seen.filter(([m]) => m === 'project_launch' || m === 'project_close').map(([m, p, o]) => [m, p.operation ?? (p.discard_changes ? 'discard' : 'keep'), o.pid]);
+  assert.deepEqual(steps, [
+    ['project_launch', 'createNew', 7],
+    ['project_close', 'keep', 7],
+    ['project_launch', 'openLocal', 20],
+    ['project_close', 'discard', 20],
+  ]);
+  assert.deepEqual(seen.find(([m, p]) => m === 'project_launch' && p.operation === 'openLocal')[1].activity, extra);
+  assert.deepEqual([...windows.values()], [proj]);
 });
 
 test('music_categories, music_list and music_search each do one thing, and music_apply sends the raw track with its category', async () => {

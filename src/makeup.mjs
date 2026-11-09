@@ -126,6 +126,7 @@ function hsl(r, g, b) {
 }
 
 const hex = (r, g, b) => `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+const rgbOf = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
 // Alpha-weighted colour and placement of a texture's painted pixels. Pixels under 5 % alpha (texture
@@ -346,6 +347,13 @@ export function makeupLayers(projectDir) {
         }
       } else layer.texture_note = tex.note;
       if (eye && p.color) layer.tint = hex(p.color.r * 255, p.color.g * 255, p.color.b * 255);
+      // Not measured: taken as the shader multiplying the texture by the tint, as the material's color
+      // slot reads. The texture colour alone is what the layer would show untinted.
+      if (layer.color && layer.tint) {
+        const [c, t] = [rgbOf(layer.color), rgbOf(layer.tint)];
+        const m = c.map((v, i) => (v * t[i]) / 255);
+        Object.assign(layer, { tinted_color: hex(...m), tinted_hsl: hsl(...m) });
+      }
 
       const named = NAME_PARTS.find(([re]) => re.test(n.name))?.[1];
       if (eye) [layer.part, layer.part_from] = ['美瞳', '组件'];

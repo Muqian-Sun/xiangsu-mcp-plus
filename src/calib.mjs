@@ -40,6 +40,118 @@ export function clearTexture(layout) {
 
 const luma = (d, i) => 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
 
+// The preview recolours everything it draws, the calibration layer included (measured with the filter at
+// 0: texture 0 → about 10, 85 → 98, 128 → 146, 170 → 188, 255 → 255), so the coded colours read back
+// too high and the face layout decoded 40–85 texture px off (忧郁冷都女, model D). A ramp texture of grey
+// stripes at these levels, repeating across the window so every visible part shows all of them, gives
+// the curve: the transform keeps the order of greys, so sorting the stripes' frame colours by brightness
+// matches them to the levels without knowing where each landed. Levels 32 apart, picked: far wider than
+// the JPEG error (12/255 measured) and close enough that the curve is near straight between two.
+export const RAMP_LEVELS = [0, 32, 64, 96, 128, 160, 192, 224, 255];
+// Texture px per stripe, picked: about 17 frame px on the face layout and 29 on the eye layout (1.42 and
+// 0.55 texture px per frame px), so each stripe keeps a flat middle after its JPEG-blurred edges.
+const RAMP_STRIPE = { face: 24, eye: 16, lips: 16 };
+
+export function encodeRamp(layout) {
+  const { width: w, height: h } = LAYOUTS[layout];
+  const win = WINDOWS[layout];
+  const stripe = RAMP_STRIPE[layout];
+  const img = new PNG({ width: w, height: h });
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const xl = win.mirror && x >= w / 2 ? w - 1 - x : x;
+      const i = (y * w + x) * 4;
+      const v = RAMP_LEVELS[Math.floor(xl / stripe) % RAMP_LEVELS.length];
+      img.data.set([v, v, v, xl >= win.x0 && xl < win.x1 && y >= win.y0 && y < win.y1 ? 255 : 0], i);
+    }
+  }
+  return PNG.sync.write(img);
+}
+
+// Derived from B_TOLERANCE's JPEG error: a pixel whose 4-neighbours 2 px away differ by more than this in
+// luma sits on a stripe edge. The layer shows where the frame moved off the bare one by more than the
+// same JPEG allowance per channel. Picked: fewer flat pixels than this per level is too few to trust.
+const RAMP_FLAT = 12;
+const RAMP_SHOWS = 30;
+const RAMP_MIN_PIXELS = 30;
+const RAMP_PEAK_GAP = 8;
+
+const median = (a) => {
+  const s = Float64Array.from(a).sort();
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+// The preview's curve per channel: for each ramp level, the median frame value of the stripes at it.
+// Fails rather than guess when a level does not show or the curve does not rise.
+export function toneCurve(ramp, bare) {
+  const { width: w, height: h } = ramp;
+  if (bare.width !== w || bare.height !== h) throw Error(`FRAME_SIZE_MISMATCH: ${w}×${h} vs ${bare.width}×${bare.height}`);
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) lum[i] = luma(ramp.data, i * 4);
+  const picked = [];
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = 2; x < w - 2; x++) {
+      const i = y * w + x;
+      const p = i * 4;
+      const moved = Math.abs(ramp.data[p] - bare.data[p]) + Math.abs(ramp.data[p + 1] - bare.data[p + 1]) + Math.abs(ramp.data[p + 2] - bare.data[p + 2]);
+      if (moved <= RAMP_SHOWS) continue;
+      // Grey stays grey through the curve within the JPEG error; skin seen through holes does not.
+      if (Math.max(ramp.data[p], ramp.data[p + 1], ramp.data[p + 2]) - Math.min(ramp.data[p], ramp.data[p + 1], ramp.data[p + 2]) > 2 * RAMP_FLAT) continue;
+      const l = lum[i];
+      if ([i - 2, i + 2, i - 2 * w, i + 2 * w].some((j) => Math.abs(lum[j] - l) > RAMP_FLAT)) continue;
+      picked.push(i);
+    }
+  }
+  const k = RAMP_LEVELS.length;
+  if (picked.length < k * RAMP_MIN_PIXELS) throw Error(`CALIBRATION_NOT_VISIBLE: only ${picked.length} frame pixels show the tone ramp on the calibration layer; is the face in view, and does a filter or another layer drawn on top change its colours?`);
+  // The levels' stripes are the peaks of the luma histogram (smoothed over ±2): local maxima, a smaller
+  // one within RAMP_PEAK_GAP of a larger one dropped, the k largest kept. Each pixel goes to the
+  // nearest. Derived: the levels are 32 apart and the curve's slope stayed above 0.7 (measured points),
+  // so neighbouring levels land 20 or more apart; 8 keeps two JPEG-blurred halves of one level together.
+  const hist = new Float64Array(256);
+  for (const i of picked) hist[Math.round(lum[i])] += 1;
+  const smooth = hist.map((_, v) => { let t = 0; for (let d = -2; d <= 2; d++) t += hist[v + d] || 0; return t; });
+  const peaks = [];
+  for (let v = 0; v < 256; v++) if (smooth[v] > 0 && smooth.slice(Math.max(0, v - 3), v + 4).every((x) => x <= smooth[v])) peaks.push(v);
+  peaks.sort((a, b) => smooth[b] - smooth[a]);
+  const kept = [];
+  for (const v of peaks) if (kept.every((u) => Math.abs(u - v) > RAMP_PEAK_GAP)) kept.push(v);
+  if (kept.length < k) throw Error(`TONE_RAMP_LEVEL_MISSING: the ramp shows ${kept.length} grey levels (luma ${kept.sort((a, b) => a - b).join(', ')}), not ${k}`);
+  const centres = kept.slice(0, k);
+  const label = picked.map((i) => centres.reduce((best, c, j) => (Math.abs(lum[i] - c) < Math.abs(lum[i] - centres[best]) ? j : best), 0));
+  const groups = Array.from({ length: k }, () => [[], [], []]);
+  for (const [n, i] of picked.entries()) for (let c = 0; c < 3; c++) groups[label[n]][c].push(ramp.data[i * 4 + c]);
+  const order = centres.map((c, j) => [c, j]).sort((a, b) => a[0] - b[0]).map(([, j]) => j);
+  const counts = order.map((j) => groups[j][0].length);
+  if (counts.some((c) => c < RAMP_MIN_PIXELS)) throw Error(`TONE_RAMP_LEVEL_MISSING: flat pixels per level ${counts.join(', ')}; every one of ${k} levels needs ${RAMP_MIN_PIXELS}`);
+  const curve = [0, 1, 2].map((c) => order.map((j) => median(groups[j][c])));
+  for (const [c, vals] of curve.entries()) {
+    if (vals.some((v, n) => n && v <= vals[n - 1])) throw Error(`TONE_CURVE_NOT_RISING: channel ${'RGB'[c]} reads ${vals.join(', ')} for levels ${RAMP_LEVELS.join(', ')}`);
+  }
+  return { levels: RAMP_LEVELS, r: curve[0], g: curve[1], b: curve[2], pixels: counts };
+}
+
+// Frame value → texture value through the measured curve, linear between levels and past the ends.
+function inverse(levels, vals) {
+  return (v) => {
+    let n = 1;
+    while (n < vals.length - 1 && v > vals[n]) n++;
+    const t = (v - vals[n - 1]) / (vals[n] - vals[n - 1]);
+    return Math.max(0, Math.min(255, levels[n - 1] + t * (levels[n] - levels[n - 1])));
+  };
+}
+
+// A copy of the frame with the preview's curve undone, so the coded colours read as the texture's.
+export function undoTone(img, tone) {
+  const maps = [tone.r, tone.g, tone.b].map((vals) => {
+    const f = inverse(tone.levels, vals);
+    return Uint8Array.from({ length: 256 }, (_, v) => Math.round(f(v)));
+  });
+  const data = Buffer.from(img.data);
+  for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) data[i + c] = maps[c][data[i + c]];
+  return { width: img.width, height: img.height, data };
+}
+
 // B is written as 128 everywhere in the code, and with the other makeup and filters muted the frame shows
 // the calibration layer's own colours, so B stays near 128 wherever it shows. Derived: preview frames are
 // JPEG, measured up to 12/255 off the lossless frame around the eyes; twice that is the tolerance (the
@@ -409,9 +521,12 @@ function put(img, x, y, c) {
   [img.data[i], img.data[i + 1], img.data[i + 2]] = c;
 }
 
+// The minus sign as a bar: texture y fitted past the layer's edge goes below 0 on the face layout.
+const MINUS = '000000111000000';
+
 function label(img, x, y, text, c, s = 2) {
   [...String(text)].forEach((ch, k) => {
-    const bits = DIGITS[Number(ch)];
+    const bits = ch === '-' ? MINUS : DIGITS[Number(ch)];
     for (let r = 0; r < 5; r++) for (let q = 0; q < 3; q++) if (bits[r * 3 + q] === '1') for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) put(img, x + (k * 4 + q) * s + dx, y + r * s + dy, c);
   });
 }
