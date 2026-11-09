@@ -30,7 +30,7 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
@@ -777,7 +777,7 @@ export function createServer(deps = {}) {
       name: 'task_detail',
       refs: true,
       description:
-        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。成长任务返回奖励、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。成长任务返回奖励、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
@@ -888,7 +888,7 @@ export function createServer(deps = {}) {
       name: 'my_effects',
       refs: true,
       description:
-        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews。',
+        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews；曝光、投稿趋势、等级和收益把 effect_id 和 app_effect_id 交给 my_effect_stats。',
       shape: {
         ...target,
         cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
@@ -903,6 +903,46 @@ export function createServer(deps = {}) {
         '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空）。',
       shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。') },
       run: community('my_effect_reviews'),
+    },
+    {
+      name: 'my_effect_stats',
+      refs: true,
+      description:
+        '一个自己已上线特效的数据，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；投稿等级 level（当前等级代码 code、当前投稿 publish、下一级代码 next_code、升到下一级还差的投稿 publish_to_next）；数据趋势 trend（按天的曝光 exposure 和投稿 publish，是逐日累计值，数据隔天才更新，当天为空；另有累计曝光、试拍 trial_total、跟拍、视频播放）；流量状态 traffic（如「流量正常」）；播放数 views（与任务页的播放数同源）；收益明细 revenue（总收益、基础等级奖、年轻奖、跟拍奖、精选奖，各带说明如「暂未达到最低等级」「不符合精选标准」）；绑定的任务和灵感 related。等级代码和字母等级的对应没有接口给出，投稿门槛见激励规则（像塑 App「激励规则」页）。',
+      shape: {
+        ...target,
+        effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。'),
+        app_effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的同一个特效的 app_effect_id（抖音上的特效 ID）。'),
+        trend: z.enum(Object.keys(TREND_CYCLES)).optional().describe('数据趋势的范围：recent 近 7 日（默认），since_online 上线后。'),
+      },
+      run: community('my_effect_stats'),
+    },
+    {
+      name: 'my_overview',
+      description:
+        '当前账号的总览，与像塑移动版「我的」页和钱包同一组接口：昵称、粉丝数、是否实名、特效作者 / 模板作者各自的等级 identities；数据卡片 figures（开拍总计、播放总计、本月提交、本月上线、本月收入、累计收入，页面原样的名称、值和文字）；本月数据 month（本月上线数、本月收入、前一天收入、累计收入，其余字段含义未核实，原样放在 unread）；收益 revenue（累计和当月总额、按来源的占比和金额、当月每天的收入）。month 参数选看哪个月的收益。',
+      shape: { ...target, month: z.string().regex(/^\d{6}$/).optional().describe('收益月份 YYYYMM，默认本月。') },
+      run: community('my_overview'),
+    },
+    {
+      name: 'messages_list',
+      description:
+        '像塑移动版「消息」页的站内信，最新的在前：标题、正文、时间、是否已读、分组（服务 / 官方）、审核类消息的状态和对应的 effect_id、点开的链接 link。包括发布成功、进入测试、上线（「拍摄特效视频可获得更多冷启流量」）、审核未通过、精选审核中、任务完成、获奖公布、成长之路奖金到账等。按 cursor 翻页。',
+      shape: {
+        ...target,
+        group: z.enum(Object.keys(MESSAGE_GROUPS)).optional().describe('all 全部（默认），service 服务（任务完成、获奖公布、精选审核等），official 官方（发布、审核、上线等）。'),
+        cursor: z.string().regex(/^\d+$/).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(MESSAGE_MAX).optional().describe(`每页数量，默认 20（最大 ${MESSAGE_MAX}）。`),
+      },
+      run: community('messages_list'),
+    },
+    {
+      name: 'my_task_status',
+      refs: true,
+      description:
+        '一次列出提交到所有已领取任务里的作品和它们的任务评定（逐个任务读任务详情页的「我的作品」，与 task_detail 的 my_effects 相同）：每条带任务 task_id 和标题、作品名、effect_id、审核状态、拍摄 / 播放 / 投稿峰值、任务评定 task_state（pending 待评定、unfinished 任务未完成、done 任务已完成）和 off_theme（任务页标了「主题不符合」）；summary 按评定计数并统计主题不符合的条数。没交过作品的任务不出现在列表里；每个已领取任务一次请求，按顺序发。',
+      shape: { ...target },
+      run: community('my_task_status'),
     },
     {
       name: 'music_list',
