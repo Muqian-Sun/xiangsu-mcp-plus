@@ -68,6 +68,14 @@ const BEIJING_TZ = '+08:00';
 const COLLECTED_ARTWORK_TYPES = [0, 2, 5, 14];
 // Collection item types as the submit window labels them: 1 and 4 hotspots, 2 inspirations, 3 effects.
 const COLLECTED_INSPIRATION = 2;
+// The 作品 page's 官方精选 filter (isChosen) sends rating=1; 0 or none lists every effect and 「chosen」
+// is refused (2026-11-09).
+const CHOSEN_RATING = 1;
+const ONLINE = 103;
+// Picked, as my_effects' page cap: a page of 50 came back whole (18 effects, 2026-11-09).
+const ARTWORK_PAGE = 50;
+// The only sign that an effect went into 精选审核: 「你的特效正在精选审核中，预估7个工作日完成，请耐心等待。」
+const IN_INNOVATION_REVIEW = /精选审核中/;
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -474,11 +482,13 @@ function trendDays(stat) {
   return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
-// A message's effect: 审核 notices open the review record page of it.
+// A message's effect: 审核 notices open its review record page, 上线 and 精选审核 notices the app's
+// 作品详情 page (effectcam://flutter?page=/effect-detail&effectId=…).
 function messageEffectId(page) {
   try {
     const u = new URL(page);
-    return u.pathname === '/m/detail' ? u.searchParams.get('id') : null;
+    if (u.pathname === '/m/detail') return u.searchParams.get('id');
+    return u.protocol === 'effectcam:' ? u.searchParams.get('effectId') : null;
   } catch (_) {
     return null;
   }
@@ -1109,6 +1119,64 @@ const methods = {
     };
   },
 
+  // Every effect of the 作品 list, newest first; `query` narrows it like the page's filters.
+  async allArtworks(query = {}) {
+    const all = [];
+    for (let sort; ; ) {
+      const d = await request(this, 'GET_MY_EFFECTS', '/effectcam/v1/artworks', { query: { count: ARTWORK_PAGE, sort, ...query } });
+      const page = d.effects || [];
+      all.push(...page);
+      if (page.length < ARTWORK_PAGE || !d.sort) return all;
+      sort = d.sort;
+    }
+  },
+
+  // Which effects went into 精选审核 and which were picked. Nothing lists the first: 精选审核 review_nodes
+  // stayed empty for the effects that got the 精选审核中 message (2026-11-09), and the 收益 card's 精选奖
+  // says 不符合精选标准 for every effect. Picked effects are what the 作品 page's 官方精选 filter lists.
+  async myInnovationStatus() {
+    const [effects, chosen] = await Promise.all([this.allArtworks(), this.allArtworks({ rating: CHOSEN_RATING })]);
+    const messages = [];
+    for (let cursor; ; ) {
+      const page = await this.messagesList({ cursor, count: MESSAGE_MAX });
+      messages.push(...page.items);
+      if (!page.has_more) break;
+      cursor = page.next_cursor;
+    }
+    const picked = new Set(chosen.map((e) => String(e.id)));
+    // Newest first, as the 消息 page lists them.
+    const notices = new Map();
+    for (const m of messages) {
+      if (!m.effect_id || !/精选/.test(`${m.title}${m.content}`)) continue;
+      if (!notices.has(m.effect_id)) notices.set(m.effect_id, []);
+      notices.get(m.effect_id).push({ at: m.at, content: m.content });
+    }
+    const items = effects.map((e) => {
+      const id = String(e.id);
+      const list = notices.get(id) || [];
+      const reviewing = list.filter((n) => IN_INNOVATION_REVIEW.test(n.content));
+      let state = 'none';
+      if (picked.has(id)) state = 'picked';
+      else if (list.length) state = IN_INNOVATION_REVIEW.test(list[0].content) ? 'in_review' : 'notified';
+      return {
+        effect_id: id,
+        name: e.name,
+        status: e.effect_status,
+        status_text: e.effect_status_desc || null,
+        online_at: iso(Number(e.first_online_at)),
+        state,
+        review_since: reviewing.length ? reviewing.at(-1).at : null,
+        notices: list,
+      };
+    });
+    const online = items.filter((i) => i.status === ONLINE);
+    const count = (state) => online.filter((i) => i.state === state).length;
+    return {
+      summary: { online: online.length, picked: count('picked'), in_review: count('in_review'), notified: count('notified'), pick_rate: online.length ? count('picked') / online.length : null },
+      items,
+    };
+  },
+
   // The mobile app's 消息 page, newest first; a page's last message id fetches the next page.
   async messagesList({ group = 'all', cursor, count = 20 } = {}) {
     if (!hasOwn(MESSAGE_GROUPS, group)) throw Error(`INVALID_GROUP: ${group}; valid: ${Object.keys(MESSAGE_GROUPS).join(', ')}`);
@@ -1209,6 +1277,7 @@ const METHODS = {
   my_revenue: 'myRevenue',
   messages_list: 'messagesList',
   my_task_status: 'myTaskStatus',
+  my_innovation_status: 'myInnovationStatus',
   douyin_hot_list: 'douyinHotList',
   douyin_hot_detail: 'douyinHotDetail',
   douyin_hot_videos: 'douyinHotVideos',

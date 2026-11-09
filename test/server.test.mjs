@@ -76,6 +76,7 @@ const OWN = [
   'my_effect_reviews',
   'my_effect_trend',
   'my_effects',
+  'my_innovation_status',
   'my_profile',
   'my_revenue',
   'my_task_status',
