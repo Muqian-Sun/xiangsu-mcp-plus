@@ -27,8 +27,16 @@ function work(id, title, { effectId = 90686370, file = true } = {}) {
 
 // A fake editor with the homepage template modules; transformTemplate mimics the editor's field names,
 // and the download model writes its zip (and partial .tmp) into a cache folder like the real one.
-function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTemplate/g/未命名' }, cached = false } = {}) {
-  const calls = { list: [], search: [], download: [], destroyed: 0 };
+// The 做同款 answers of get_item_project by effect id (fields as answered on 2026-11-09); effects
+// without one are answered with no data.
+const ITEM_PROJECTS = {
+  91650922: { is_available_project: true, project_id: 88758147, project_name: '可可裸妆', source: 5, guide_project_info: { id: '8', name: '', project_url: '' } },
+  333: { is_available_project: true, project_id: 444, project_name: '不在首页', source: 5, guide_project_info: { id: '9', name: '', project_url: '' } },
+  555: { is_available_project: false, project_id: 556, project_name: '没授权', guide_project_info: { id: '10', name: '', project_url: '' } },
+};
+
+function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTemplate/g/未命名' }, cached = false, itemProjects = ITEM_PROJECTS } = {}) {
+  const calls = { list: [], search: [], download: [], destroyed: 0, itemProject: [] };
   const cache = tmpdir('xs-cache-');
   const zipOf = (id) => path.join(cache, `${id}.zip`);
   if (cached) fs.writeFileSync(zipOf('1'), 'users own cached zip');
@@ -47,6 +55,7 @@ function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTem
         const byId = {
           90686370: [work('1', 'AI 修仙合掌转场')],
           111: [work('5', '别的特效', { effectId: 222 })],
+          88758147: [work('11', '可可裸妆（旧版）', { effectId: 88758147 }), work('8', '可可裸妆', { effectId: 88758147 })],
         };
         const byName = {
           合掌: [work('3', '合掌祈福时刻', { file: false })],
@@ -87,12 +96,26 @@ function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTem
         }
       },
     },
+    // What the community feature's signed requests need.
+    [M.urls]: { Domain: { kBackendApiURL: 'https://api.test' }, DomainPath: { kActivityAPI: '/a', kTaskListAPI: '/t', kGrowthTaskList: '/g' } },
+    [M.bizUtils]: { PlatformUtils: { genSignData: () => 'signed' }, UserAgentUtils: { userAgentGenerator: () => () => 'DouyinAR/9.7.2' } },
+    [M.orionui]: { CookieManager: class { async getCookie() { return 'sessionid=abc'; } } },
+    [M.activityTypes]: { getTypeName: () => 'normal', TaskStatus: { WAIT_RECEIVE: 1, WAIT_SUBMIT: 2 }, growthTaskType: { Newbie: 0 } },
+    [M.inspirationConst]: { IS_COLLECT_PARAMS_TYPE: { Default: 2 } },
+    [M.inspirationBridge]: { markAgentInspirationUsed: () => {} },
   };
   const mod = (name) => {
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, modules, cache };
+  const fetch = async (href, init) => {
+    const url = new URL(href);
+    if (`${init.method} ${url.pathname}` !== 'GET /cam_api/feed/v1/get_item_project') throw Error(`unexpected ${init.method} ${url.pathname}`);
+    const id = url.searchParams.get('effect_id');
+    calls.itemProject.push(id);
+    return new Response(JSON.stringify({ code: 0, message: 'success', ...(itemProjects[id] ? { data: itemProjects[id] } : {}) }));
+  };
+  return { lib: new Library(mod, fetch), calls, modules, cache };
 }
 
 test('worksNav lists homepage categories and sorts', async () => {
@@ -160,32 +183,51 @@ test('works_search sends the homepage search word within a category', async () =
   await assert.rejects(lib.worksSearch({ query: '  ' }), /INVALID_QUERY/);
 });
 
-test('works_by_effect looks each effect up by effect id and falls back to same-name works', async () => {
+test('works_by_effect looks each effect up by effect id, then its 做同款 project, then same-name works', async () => {
   const { lib, calls } = setup();
   const out = await lib.worksByEffect({
     effects: [
       { effect_id: '90686370', name: 'AI 修仙合掌转场' },
+      { effect_id: '91650922', name: '顶美精致淡妆感' },
       { effect_id: '90999486', name: ' 眼底的情感测试 ' },
+      { effect_id: '333', name: '眼底的情感测试' },
+      { effect_id: '555' },
       { effect_id: '111', name: '没有的特效' },
       { effect_id: '222' },
     ],
   });
+  const keeko = { template_id: '8', effect_id: '88758147', name: '可可裸妆' };
+  const off = { template_id: '9', effect_id: '444', name: '不在首页' };
   assert.deepEqual(out.effects, [
     { effect_id: '90686370', name: 'AI 修仙合掌转场', status: 'found', template_ids: ['1'] },
+    // Only the work the 做同款 button names counts, not other works of that effect.
+    { effect_id: '91650922', name: '顶美精致淡妆感', status: 'same_style', template_ids: ['8'], same_style: keeko },
     { effect_id: '90999486', name: '眼底的情感测试', status: 'same_name', template_ids: ['6'] },
+    // A 做同款 project the homepage does not have is still reported.
+    { effect_id: '333', name: '眼底的情感测试', status: 'same_name', template_ids: ['6'], same_style: off },
+    // is_available_project false is no 做同款 project.
+    { effect_id: '555', name: null, status: 'not_on_homepage', template_ids: [] },
     { effect_id: '111', name: '没有的特效', status: 'not_on_homepage', template_ids: [] },
     { effect_id: '222', name: null, status: 'not_on_homepage', template_ids: [] },
   ]);
   assert.deepEqual(out.category, { id: '44668', name: '推荐' });
-  assert.deepEqual(out.items.map((i) => [i.template_id, i.effect_id]), [['1', '90686370'], ['6', '91256938']]);
-  assert.deepEqual(out.raw.map((t) => t.templateId), ['1', '6']);
-  // A found effect costs one request; the name search only runs for a missed effect that has a name.
+  assert.deepEqual(out.items.map((i) => [i.template_id, i.effect_id]), [['1', '90686370'], ['8', '88758147'], ['6', '91256938']]);
+  assert.deepEqual(out.raw.map((t) => t.templateId), ['1', '8', '6']);
+  // A found effect costs one request; a missed one asks for its 做同款 project, looks that up by its
+  // effect id, and only then searches by name if it has one.
+  assert.deepEqual(calls.itemProject, ['91650922', '90999486', '333', '555', '111', '222']);
   assert.deepEqual(
     calls.search.map((p) => [p.searchType, p.searchWord, p.categoryId]),
     [
       [2, '90686370', '44668'],
+      [2, '91650922', '44668'],
+      [2, '88758147', '44668'],
       [2, '90999486', '44668'],
       [1, '眼底的情感测试', '44668'],
+      [2, '333', '44668'],
+      [2, '444', '44668'],
+      [1, '眼底的情感测试', '44668'],
+      [2, '555', '44668'],
       [2, '111', '44668'],
       [1, '没有的特效', '44668'],
       [2, '222', '44668'],

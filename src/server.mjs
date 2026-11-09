@@ -31,13 +31,14 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
   'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具。';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
+const SCRIPT_TAG_TEXT = Object.entries(SCRIPT_TAGS).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -589,7 +590,7 @@ export function createServer(deps = {}) {
       name: 'works_by_effect',
       refs: true,
       description:
-        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到两次请求，20 个约 6 秒。',
+        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subject_detail / rank_innovation / effect_search 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_style 首页没有它，但像塑移动版「做同款」按钮指向首页上的一个工程（same_style 给出那个工程所属特效的 effect_id 和名称，常常是别人的另一个特效，如「顶美精致淡妆感」指向「可可裸妆」，不是这个特效本身的工程）；same_name 首页没有它、也没有做同款工程，只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 拿不到工程。做同款工程不在首页时 same_style 仍会给出，status 按同名作品的查找结果。found、same_style 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到四次请求。',
       shape: {
         ...target,
         effects: z
@@ -1055,6 +1056,93 @@ export function createServer(deps = {}) {
         '一次列出提交到所有已领取任务里的作品和它们的任务评定（逐个任务读任务详情页的「我的作品」，与 task_detail 的 my_effects 相同）：每条带任务 task_id 和标题、作品名、effect_id、审核状态、拍摄 / 播放 / 投稿峰值、任务评定 task_state（pending 待评定、unfinished 任务未完成、done 任务已完成）和 off_theme（任务页标了「主题不符合」）；summary 按评定计数并统计主题不符合的条数。没交过作品的任务不出现在列表里；每个已领取任务一次请求，按顺序发。',
       shape: { ...target },
       run: community('my_task_status'),
+    },
+    {
+      name: 'effect_detail',
+      description:
+        '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、几条示例视频（地址和封面）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
+      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、my_effects 返回的 app_effect_id。') },
+      run: community('effect_detail'),
+    },
+    {
+      name: 'effect_videos',
+      refs: true,
+      description:
+        '用一个特效拍的抖音视频（像塑移动版「作品详情」页的视频卡片，别人的特效也能看）：累计点赞和跟拍（页面原样文字），以及几条热门视频 videos（实测 5 条）：抖音视频 ID item_id、标题、作者、点赞、跟拍、封面 cover_ref 和视频 video_ref（交给 image_view 拿地址）。看别人怎么拍、文案怎么写。自己刚上线、还没人拍的特效列表是空的。',
+      shape: {
+        ...target,
+        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、my_effects 等返回的 effect_id）。'),
+        app_effect_id: z.string().regex(/^\d+$/).describe('同一个特效的 app_effect_id。'),
+      },
+      run: community('effect_videos'),
+    },
+    {
+      name: 'effect_search',
+      refs: true,
+      description: `按关键词搜索像塑全平台已上线的特效或模板（像塑移动版搜索页同一接口）：effect_id、app_effect_id、名称、说明、等级代码、年轻喜爱度、累计投稿（页面原样文字）、图标 icon_ref。特效最多翻到 100 条。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。只搜首页工程用 works_search；拿到特效后用 effect_detail 看详情、effect_videos 看视频、works_by_effect 找工程。搜灵感用 inspiration_search，搜教程用 tutorial_search。`,
+      shape: {
+        ...target,
+        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
+        kind: z.enum(EFFECT_SEARCH_KINDS).optional().describe('effect 特效（默认），template 模板。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+      },
+      run: community('effect_search'),
+    },
+    {
+      name: 'inspiration_search',
+      refs: true,
+      description: `按关键词搜索灵感（像塑移动版搜索页同一接口；inspiration_list 只能按分类翻）：字段同 inspiration_list。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。`,
+      shape: {
+        ...target,
+        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+      },
+      run: community('inspiration_search'),
+    },
+    {
+      name: 'tutorial_search',
+      refs: true,
+      description: `按关键词搜索像塑官方教程（像塑移动版搜索页同一接口）：字段同 tutorials_list。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。`,
+      shape: {
+        ...target,
+        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+      },
+      run: community('tutorial_search'),
+    },
+    {
+      name: 'tutorials_list',
+      refs: true,
+      description:
+        '像塑官方教程（移动版「教程」页同一组接口）：每次都带上全部分类 tabs（特效：新手入门、特效进阶、精选课程、PC工具、工程实操、三方工具、爆款分享、账号运营、视频教程；模板：模板入门、模板进阶等），按 tab_id 列出一个分类的教程，不传时列出全部（约 190 篇，比各分类之和多）。每篇有标题、标签（如「新手必看」「拍视频脚本」）、学习人数、作者、上线日期、是否付费、文档链接 link（飞书文档）、封面 cover_ref 和视频 video_ref（视频教程才有）。按 offset / count 分页。按关键词找教程用 tutorial_search。',
+      shape: {
+        ...target,
+        tab_id: z.number().int().optional().describe('分类 ID，取返回的 tabs 里的 tab_id；省略时列出全部教程。'),
+        ...pageShape,
+      },
+      run: community('tutorials_list'),
+    },
+    {
+      name: 'shoot_activity',
+      description:
+        '当前账号本期的「拍视频激励」活动（像塑移动版首页活动卡片同一接口，按周重置）：活动名、起止时间、本期拍摄数 shoot_count、收入 income（单位未核实，原样给）、本期任务 tasks（如「拍作品视频发布到抖音」「按照脚本拍摄同款视频」，各自的奖励文字、完成次数）、连续创作打卡 streaks（每档目标次数和奖金）、新手成长任务 newbie（每项的状态和页面文字、全部完成的奖金）、下次重置时间。状态码 status 的含义接口没给，原样给出，结合 text、finish_count 看。拍摄脚本用 shoot_scripts。',
+      shape: { ...target },
+      run: community('shoot_activity'),
+    },
+    {
+      name: 'shoot_scripts',
+      refs: true,
+      description: `像塑官方的拍摄脚本（移动版「拍摄脚本」同一接口）：教你用特效拍什么样的视频（如「【测一测】表演有梗结果」「【美妆】带特效前后反差」），每条有脚本 ID、名称、完整说明 description（脚本解读和「尝试拍一个」的具体做法）、标签代码 tags、播放数 views、拍摄数 shoots、封面 cover_ref 和示范视频 video_ref。tag 按标签代码筛选，App 里没有标签名，实测各代码下的脚本：${SCRIPT_TAG_TEXT}。type 是接口给的脚本类型代码，含义也没给出（1 多为技巧合集，2 多为具体演绎）。全部约 50 条，按 offset / count 分页。`,
+      shape: {
+        ...target,
+        tag: z.number().int().optional().describe(`标签代码：${SCRIPT_TAG_TEXT}；省略时全部。`),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(SCRIPT_MAX).optional().describe(`每页数量，默认 20（最大 ${SCRIPT_MAX}）。`),
+      },
+      run: community('shoot_scripts'),
     },
     {
       name: 'music_categories',

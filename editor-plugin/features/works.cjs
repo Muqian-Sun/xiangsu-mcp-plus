@@ -215,9 +215,11 @@ const methods = {
   // Effects (effect_id and optional name, as rank boards list them) looked up one by one with the
   // homepage's 特效ID search. A work matches an effect only on its effect_id. An effect without one may
   // still have homepage works of the same name (another creator's copy, or a re-upload); those come
-  // back as same_name candidates, never as the effect itself. Unlike the name search, the 特效ID search
-  // in 推荐 covers works the name search only finds in other categories (8 of 8 checked on 2026-11-07;
-  // the same ids searched in their own category found none), so 推荐 alone is asked.
+  // back as same_name candidates, never as the effect itself. Before those, an effect the homepage does
+  // not have is checked for the project the mobile app's 做同款 button points to (sameStyleProject): a
+  // homepage work found by its own effect id, which may be another effect's project. Unlike the name
+  // search, the 特效ID search in 推荐 covers works the name search only finds in other categories (8 of
+  // 8 checked on 2026-11-07; the same ids searched in their own category found none), so 推荐 alone is asked.
   async worksByEffect({ effects, category_id } = {}) {
     if (!Array.isArray(effects) || !effects.length || effects.length > MAX_EFFECTS) throw Error(`INVALID_EFFECTS: pass 1-${MAX_EFFECTS} effects`);
     const items = [];
@@ -245,8 +247,16 @@ const methods = {
         out.push({ effect_id: id, name, status: 'found', template_ids: found });
         continue;
       }
+      const style = await this.sameStyleProject(id);
+      if (style) {
+        const guide = take(await this.worksSearchPage(category, style.effect_id, 'effect_id'), (w) => w.template_id === style.template_id);
+        if (guide.length) {
+          out.push({ effect_id: id, name, status: 'same_style', template_ids: guide, same_style: style });
+          continue;
+        }
+      }
       const same = name ? take(await this.worksSearchPage(category, name, 'name'), (w) => w.title === name) : [];
-      out.push({ effect_id: id, name, status: same.length ? 'same_name' : 'not_on_homepage', template_ids: same });
+      out.push({ effect_id: id, name, status: same.length ? 'same_name' : 'not_on_homepage', template_ids: same, ...(style ? { same_style: style } : {}) });
     }
     return { category, effects: out, items, raw };
   },

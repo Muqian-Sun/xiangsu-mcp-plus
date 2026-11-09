@@ -21,6 +21,7 @@ const works = require('./features/works.cjs');
 const square = require('./features/square.cjs');
 const delivery = require('./features/delivery.cjs');
 const community = require('./features/community.cjs');
+const discover = require('./features/discover.cjs');
 const music = require('./features/music.cjs');
 const preview = require('./features/preview.cjs');
 const search = require('./features/search.cjs');
@@ -31,7 +32,7 @@ const makeup = require('./features/makeup.cjs');
 const dev = require('./features/dev.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, aicombine, ai3d, arvideo, makeup, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, makeup, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -55,6 +56,10 @@ module.exports = {
   TREND_CYCLES: community.TREND_CYCLES,
   MESSAGE_GROUPS: community.MESSAGE_GROUPS,
   MESSAGE_MAX: community.MESSAGE_MAX,
+  EFFECT_SEARCH_KINDS: discover.EFFECT_SEARCH_KINDS,
+  SEARCH_MAX: discover.SEARCH_MAX,
+  SCRIPT_TAGS: discover.SCRIPT_TAGS,
+  SCRIPT_MAX: discover.SCRIPT_MAX,
   CONFIG_PATH: dev.CONFIG_PATH,
   AI3D_FACE_NUM: ai3d.FACE_NUM,
   AI3D_IMAGE_LIMIT: ai3d.IMAGE_LIMIT,
