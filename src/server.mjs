@@ -18,7 +18,7 @@ import { fetchImage, readImageFile } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
-import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
+import { formatObjects, formatTree, pickInspect, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
 import { BLENDS, CURVES, LAYOUTS, LIMITS as PAINT_LIMITS, paint, previewPng, writeTexture } from './paint.mjs';
@@ -225,7 +225,7 @@ class Seen {
 }
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
-const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs，如 img:12、video:3），交给 image_view：图片直接显示，视频和音频返回原地址；引用在 MCP 服务这次运行期间有效。';
+const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs 字段，如 img:12、video:3）。看图时把引用放进 image_view 的 images 数组（参数名就是 images，如 images: ["img:12", "img:13"]）：图片直接显示，视频和音频返回原地址；引用在 MCP 服务这次运行期间有效。';
 const KIND_TEXT = { video: '视频', audio: '音频' };
 const failure = (error) => ({ content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true });
 
@@ -369,6 +369,8 @@ export function createServer(deps = {}) {
     if (hits.length === 1) return String(hits[0].instance_id);
     throw Error(project_path ? `NO_UNIQUE_INSTANCE for ${project_path}: ${hits.length} matches` : `AMBIGUOUS_INSTANCE: ${list.length} editor windows; pass project_path or instance_id`);
   };
+  // The official tools take objects by guid only; this is the scene's guids and names to find them by.
+  const namesTree = (instance_id) => d.official.callJson('get_scene', { instance_id, names_only: true, intention: '按名称或路径找对象' });
   // Homepage works, the asset library and the add-object menu do not depend on the project, so any
   // window serves them (the lowest pid when no target is given).
   const homeWindow = async ({ project_path, instance_id }) => {
@@ -473,7 +475,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_view',
-      description: `查看图片。列表类工具（素材、作品、灵感、任务、排行榜、音乐等）返回的是短引用 *_ref / *_refs（如 img:12），详情类工具（inspiration_detail 的 images、menu_list details 的 image_url）返回地址，都交给本工具；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。视频和音频引用（video:3、audio:5）看不了画面，返回它的原地址。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
+      description: `查看图片。列表类工具（素材、作品、灵感、任务、排行榜、音乐等）返回的是短引用 *_ref / *_refs（如 img:12），详情类工具（inspiration_detail 的 images、menu_list details 的 image_url）返回地址，都放进参数 images（数组，如 images: ["img:12", "https://…"]；没有 ref / refs / url 参数）；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。视频和音频引用（video:3、audio:5）看不了画面，返回它的原地址。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
       shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('其它工具返回的引用（img:12）、http(s) 图片地址，或本机图片文件的绝对路径。') },
       run: async ({ images }) => {
         const content = [];
@@ -755,7 +757,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspiration_detail',
       description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
-      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / rank_hotspots / task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
+      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / inspiration_search / hotspot_inspirations / growth_task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
       run: community('inspiration_detail'),
     },
     {
@@ -1185,11 +1187,11 @@ export function createServer(deps = {}) {
     {
       name: 'scene_tree',
       description:
-        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比官方 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数；要渲染组和对象的完整 JSON 用 get_scene。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
+        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比官方 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数；要渲染组和对象的完整 JSON 用 get_scene。subtree 只看某个对象：guid、名称，或层级路径（从渲染组名起，或只给末尾几段，如「2D 前景/2D 摄像机」；同名对象常见，重名时报 AMBIGUOUS_OBJECT 并列出各自的 guid 和路径），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
-        subtree: z.string().min(1).optional().describe('只输出这个对象及其子对象（guid 或名称；project_dir 时用 #序号 或名称）。'),
+        subtree: z.string().min(1).optional().describe('只输出这个对象及其子对象：guid（project_dir 时是 #序号）、名称或层级路径。'),
         depth: z.number().int().min(1).max(30).optional().describe('展开层数，默认 6。'),
         save_to: saveTo,
       },
@@ -1203,7 +1205,13 @@ export function createServer(deps = {}) {
           warn = unreadableNote(scene);
         } else {
           const instance_id = await officialInstance(a);
-          out = formatTree(await d.official.callJson('get_scene', { instance_id, summary: false, depth, ...(subtree ? { subtree } : {}), intention: '读取场景结构' }));
+          let guid;
+          if (subtree) {
+            const hit = resolveObject(sceneObjects(await namesTree(instance_id)), subtree);
+            if (!hit) throw Error(`SUBTREE_NOT_FOUND: no scene object ${subtree} (guid, name or path)`);
+            guid = hit.guid;
+          }
+          out = formatTree(await d.official.callJson('get_scene', { instance_id, summary: false, depth, ...(guid ? { subtree: guid } : {}), intention: '读取场景结构' }));
         }
         out = out || '（场景为空）';
         const saved = save_to ? saveFile(save_to, 'scene_tree.txt', out) : null;
@@ -1213,11 +1221,11 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guids 用 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
-        guids: z.array(z.string().min(1)).min(1).max(40).describe('对象或组件的 guid（scene_tree / get_scene 返回的；project_dir 时是 #序号）。'),
+        guids: z.array(z.string().min(1)).min(1).max(40).describe('要看的对象：guid（scene_tree / get_scene 返回的；project_dir 时是 #序号）、名称或层级路径；开窗口时也可以是组件或资源的 guid。'),
         component_types: z.array(z.string().min(1)).min(1).optional().describe('只保留这些类型的组件。'),
         fields: z.array(z.string().min(1)).min(1).optional().describe('只保留属性名包含这些片段的属性。'),
         preset: z.enum(['key']).optional().describe('key：只留关键参数，见工具说明。'),
@@ -1242,12 +1250,15 @@ export function createServer(deps = {}) {
           const instance_id = await officialInstance(a);
           const root = await projects.resolveProjectPath({ instance_id });
           const inspect = (guid) => d.official.callJson('inspect', { instance_id, guid, intention: '批量查看对象参数' });
+          const objects = sceneObjects(await namesTree(instance_id));
           const cache = new Map();
-          for (const guid of guids) {
+          for (const ref of guids) {
             try {
+              // Not an object of the tree: a component or resource guid, passed on as given.
+              const guid = resolveObject(objects, ref)?.guid ?? ref;
               out.push(await resolveRefs(pickInspect(await inspect(guid), pick), inspect, { root, cache }));
             } catch (e) {
-              out.push({ guid, error: String(e.message ?? e) });
+              out.push({ guid: ref, error: String(e.message ?? e) });
             }
           }
         }
@@ -1703,7 +1714,7 @@ export function createServer(deps = {}) {
     {
       name: 'menu_list',
       description:
-        `列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。details=true 时每项再带说明 description 和示意图（编辑器悬停提示里的图：在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null），按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看；details 一次最多 ${MAX_MENU_PREVIEW} 项，query 匹配更多时报错。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。`,
+        `列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 edit_by_dsl 的 add_builtin_object 命令只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。details=true 时每项再带说明 description 和示意图（编辑器悬停提示里的图：在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null），按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看；details 一次最多 ${MAX_MENU_PREVIEW} 项，query 匹配更多时报错。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。`,
       shape: {
         ...target,
         query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。'),
@@ -1792,11 +1803,11 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_tasks',
-      description: `素材库「AI 3D」的生成任务（当前账号）。不传 task_id 时按 kind 分页列出历史任务：状态（running / finished / failed）、创建和完成时间、输入（图生 3D 的精度、3D 动画的模型）、失败原因，以及结果是否已下载到本机和本机的预览图 / 预览视频（preview_image_file 交给 image_view 看）。传 task_id 时只查这一个；再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI3D_MAX_WAIT_S} 秒），status=finished 后用 ai3d_import 导入。`,
+      description: `素材库「AI 3D」的生成任务（当前账号）。不传 task_id 时按 kind（必填）分页列出历史任务：状态（running / finished / failed）、创建和完成时间、输入（图生 3D 的精度、3D 动画的模型）、失败原因，以及结果是否已下载到本机和本机的预览图 / 预览视频（preview_image_file 交给 image_view 看）。传 task_id 时只查这一个（不用给 kind）；再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI3D_MAX_WAIT_S} 秒），status=finished 后用 ai3d_import 导入。`,
       shape: {
         ...target,
-        kind: z.enum(['image', 'animation', 'gs']).describe('image=3D模型（图生 3D）、animation=3D动画、gs=高精度模型重建。'),
-        task_id: z.string().min(1).optional().describe('只查这个任务。'),
+        kind: z.enum(['image', 'animation', 'gs']).optional().describe('列历史时必填：image=3D模型（图生 3D）、animation=3D动画、gs=高精度模型重建。只查一个 task_id 时不用给。'),
+        task_id: z.string().min(1).optional().describe('只查这个任务（不用给 kind）。'),
         wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
         cursor: z.number().int().min(0).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
         count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AI3D_HISTORY_PAGE}（服务端上限）。`),
@@ -1804,8 +1815,9 @@ export function createServer(deps = {}) {
       run: async (a) => {
         const { project_path, instance_id, kind, task_id, wait_s = 0, cursor, count } = a;
         const win = await homeWindow({ project_path, instance_id });
-        if (task_id !== undefined) return text({ kind, ...(await d.callPlugin('ai3d_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 30000 })) });
+        if (task_id !== undefined) return text({ ...(kind ? { kind } : {}), ...(await d.callPlugin('ai3d_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 30000 })) });
         if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        if (kind === undefined) throw Error('INVALID_ARGUMENTS: kind is required to list the history (image, animation or gs)');
         return text(await d.callPlugin('ai3d_tasks', { kind, cursor, count }, win));
       },
     },
@@ -1878,7 +1890,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'face_warp_list',
-      description: '列出场景里所有「塑型画笔」组件（FaceWarpX，含猫脸/狗脸），返回 object_path、是否启用、每项画笔的序号与强度。官方 set_component 改不了画笔强度，用 face_warp_set_intensity。',
+      description: '列出场景里所有「塑型画笔」组件（FaceWarpX，含猫脸/狗脸），返回 object_path、是否启用、每项画笔的序号与强度。官方 edit_by_dsl 的 set_component 命令改不了画笔强度，用 face_warp_set_intensity。',
       shape: { ...target },
       run: plugin('face_warp_list'),
     },
@@ -1897,7 +1909,7 @@ export function createServer(deps = {}) {
     {
       name: 'object_remove',
       description:
-        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 delete_render_group）。只删对象、不关心资源时官方 edit_by_dsl 也能删；要知道删完哪些资源没人用了，用本工具。',
+        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 edit_by_dsl 的 delete_render_group 命令）。只删对象、不关心资源时官方 edit_by_dsl 也能删；要知道删完哪些资源没人用了，用本工具。',
       shape: {
         ...target,
         object_path: z.string().min(1).describe('对象的层级路径，如「面部拉伸/小屁桃_美型」，或能唯一定位的末尾几段。'),

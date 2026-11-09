@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { resolveObject } from './inspect.mjs';
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // Resources shipped with the editor rather than the project: their ids start with these (not always
@@ -168,20 +169,32 @@ export function loadScene(projectDir) {
     entity: e,
   });
   const roots = entities.filter((e) => !e.transform?.parent || !byTransform.has(lid(e.transform.parent)));
+  // Each object with its path of names from its root, for finding one by #id, name or path.
+  const located = [];
+  const visit = (e, above) => {
+    const at = [...above, e.raw.name];
+    located.push({ guid: e.id, path: at, entity: e });
+    children(e).forEach((c) => visit(c, at));
+  };
+  roots.forEach((e) => visit(e, []));
+  const seen = new Set(located.map((o) => o.entity));
+  for (const e of entities) if (!seen.has(e)) located.push({ guid: e.id, path: [e.raw.name], entity: e });
+  const find = (ref) => resolveObject(located, ref)?.entity;
 
   return {
     unreadable,
-    // get_scene's object tree, `depth` levels deep; `subtree` is an #id or a name.
+    // get_scene's object tree, `depth` levels deep; `subtree` is an #id, a name or a path.
     tree({ subtree, depth }) {
       const build = (e, level) => ({ ...node(e), children: level < depth ? children(e).map((c) => build(c, level + 1)) : [] });
-      const start = subtree ? entities.filter((e) => e.id === subtree || e.raw.name === subtree) : roots;
-      if (subtree && start.length !== 1) throw Error(`SUBTREE_NOT_FOUND: ${subtree} matches ${start.length} objects in main.scene`);
-      return start.map((e) => build(e, 1));
+      if (!subtree) return roots.map((e) => build(e, 1));
+      const e = find(subtree);
+      if (!e) throw Error(`SUBTREE_NOT_FOUND: no object ${subtree} in main.scene`);
+      return [build(e, 1)];
     },
-    // The official inspect's shape for one object.
+    // The official inspect's shape for one object, found by #id, name or path.
     inspect(id) {
-      const e = entities.find((x) => x.id === id);
-      if (!e) throw Error(`OBJECT_NOT_FOUND: ${id}; use the #ids scene_tree prints for project_dir`);
+      const e = find(id);
+      if (!e) throw Error(`OBJECT_NOT_FOUND: ${id}; use the #ids, names or paths scene_tree prints for project_dir`);
       const comps = e.raw.components || [];
       return {
         guid: e.id,

@@ -45,7 +45,7 @@
 | --- | --- |
 | `ext_status` | 官方 MCP 连接状态；每个工程窗口的 pid、工程路径、instance_id、编辑器接口自检 |
 | `project_open` / `project_new` / `project_close` | 打开已有工程、新建空白工程并保存到指定目录、关闭工程窗口（有未保存改动时默认拒绝） |
-| `image_view` | 看图：列表类工具返回的引用（`cover_ref`、`gif_ref`、任务内容块的 `image_refs` 等，形如 `img:12`）、详情类工具返回的地址（灵感 `images`、菜单示意图）或本机图片路径都交给它；视频和音频引用（`video:3`、`audio:5`）返回原地址；一次最多 8 张，动图等大图一次给不完时把没给的列在 `not_returned` 里（单次响应不超过 MCP stdio 的 10 MiB 上限） |
+| `image_view` | 看图：列表类工具返回的引用（`cover_ref`、`gif_ref`、任务内容块的 `image_refs` 等，形如 `img:12`）、详情类工具返回的地址（灵感 `images`、菜单示意图）或本机图片路径都放进它的 `images` 数组；视频和音频引用（`video:3`、`audio:5`）返回原地址；一次最多 8 张，动图等大图一次给不完时把没给的列在 `not_returned` 里（单次响应不超过 MCP stdio 的 10 MiB 上限） |
 | `library_list` / `library_search` | 官方素材库面板清单（不传 `panel_key`，含素材广场、收藏）和面板里的分页列表、关键词搜索：逐个面板查标题以拿全结果；词正好是面板名或子分类名时也带出那里的素材（「滤镜」「腮红」「复古滤镜」），按标题匹配程度排序，`queries` 一次搜多个词，返回各面板条数和展开了哪些分类，结果缓存 10 分钟供翻页；每条素材带 `kind`、封面 `cover_ref` 和命中方式 `matched` |
 | `library_images` | 一张 AI 图片卡片的整组结果图地址（按 `image_index` 编号） |
 | `library_apply` | 下载素材包、校验 MD5、导入并放进场景（可撤销）；素材广场卡片按 `kind` 走编辑器自己的应用流程（AI 图片可用 `image_index` 选第几张）；返回新增对象和素材包文件夹 |
@@ -99,8 +99,8 @@
 | `music_categories` | 抖音音乐库的分类 |
 | `music_list` / `music_search` | 一个分类的歌、按关键词搜歌（带版权标记） |
 | `music_apply` | 按音乐库「使用」套用一首歌，可截取片段 |
-| `scene_tree` | 场景结构的缩进文本：渲染组、对象 guid、名称、是否隐藏、组件类型；可只看子树、控制层数。传 `project_dir` 时不开窗口，直接读工程的 `Assets/main.scene`（如 `works_download` 下载的作品），对象写成 `#序号` |
-| `inspect_many` | 一次查看多个对象的组件参数，可按组件类型、属性名片段过滤，`{type, data}` 包装直接展开，绑定的资源和对象换成名称；`preset="key"` 只留关键参数（变换、显隐、强度/不透明度/颜色类、文字内容、绑定、脚本参数）。同样支持 `project_dir` |
+| `scene_tree` | 场景结构的缩进文本：渲染组、对象 guid、名称、是否隐藏、组件类型；可只看子树（按 guid、名称或层级路径找，重名时列出候选）、控制层数。传 `project_dir` 时不开窗口，直接读工程的 `Assets/main.scene`（如 `works_download` 下载的作品），对象写成 `#序号` |
+| `inspect_many` | 一次查看多个对象（guid、名称或层级路径）的组件参数，可按组件类型、属性名片段过滤，`{type, data}` 包装直接展开，绑定的资源和对象换成名称；`preset="key"` 只留关键参数（变换、显隐、强度/不透明度/颜色类、文字内容、绑定、脚本参数）。同样支持 `project_dir` |
 | `makeup_layers` | 读工程目录里的全部美妆层（妆容层和美瞳），逐层给出区域、部位、混合模式、平均色、着色、男女强度和实际生效的不透明度（强度 × 整套 AI 脸下发的外部强度）、表面质地（水润、珠光等）、只作用于哪几张脸、是否生效；部位先看层名，看不出时按贴图像素和混合模式判断（滤色等只会提亮的层归为高光）。`sets` 列出整套妆（AI 实时变脸）各管哪些层，这些层带 `in_set`：删掉或关掉其中一个整套都会消失，只能把强度调成 0。`groups` 按底妆、眉、眼妆、美瞳、颊、轮廓、唇汇总，`absent` 列出整套妆没有的部位 |
 | `makeup_texture` | 按形状画妆容层贴图（整脸 1024、眼部 900×460、唇部 460×230）：高斯点、渐细线、多边形、上下两条线围成的带、椭圆里撒点（雀斑）、沿一条线长出的发丝（睫毛），多层从下往上叠，可左右镜像（镜像那份可整体下移），可在现有贴图上画或擦。透明像素按要用的混合模式填「不改变皮肤」的颜色，边缘不会被纹理过滤混出别的颜色；整脸贴图画进眼裂时给出提醒。`attach` 直接挂到已有或新建的同区域妆容层上（可撤销），可设导入分辨率 |
 | `makeup_compare` | 在同一张脸上比较几种妆容强度（关掉某层、强度 0.3 对 0.6 等）：重置预览后截基线、逐个实时套上改动截图并改回、最后再截一次基线核对画面没变。要用静态照片做的模特视频（预览暂停后不再重绘，不能靠暂停停住画面）；区域可以按画面比例给，也可以给 `eye` + 标定文件，按每位模特自己的眼睛位置裁。每个区域返回每种状态的平均色、亮度、皮肤细节及相对基线的差值，并排放大图（不插值） |
@@ -113,7 +113,7 @@
 | `ai3d_image_submit` | 素材库「AI 3D › 3D模型」：上传参考图（PNG/JPG/JPEG，不超过 10 MB、4000 像素），按精度（low / medium / high = 1000 / 10000 / 50000 面）提交图生 3D，返回 `task_id`；产物是静态网格，没有骨骼 |
 | `ai3d_animation_submit` | 「AI 3D › 3D动画」：上传参考视频（MP4，不超过 30 秒、20 MB、1280 像素）和模型（内置 `whole` / `upper_body` / `lower_body` / `arm`，或本地 FBX），提交动作生成；本地 FBX 按面板的方式检查骨骼（缺标准人形骨骼只提醒，与编辑器一致）和导入上限 |
 | `ai3d_gs_segment` / `ai3d_gs_submit` | 「AI 3D › 高精度模型重建」两步：上传环绕视频（MP4/MOV，不超过 120 秒、100 MB、4000 像素）识别主体，返回主体图 `subject_image_ref`；确认后按主体生成 3D 高斯点云 |
-| `ai3d_tasks` | 按类型分页列出 AI 3D 历史任务（状态、时间、输入、失败原因、本机是否已下载和预览文件），每页最多 20 条；带 `task_id` 时只查一个，再给 `wait_s` 就等到它不再运行（最多 600 秒） |
+| `ai3d_tasks` | 按类型分页列出 AI 3D 历史任务（状态、时间、输入、失败原因、本机是否已下载和预览文件），每页最多 20 条；带 `task_id` 时只查一个（不用给 `kind`），再给 `wait_s` 就等到它不再运行（最多 600 秒） |
 | `ai3d_import` | 下载并解压一个已完成任务的结果（放在编辑器的 AI 3D 缓存目录，面板里同样能看到），导入工程并放进场景（可撤销），与面板的「导入素材」相同 |
 | `ai3d_cancel` | 取消运行中的 AI 3D 任务 |
 | `ar_video_submit` | 素材库「AR 视频」的「立即生成」：`mode=direct` 主体视频只抠像，`mode=motion` 按 `prompt`（必填）和参考图 / 参考动作视频生成新动作；`shadow`（添加投影）、`duration_s`（4 秒到编辑器开关给的上限）。输入先过编辑器自己的检查、转换和视频审核，云端接受后返回 `task_id`，任务转到工具栏的后台任务里 |
@@ -159,7 +159,7 @@
 
 - `library_apply` / `library_images` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`；`works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
 - 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。
-- 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方的 `delete_render_group`。
+- 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方 `edit_by_dsl` 的 `delete_render_group` 命令。
 - 素材库的搜索接口只匹配标题，很多素材的名字里没有人们会搜的词（美妆 › 腮红里是「雾堇胭」「红玫瑰」，没有素材叫「滤镜」），所以 `library_search` 还会展开名字与搜索词相同的面板或子分类，以及「子分类 + 面板」组合（「复古滤镜」）；「面板 + 其它词」（「韩系滤镜」）只在该面板里按标题搜「韩系」。名字只是包含搜索词的子分类不展开，列在 `related_categories`。每个面板或子分类最多取 300 条（实测子分类 17–125 条）。什么都没匹配到时返回 `hint`。
 - `works_*`、`inspiration_*`、`task_*`、`rank_*`、`my_effects`、`my_effect_reviews`、`my_effect_data`、`my_effect_trend`、`my_effect_revenue`、`my_profile`、`my_revenue`、`messages_list`、`my_task_status`、`effect_detail`、`effect_videos`、`effect_search`、`inspiration_search`、`tutorial_search`、`tutorials_list`、`shoot_activity`、`shoot_scripts`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - 返回资料的方式：

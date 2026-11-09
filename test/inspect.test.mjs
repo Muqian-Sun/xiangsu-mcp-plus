@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createRequire } from 'node:module';
 import { createServer } from '../src/server.mjs';
-import { formatObjects, formatTree, pickInspect, resolveRefs, unwrap } from '../src/inspect.mjs';
+import { formatObjects, formatTree, pickInspect, resolveObject, resolveRefs, sceneObjects, unwrap } from '../src/inspect.mjs';
 import { loadScene } from '../src/scenefile.mjs';
 import { cropImage, framesDir, FRAMES_TTL_MS } from '../src/frames.mjs';
 
@@ -281,7 +281,11 @@ test('loadScene reads main.scene into the get_scene tree shape, with the transfo
   );
   assert.equal(formatObjects(scene.tree({ depth: 1 })), '#1 组  [Transform, Camera]\n  … 还有 2 个子对象未展开（加大 depth 或用 subtree 查看）');
   assert.equal(formatObjects(scene.tree({ subtree: '字', depth: 6 })), '#3 字  [ScreenTransform, FaceBinding, Text2D, DadNameReveal]');
-  assert.throws(() => scene.tree({ subtree: '#9', depth: 6 }), /SUBTREE_NOT_FOUND: #9 matches 0/);
+  assert.equal(formatObjects(scene.tree({ subtree: '组/字', depth: 6 })), '#3 字  [ScreenTransform, FaceBinding, Text2D, DadNameReveal]');
+  assert.throws(() => scene.tree({ subtree: '#9', depth: 6 }), /SUBTREE_NOT_FOUND: no object #9/);
+  assert.throws(() => scene.tree({ subtree: '别的/字', depth: 6 }), /SUBTREE_NOT_FOUND/);
+  assert.equal(scene.inspect('头').guid, '#2');
+  assert.equal(scene.inspect('组/头').guid, '#2');
   assert.deepEqual(scene.unreadable, []);
 });
 
@@ -527,8 +531,20 @@ test('scene_tree asks get_scene for the full tree of one instance and returns th
   const client = await connect({ official });
   const res = await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/A', subtree: 's20', depth: 3 } });
   assert.match(res.content[0].text, /^\[AI 实时变脸\] s19 GAN/);
-  const call = official.calls.find((c) => c[0] === 'get_scene');
-  assert.deepEqual({ ...call[1], intention: undefined }, { instance_id: '2', summary: false, depth: 3, subtree: 's20', intention: undefined });
+  const scenes = () => official.calls.filter((c) => c[0] === 'get_scene').map((c) => ({ ...c[1], intention: undefined }));
+  assert.deepEqual(scenes(), [
+    { instance_id: '2', names_only: true, intention: undefined },
+    { instance_id: '2', summary: false, depth: 3, subtree: 's20', intention: undefined },
+  ]);
+  official.calls.length = 0;
+  await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/A', subtree: '香肠嘴' } });
+  await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/A', subtree: 'AI 实时变脸/香肠嘴/生成效果' } });
+  assert.deepEqual(scenes().filter((s) => !s.names_only).map((s) => s.subtree), ['s20', 's21'], 'names and paths are looked up and sent to get_scene as guids');
+  const missing = await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/A', subtree: '不存在' } });
+  assert.match(missing.content[0].text, /SUBTREE_NOT_FOUND: no scene object 不存在/);
+  official.calls.length = 0;
+  await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/A' } });
+  assert.deepEqual(scenes(), [{ instance_id: '2', summary: false, depth: 6, intention: undefined }], 'the whole tree needs no lookup');
   const unknown = await client.callTool({ name: 'scene_tree', arguments: { project_path: '/proj/B' } });
   assert.match(unknown.content[0].text, /NO_UNIQUE_INSTANCE for \/proj\/B/);
   const two = await connect({ official: fakeOfficial({ instances: [{ instance_id: '1', project_path: '/a' }, { instance_id: '2', project_path: '/b' }] }) });
@@ -564,6 +580,27 @@ test('inspect_many inspects each guid, filters, resolves bound resources and iso
   assert.deepEqual(res[0].components[1].properties, { sharedMaterials: [{ resource: '材质', type: 'Material', file: 'm.omtl' }] });
   assert.match(res[1].error, /not found/);
   assert.deepEqual(official.calls.filter((c) => c[0] === 'inspect').map((c) => c[1].guid), ['s21', 'r1', 'bad', 's22']);
+});
+
+test('inspect_many finds objects by name or path, and passes other guids on as given', async () => {
+  const official = fakeOfficial();
+  const client = await connect({ official });
+  const res = JSON.parse((await client.callTool({ name: 'inspect_many', arguments: { instance_id: '2', guids: ['生成效果', '香肠嘴/生成效果', 'c9'] } })).content[0].text);
+  assert.equal(res.length, 3);
+  assert.deepEqual(official.calls.filter((c) => c[0] === 'inspect' && c[1].guid !== 'r1').map((c) => c[1].guid), ['s21', 's21', 'c9']);
+});
+
+test('resolveObject takes a guid, a name or the tail of a path, and lists the candidates when several match', () => {
+  const twins = { renderGroups: [{ name: '2D 前景', sceneObjects: [{ guid: 's4', name: '2D 摄像机', children: [{ guid: 's5', name: 'AI 组合效果' }] }] }, { name: '音乐', sceneObjects: [{ guid: 's7', name: '2D 摄像机' }] }] };
+  const objects = sceneObjects(twins);
+  assert.deepEqual(objects.map((o) => [o.guid, o.path.join('/')]), [['s4', '2D 前景/2D 摄像机'], ['s5', '2D 前景/2D 摄像机/AI 组合效果'], ['s7', '音乐/2D 摄像机']]);
+  assert.equal(resolveObject(objects, 's7').guid, 's7');
+  assert.equal(resolveObject(objects, 'AI 组合效果').guid, 's5');
+  assert.equal(resolveObject(objects, '音乐/2D 摄像机').guid, 's7');
+  assert.equal(resolveObject(objects, '2D 前景/2D 摄像机').guid, 's4');
+  assert.throws(() => resolveObject(objects, '2D 摄像机'), /AMBIGUOUS_OBJECT: 2D 摄像机 matches 2 objects: s4 2D 前景\/2D 摄像机 \| s7 音乐\/2D 摄像机/);
+  assert.equal(resolveObject(objects, '摄像机'), null, 'a segment matches whole, not as a fragment');
+  assert.equal(resolveObject(objects, '别处/AI 组合效果'), null);
 });
 
 function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {} } = {}) {

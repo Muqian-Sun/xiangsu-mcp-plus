@@ -49,6 +49,33 @@ export function formatTree(scene) {
   return lines.join('\n');
 }
 
+// Every scene object of a get_scene tree (render groups holding sceneObjects; names_only is enough),
+// or of a list of root objects, with its path of names from the render group or root down to itself.
+export function sceneObjects(scene) {
+  const out = [];
+  const visit = (objects, above) => {
+    for (const o of objects || []) {
+      const at = [...above, o.name];
+      out.push({ guid: o.guid, path: at });
+      visit(o.children, at);
+    }
+  };
+  if (Array.isArray(scene)) visit(scene, []);
+  else for (const g of scene.renderGroups || []) visit(g.sceneObjects, [g.name]);
+  return out;
+}
+
+// The one object `ref` names: its guid, or its path or the last few segments of it (a bare name is
+// the last one), so "2D 前景/2D 摄像机" tells apart two cameras both named 「2D 摄像机」. Null when none
+// does; several are an error listing them.
+export function resolveObject(objects, ref) {
+  const byGuid = objects.filter((o) => o.guid === ref);
+  const parts = ref.split('/');
+  const hits = byGuid.length ? byGuid : objects.filter((o) => parts.length <= o.path.length && parts.every((p, i) => p === o.path[o.path.length - parts.length + i]));
+  if (hits.length > 1) throw Error(`AMBIGUOUS_OBJECT: ${ref} matches ${hits.length} objects: ${hits.map((o) => `${o.guid} ${o.path.join('/')}`).join(' | ')}; pass the guid or more of the path`);
+  return hits[0] ?? null;
+}
+
 const matches = (name, patterns) => patterns.some((p) => name.toLowerCase().includes(p.toLowerCase()));
 
 // preset "key": the parameters that usually decide how an effect looks. Picked, not measured, from

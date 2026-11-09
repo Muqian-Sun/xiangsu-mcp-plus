@@ -504,6 +504,13 @@ test('ai3d tools route account calls to any window and keep the found subject fo
   const tooMany = await call('ai3d_tasks', { kind: 'image', count: 21 });
   assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): count/);
   assert.equal(seen.length, 6);
+  // One task is queried by id alone; listing needs to know which history.
+  const bare = JSON.parse((await call('ai3d_tasks', { task_id: 't2' })).content[0].text);
+  assert.deepEqual(bare, { ok: 'ai3d_task' });
+  assert.deepEqual(seen[6].params, { task_id: 't2', wait_s: 0 });
+  const unlisted = await call('ai3d_tasks', {});
+  assert.match(unlisted.content[0].text, /INVALID_ARGUMENTS: kind is required to list the history/);
+  assert.equal(seen.length, 7);
 });
 
 test('ar_video tools go to the target project window, where the task is composed', async () => {
