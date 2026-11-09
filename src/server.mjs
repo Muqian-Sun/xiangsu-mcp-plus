@@ -1117,7 +1117,7 @@ export function createServer(deps = {}) {
       name: 'tutorials_list',
       refs: true,
       description:
-        '像塑官方教程（移动版「教程」页同一组接口）：每次都带上全部分类 tabs（特效：新手入门、特效进阶、精选课程、PC工具、工程实操、三方工具、爆款分享、账号运营、视频教程；模板：模板入门、模板进阶等），按 tab_id 列出一个分类的教程，不传时列出全部（约 190 篇，比各分类之和多）。每篇有标题、标签（如「新手必看」「拍视频脚本」）、学习人数、作者、上线日期、是否付费、文档链接 link（飞书文档）、封面 cover_ref 和视频 video_ref（视频教程才有）。按 offset / count 分页。按关键词找教程用 tutorial_search。',
+        '像塑官方教程（移动版「教程」页同一组接口）：每次都带上全部分类 tabs（特效：新手入门、特效进阶、精选课程、PC工具、工程实操、三方工具、爆款分享、账号运营、视频教程；模板：模板入门、模板进阶等），按 tab_id 列出一个分类的教程，不传时列出全部（约 190 篇，比各分类之和多）。每篇有标题、标签（如「新手必看」「拍视频脚本」）、学习人数、作者、上线日期、是否付费、文档链接 link（飞书文档，要登录飞书才能打开，agent 读不到正文，只能看标题和标签）、封面 cover_ref 和视频 video_ref（视频教程才有，交给 image_view 拿到的地址能直接打开）。按 offset / count 分页。按关键词找教程用 tutorial_search。',
       shape: {
         ...target,
         tab_id: z.number().int().optional().describe('分类 ID，取返回的 tabs 里的 tab_id；省略时列出全部教程。'),
