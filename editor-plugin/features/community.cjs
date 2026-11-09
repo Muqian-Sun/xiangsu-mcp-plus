@@ -30,8 +30,8 @@ const LEVEL_LABELS = Object.fromEntries(Object.entries(RANK_FILTERS.levels.optio
 const CATEGORY_PARAMS = { 1: 'material_labels3_first', 2: 'material_labels3_second', 3: 'material_labels3_third' };
 // Innovation plan picks by artwork type (the app's ArtworkType index); the app itself shows templates.
 const PICK_KINDS = { template: 2, effect: 0 };
-// rank_innovation kinds: the creator month board, or the picks of one artwork type.
-const INNOVATION_KINDS = ['creators', ...Object.keys(PICK_KINDS)];
+// rank_innovation kinds: the picks of one artwork type.
+const INNOVATION_KINDS = Object.keys(PICK_KINDS);
 // Topic collection tabs of the app's 专题合集 page (topic_type).
 const SUBJECT_KINDS = { effect: 1, template: 2 };
 // subjects and subject_detail answer code 1 for larger counts.
@@ -575,84 +575,77 @@ const methods = {
     return { inspiration_id: id, title: base.title, collected: now };
   },
 
-  // kind=effect: the activity center's activities and effect tasks; kind=growth: its growth tasks.
-  // raw goes to the MCP server, which keeps it for task_detail, task_receive and task_bind.
-  async tasksList({ kind = 'effect' } = {}) {
+  // The activity center's activities and effect tasks. raw goes to the MCP server, which keeps it for
+  // task_detail, task_receive and task_bind.
+  async tasksList() {
     const { DomainPath } = this.mod(M.urls);
-    if (kind === 'effect') {
-      const [acts, tasks] = await Promise.all([
-        request(this, 'GET_ACTIVITIES', DomainPath.kActivityAPI),
-        request(this, 'GET_EFFECT_TASKS', DomainPath.kTaskListAPI),
-      ]);
-      const rows = [...(acts.activities || []).map((t) => ['activity', t]), ...(tasks.effect_tasks || []).map((t) => ['task', t])];
-      const items = rows.map(([k, t]) => slimTask(this, t, k));
-      const raw = rows.map(([k, t]) => ({
-        kind: k,
-        item_id: k === 'task' ? String(t.item_id) : null,
-        extra: (k === 'task' ? t.designer_task_id : t.id) ? activityExtra(this, t, k) : null,
-      }));
-      return { kind, items, raw };
-    }
-    if (kind === 'growth') {
-      const { growthTaskType } = this.mod(M.activityTypes);
-      const d = await request(this, 'GET_GROWTH_TASKS', DomainPath.kGrowthTaskList);
-      const tasks = d.growth_tasks || [];
-      const items = tasks.map((t) => ({
-        task_id: String(t.task_id),
-        kind: 'growth',
-        title: t.name || '',
-        // fen: 1000 comes with the tag 「10元奖励」
-        bonus_yuan: t.bonus_amount != null ? t.bonus_amount / 100 : null,
-        tags: t.tags || [],
-        newbie: t.growth_task_type === growthTaskType.Newbie,
-        bindable: false,
-        projects: growthProjects(t),
-        icon_url: t.icon || null,
-      }));
-      return { kind, items, raw: tasks.map(() => ({ kind: 'growth', item_id: null, extra: null })) };
-    }
-    throw Error(`INVALID_KIND: ${kind}; valid: effect, growth`);
+    const [acts, tasks] = await Promise.all([
+      request(this, 'GET_ACTIVITIES', DomainPath.kActivityAPI),
+      request(this, 'GET_EFFECT_TASKS', DomainPath.kTaskListAPI),
+    ]);
+    const rows = [...(acts.activities || []).map((t) => ['activity', t]), ...(tasks.effect_tasks || []).map((t) => ['task', t])];
+    const items = rows.map(([k, t]) => slimTask(this, t, k));
+    const raw = rows.map(([k, t]) => ({
+      kind: k,
+      item_id: k === 'task' ? String(t.item_id) : null,
+      extra: (k === 'task' ? t.designer_task_id : t.id) ? activityExtra(this, t, k) : null,
+    }));
+    return { items, raw };
   },
 
-  async taskDetail({ kind, id } = {}) {
-    const key = requireId(id, 'INVALID_TASK_ID');
-    if (kind === 'task') {
-      const query = { item_id: key, app_version: TASK_PAGE_APP_VERSION };
-      const [d, c] = await Promise.all([
-        request(this, 'GET_EFFECT_TASK', '/effectcam/v2/effect_task_detail', { query }),
-        request(this, 'GET_EFFECT_TASK_CONTENT', '/effectcam/v2/effect_task_content', { query }),
-      ]);
-      const modules = (c.modules || []).map((m) => JSON.parse(m.render_content));
-      return {
-        kind,
-        title: d.title,
-        status: this.taskStatus(d.process_status),
-        status_text: d.s_desc || null,
-        tags: (d.tags || []).map((x) => x.name),
-        reward_begin: d.reward_begin || null,
-        reward_end: d.reward_end || null,
-        offline_at: iso(d.offline_at_unix),
-        can_finish_times: d.can_fin_times ?? null,
-        finish_status: d.fin_status || null,
-        level_task: !!d.is_level_task,
-        my_effects: (d.task_effect_list || []).map(slimTaskEffect),
-        content: modules.map(taskBlock),
-        raw: { detail: d, content: modules },
-      };
-    }
-    if (kind === 'growth') {
-      const d = await request(this, 'GET_GROWTH_TASK', '/cam_api/task/v1/growth_task_detail', { query: { task_id: key } });
-      return {
-        kind,
-        title: d.name || '',
-        bonus_yuan: d.bonus_amount != null ? d.bonus_amount / 100 : null,
-        tags: d.tags || [],
-        projects: growthProjects(d),
-        inspirations: (d.inspiration_list || []).map(slimInspiration),
-        tutorial: d.tutorial_title ? { title: d.tutorial_title, desc: d.tutorial_desc || '', video_url: d.tutorial_video_url || null } : null,
-      };
-    }
-    throw Error(`INVALID_KIND: ${kind}; valid: task, growth`);
+  // The activity center's growth tasks.
+  async growthTasksList() {
+    const { growthTaskType } = this.mod(M.activityTypes);
+    const d = await request(this, 'GET_GROWTH_TASKS', this.mod(M.urls).DomainPath.kGrowthTaskList);
+    const items = (d.growth_tasks || []).map((t) => ({
+      task_id: String(t.task_id),
+      title: t.name || '',
+      // fen: 1000 comes with the tag 「10元奖励」
+      bonus_yuan: t.bonus_amount != null ? t.bonus_amount / 100 : null,
+      tags: t.tags || [],
+      newbie: t.growth_task_type === growthTaskType.Newbie,
+      projects: growthProjects(t),
+      icon_url: t.icon || null,
+    }));
+    return { items };
+  },
+
+  // An effect task by its item id, as the task detail window reads it.
+  async taskDetail({ id } = {}) {
+    const query = { item_id: requireId(id, 'INVALID_TASK_ID'), app_version: TASK_PAGE_APP_VERSION };
+    const [d, c] = await Promise.all([
+      request(this, 'GET_EFFECT_TASK', '/effectcam/v2/effect_task_detail', { query }),
+      request(this, 'GET_EFFECT_TASK_CONTENT', '/effectcam/v2/effect_task_content', { query }),
+    ]);
+    const modules = (c.modules || []).map((m) => JSON.parse(m.render_content));
+    return {
+      title: d.title,
+      status: this.taskStatus(d.process_status),
+      status_text: d.s_desc || null,
+      tags: (d.tags || []).map((x) => x.name),
+      reward_begin: d.reward_begin || null,
+      reward_end: d.reward_end || null,
+      offline_at: iso(d.offline_at_unix),
+      can_finish_times: d.can_fin_times ?? null,
+      finish_status: d.fin_status || null,
+      level_task: !!d.is_level_task,
+      my_effects: (d.task_effect_list || []).map(slimTaskEffect),
+      content: modules.map(taskBlock),
+      raw: { detail: d, content: modules },
+    };
+  },
+
+  // A growth task with its reference projects, inspirations and tutorial.
+  async growthTaskDetail({ id } = {}) {
+    const d = await request(this, 'GET_GROWTH_TASK', '/cam_api/task/v1/growth_task_detail', { query: { task_id: requireId(id, 'INVALID_TASK_ID') } });
+    return {
+      title: d.name || '',
+      bonus_yuan: d.bonus_amount != null ? d.bonus_amount / 100 : null,
+      tags: d.tags || [],
+      projects: growthProjects(d),
+      inspirations: (d.inspiration_list || []).map(slimInspiration),
+      tutorial: d.tutorial_title ? { title: d.tutorial_title, desc: d.tutorial_desc || '', video_url: d.tutorial_video_url || null } : null,
+    };
   },
 
   // The mobile app's 成长之路: designer levels with their cash awards, each goal with its progress.
@@ -725,23 +718,25 @@ const methods = {
     };
   },
 
+  // A hotspot's inspirations, grouped by the tabs of the hotspot page.
+  async hotspotInspirations({ topic_id } = {}) {
+    const id = requireId(topic_id, 'INVALID_TOPIC_ID');
+    const d = await request(this, 'GET_HOTSPOT_INSPIRATIONS', '/cam_api/hotspot/v1/insp_tabs', { query: { topic_id: id } });
+    const tabs = (d.insp_tabs || []).map((t) => ({
+      tab: t.title,
+      inspirations: (t.insps || []).map((i) => ({
+        inspiration_id: String(i.id),
+        title: i.title,
+        tag: i.tag || null,
+        description: i.detail || '',
+        cover_url: first(i.cover && i.cover.urlList),
+      })),
+    }));
+    return { topic_id: id, tabs };
+  },
+
   // The board is one short list (79 hotspots, measured), read whole and paged here.
-  async rankHotspots({ offset = 0, count = 20, topic_id } = {}) {
-    if (topic_id !== undefined) {
-      const id = requireId(topic_id, 'INVALID_TOPIC_ID');
-      const d = await request(this, 'GET_HOTSPOT_INSPIRATIONS', '/cam_api/hotspot/v1/insp_tabs', { query: { topic_id: id } });
-      const tabs = (d.insp_tabs || []).map((t) => ({
-        tab: t.title,
-        inspirations: (t.insps || []).map((i) => ({
-          inspiration_id: String(i.id),
-          title: i.title,
-          tag: i.tag || null,
-          description: i.detail || '',
-          cover_url: first(i.cover && i.cover.urlList),
-        })),
-      }));
-      return { topic_id: id, tabs };
-    }
+  async rankHotspots({ offset = 0, count = 20 } = {}) {
     const d = await request(this, 'GET_HOTSPOTS', '/cam_api/hotspot/v1/rank');
     // Hotspots arrive ordered by heat; rank_num is not their position.
     const all = (d.hotspots || []).map((h, i) => ({
@@ -764,29 +759,38 @@ const methods = {
     return { total: d ? d.total : null, subjects: (d && d.subjects) || [] };
   },
 
-  // The 专题合集 page: monthly themed boards, newest first. `cursor` is an offset the server echoes back.
-  async rankSubjects({ subject_id, kind = 'effect', keyword, cursor = 0, count = SUBJECT_MAX } = {}) {
-    if (subject_id !== undefined) {
-      const id = requireId(subject_id, 'INVALID_SUBJECT_ID');
-      const d = await request(this, 'GET_SUBJECT', '/cam_api/discover/v1/subject_detail', { query: { subject_id: id, cursor: 0, count: SUBJECT_MAX } });
-      return slimSubject(d.subject);
-    }
+  subjectKind(kind) {
     if (!hasOwn(SUBJECT_KINDS, kind)) throw Error(`INVALID_KIND: ${kind}; valid: ${Object.keys(SUBJECT_KINDS).join(', ')}`);
-    if (keyword !== undefined) {
-      const q = String(keyword).trim();
-      if (!q) throw Error('INVALID_KEYWORD: keyword must be a non-empty string');
-      const all = [];
-      for (let at = 0; ; at += SUBJECT_MAX) {
-        const page = await this.subjectPage(kind, at, SUBJECT_MAX);
-        all.push(...page.subjects);
-        if (page.subjects.length < SUBJECT_MAX) break;
-      }
-      const subjects = all.filter((s) => String(s.subject_name || '').includes(q)).map(slimSubject);
-      return { kind, keyword: q, total: subjects.length, subjects };
-    }
-    const page = await this.subjectPage(kind, cursor, count);
+    return kind;
+  },
+
+  // The 专题合集 page: monthly themed boards, newest first. `cursor` is an offset the server echoes back.
+  async rankSubjects({ kind = 'effect', cursor = 0, count = SUBJECT_MAX } = {}) {
+    const page = await this.subjectPage(this.subjectKind(kind), cursor, count);
     const next = cursor + page.subjects.length;
     return { kind, total: page.total, subjects: page.subjects.map(slimSubject), next_cursor: next, has_more: page.total !== null && next < page.total };
+  },
+
+  // The boards of a kind whose name holds `keyword`; the server has no search, so every page is read.
+  async rankSubjectsSearch({ kind = 'effect', keyword } = {}) {
+    this.subjectKind(kind);
+    const q = String(keyword ?? '').trim();
+    if (!q) throw Error('INVALID_KEYWORD: keyword must be a non-empty string');
+    const all = [];
+    for (let at = 0; ; at += SUBJECT_MAX) {
+      const page = await this.subjectPage(kind, at, SUBJECT_MAX);
+      all.push(...page.subjects);
+      if (page.subjects.length < SUBJECT_MAX) break;
+    }
+    const subjects = all.filter((x) => String(x.subject_name || '').includes(q)).map(slimSubject);
+    return { kind, keyword: q, total: subjects.length, subjects };
+  },
+
+  // One board with all its effects.
+  async rankSubjectDetail({ subject_id } = {}) {
+    const id = requireId(subject_id, 'INVALID_SUBJECT_ID');
+    const d = await request(this, 'GET_SUBJECT', '/cam_api/discover/v1/subject_detail', { query: { subject_id: id, cursor: 0, count: SUBJECT_MAX } });
+    return slimSubject(d.subject);
   },
 
   async rankCreatorsMonth() {
@@ -806,7 +810,8 @@ const methods = {
     return { items };
   },
 
-  async rankInnovationPicks({ kind = 'template', offset = 0, count = 20 } = {}) {
+  // 创新计划 picks of one artwork type.
+  async rankInnovation({ kind = 'template', offset = 0, count = 20 } = {}) {
     if (!hasOwn(PICK_KINDS, kind)) throw Error(`INVALID_KIND: ${kind}; valid: ${Object.keys(PICK_KINDS).join(', ')}`);
     const d = await request(this, 'GET_INNOVATION_PICKS', '/cam_api/innovation_plan/v1/rank_list', {
       query: { page_size: count, offset, tab_id: 'all', artwork_type: PICK_KINDS[kind] },
@@ -827,12 +832,10 @@ const methods = {
     return { kind, date: d.date || null, total: d.total, items, next_offset: offset + count, has_more: !!d.has_more };
   },
 
-  // The creator board arrives whole; it is paged here like the picks.
-  async rankInnovation({ kind = 'template', offset = 0, count = 20 } = {}) {
-    if (!INNOVATION_KINDS.includes(kind)) throw Error(`INVALID_KIND: ${kind}; valid: ${INNOVATION_KINDS.join(', ')}`);
-    if (kind !== 'creators') return this.rankInnovationPicks({ kind, offset, count });
+  // The 创新计划 creator month board arrives whole; it is paged here like the picks.
+  async rankCreators({ offset = 0, count = 20 } = {}) {
     const { items } = await this.rankCreatorsMonth();
-    return { kind, total: items.length, items: items.slice(offset, offset + count), next_offset: offset + count, has_more: offset + count < items.length };
+    return { total: items.length, items: items.slice(offset, offset + count), next_offset: offset + count, has_more: offset + count < items.length };
   },
 
   // The 上线审核 records of the review record page: review_nodes when it has them, otherwise effect_reviews.
@@ -1083,12 +1086,18 @@ const METHODS = {
   inspiration_bind: 'inspirationBind',
   growth_route: 'growthRoute',
   tasks_list: 'tasksList',
+  growth_tasks_list: 'growthTasksList',
   task_detail: 'taskDetail',
+  growth_task_detail: 'growthTaskDetail',
   task_receive: 'taskReceive',
   rank_list: 'rankList',
   rank_hotspots: 'rankHotspots',
+  hotspot_inspirations: 'hotspotInspirations',
   rank_subjects: 'rankSubjects',
+  rank_subjects_search: 'rankSubjectsSearch',
+  rank_subject_detail: 'rankSubjectDetail',
   rank_innovation: 'rankInnovation',
+  rank_creators: 'rankCreators',
   my_effects: 'myEffects',
   my_effect_reviews: 'myEffectReviews',
   my_effect_data: 'myEffectData',

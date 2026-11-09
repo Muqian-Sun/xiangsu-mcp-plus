@@ -251,7 +251,7 @@ function setup(routes = {}) {
 
 test('community requests carry the editor login cookie and signing headers and keep 19-digit ids exact', async () => {
   const { lib, calls, cookieUrls } = setup();
-  const out = await lib.rankHotspots({ topic_id: '13439' });
+  const out = await lib.hotspotInspirations({ topic_id: '13439' });
   assert.equal(out.tabs[0].inspirations[0].inspiration_id, '7704552248298391592');
   assert.equal(out.tabs[0].inspirations[0].cover_url, 'https://cdn/hi.png');
   const month = await lib.rankCreatorsMonth();
@@ -275,10 +275,10 @@ test('community requests fail on server codes, HTTP errors and non-JSON bodies',
 test('reads retry once on the busy code 1; writes and other codes are not retried', async () => {
   const busy = JSON.stringify({ code: 1, message: '网络开小差了' });
   const flaky = setup({ 'GET /cam_api/task/v1/growth_task_detail': (call, calls) => (calls.length === 1 ? busy : ok(GROWTH_TASKS.growth_tasks[0])) });
-  assert.equal((await flaky.lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' })).title, '学会制作1款头饰装饰特效');
+  assert.equal((await flaky.lib.growthTaskDetail({ id: 'headdress_decoration' })).title, '学会制作1款头饰装饰特效');
   assert.equal(flaky.to('/cam_api/task/v1/growth_task_detail').length, 2);
   const down = setup({ 'GET /cam_api/task/v1/growth_task_detail': busy });
-  await assert.rejects(down.lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' }), /GET_GROWTH_TASK_FAILED: code=1 message=网络开小差了/);
+  await assert.rejects(down.lib.growthTaskDetail({ id: 'headdress_decoration' }), /GET_GROWTH_TASK_FAILED: code=1 message=网络开小差了/);
   assert.equal(down.to('/cam_api/task/v1/growth_task_detail').length, 2);
   const bad = setup({ 'GET /cam_api/rank/v1/detail': JSON.stringify({ code: 400, message: '参数错误' }) });
   await assert.rejects(bad.lib.rankList({}), /code=400/);
@@ -395,8 +395,8 @@ test('inspiration_collect reports a collection the server did not apply', async 
 });
 
 test('tasks_list merges activities and effect tasks, and prepares launch extras only for received ones', async () => {
-  const { lib } = setup();
-  const effect = await lib.tasksList({});
+  const { lib, to } = setup();
+  const effect = await lib.tasksList();
   assert.deepEqual(effect.items.map((i) => [i.task_id, i.kind]), [['A1', 'activity'], ['108117', 'task'], ['108201', 'task']]);
   assert.deepEqual(effect.items[1], {
     task_id: '108117',
@@ -422,24 +422,27 @@ test('tasks_list merges activities and effect tasks, and prepares launch extras 
     { kind: 'task', item_id: '108116', extra: null },
     { kind: 'task', item_id: '108200', extra: { activity_id: '555', activity_name: '冬日将至爆款玩法征集赛', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } },
   ]);
-  const growth = await lib.tasksList({ kind: 'growth' });
+  assert.equal(to('/cam_api/task/v1/growth_task_list').length, 0);
+});
+
+test('growth_tasks_list reads the activity center growth tasks with their bonus in yuan', async () => {
+  const { lib, to } = setup();
+  const growth = await lib.growthTasksList();
   assert.deepEqual(growth.items[0], {
     task_id: 'headdress_decoration',
-    kind: 'growth',
     title: '学会制作1款头饰装饰特效',
     bonus_yuan: 10,
     tags: ['基础任务', '10元奖励'],
     newbie: false,
-    bindable: false,
     projects: [{ project_id: '7535420584646262830', desc: '投稿量80万' }],
     icon_url: 'https://cdn/g.png',
   });
   assert.equal(growth.items[1].newbie, true);
-  assert.deepEqual(growth.raw[0], { kind: 'growth', item_id: null, extra: null });
-  await assert.rejects(lib.tasksList({ kind: 'daily' }), /INVALID_KIND: daily/);
+  assert.equal(growth.raw, undefined);
+  assert.equal(to('/creator_api/task/v1/effect_task_list').length, 0);
 });
 
-test('task_detail reads an effect task like the task window and a growth task with its inspirations', async () => {
+test('task_detail reads an effect task like the task window, and growth_task_detail a growth task with its inspirations', async () => {
   const { lib, to } = setup({
     'GET /effectcam/v2/effect_task_detail': ok({
       process_status: 1,
@@ -485,12 +488,11 @@ test('task_detail reads an effect task like the task window and a growth task wi
       tutorial_video_url: 'https://cdn/v.mp4',
     }),
   });
-  const { raw, ...effect } = await lib.taskDetail({ kind: 'task', id: '108116' });
+  const { raw, ...effect } = await lib.taskDetail({ id: '108116' });
   for (const path of ['/effectcam/v2/effect_task_detail', '/effectcam/v2/effect_task_content']) {
     assert.deepEqual(to(path)[0].query, { item_id: '108116', app_version: '11.3.0' });
   }
   assert.deepEqual(effect, {
-    kind: 'task',
     title: '冷空气网感美妆定向征集赛',
     status: 'WAIT_RECEIVE',
     status_text: '未领取',
@@ -541,14 +543,16 @@ test('task_detail reads an effect task like the task window and a growth task wi
   });
   assert.deepEqual(raw.content, [{ type: 3, contentBlockName: '参与要求', demandList: [{ tit: '主题要求', desc: '年轻美妆' }] }]);
   assert.equal(raw.detail.template_id_list, '["7408401210929053711","7411422748410609714"]');
-  const growth = await lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' });
+  assert.equal(to('/cam_api/task/v1/growth_task_detail').length, 0);
+  const growth = await lib.growthTaskDetail({ id: 'headdress_decoration' });
   assert.deepEqual(to('/cam_api/task/v1/growth_task_detail')[0].query, { task_id: 'headdress_decoration' });
   assert.equal(growth.bonus_yuan, 10);
   assert.deepEqual(growth.inspirations.map((i) => i.inspiration_id), ['7697075498307897370']);
   assert.deepEqual(growth.tutorial, { title: '像素胡子小蓝兔教程', desc: '静态贴纸替换', video_url: 'https://cdn/v.mp4' });
   assert.equal(growth.title, '学会制作1款头饰装饰特效');
-  await assert.rejects(lib.taskDetail({ kind: 'growth' }), /INVALID_TASK_ID/);
-  await assert.rejects(lib.taskDetail({ kind: 'activity', id: 'A1' }), /INVALID_KIND: activity; valid: task, growth/);
+  assert.equal(to('/effectcam/v2/effect_task_detail').length, 1);
+  await assert.rejects(lib.growthTaskDetail({}), /INVALID_TASK_ID/);
+  await assert.rejects(lib.taskDetail({}), /INVALID_TASK_ID/);
 });
 
 test('task_detail reads each content block into entries, media, awards and links, keeping what it does not know', async () => {
@@ -746,7 +750,7 @@ test('rank_hotspots ranks hotspots by position, not rank_num, reads the board wh
   assert.deepEqual(to('/cam_api/hotspot/v1/rank')[2].query, {});
 });
 
-test('rank_subjects pages the effect and template boards by offset and reads one board in full', async () => {
+test('rank_subjects pages the effect and template boards by offset, and rank_subject_detail reads one board in full', async () => {
   const { lib, to } = setup();
   const first = await lib.rankSubjects({});
   assert.deepEqual(to('/cam_api/discover/v1/subjects')[0].query, { cursor: '0', count: '20', type: '1' });
@@ -767,25 +771,29 @@ test('rank_subjects pages the effect and template boards by offset and reads one
   const templates = await lib.rankSubjects({ kind: 'template' });
   assert.equal(to('/cam_api/discover/v1/subjects').at(-1).query.type, '2');
   assert.equal(templates.subjects[0].effects[0].app_effect_id, '7529884834588590134');
-  const one = await lib.rankSubjects({ subject_id: '261' });
+  const one = await lib.rankSubjectDetail({ subject_id: '261' });
   assert.deepEqual(to('/cam_api/discover/v1/subject_detail')[0].query, { subject_id: '261', cursor: '0', count: '20' });
   assert.equal(one.name, '测一测玩法特效榜 - 11月');
   await assert.rejects(lib.rankSubjects({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: effect, template/);
+  await assert.rejects(lib.rankSubjectDetail({}), /INVALID_SUBJECT_ID/);
+  assert.equal(to('/cam_api/discover/v1/subject_detail').length, 1);
 });
 
-test('rank_subjects keyword searches every page of a kind', async () => {
+test('rank_subjects_search reads every page of a kind and matches board names', async () => {
   const { lib, to } = setup();
-  const out = await lib.rankSubjects({ keyword: ' 美妆 ' });
+  const out = await lib.rankSubjectsSearch({ keyword: ' 美妆 ' });
   assert.deepEqual(to('/cam_api/discover/v1/subjects').map((c) => c.query.cursor), ['0', '20']);
   assert.deepEqual({ kw: out.keyword, total: out.total, names: out.subjects.map((s) => s.name) }, { kw: '美妆', total: 1, names: ['热爆美妆特效榜 - 3月'] });
-  const tpl = await lib.rankSubjects({ kind: 'template', keyword: '歌词' });
+  const tpl = await lib.rankSubjectsSearch({ kind: 'template', keyword: '歌词' });
   assert.deepEqual(tpl.subjects.map((s) => s.subject_id), ['204']);
-  await assert.rejects(lib.rankSubjects({ keyword: '  ' }), /INVALID_KEYWORD/);
+  await assert.rejects(lib.rankSubjectsSearch({ keyword: '  ' }), /INVALID_KEYWORD/);
+  await assert.rejects(lib.rankSubjectsSearch({}), /INVALID_KEYWORD/);
+  await assert.rejects(lib.rankSubjectsSearch({ kind: 'emoji', keyword: '美妆' }), /INVALID_KIND: emoji; valid: effect, template/);
 });
 
-test('rank_innovation creators converts the award to yuan', async () => {
+test('rank_creators converts the award to yuan', async () => {
   const { lib } = setup();
-  assert.deepEqual((await lib.rankInnovation({ kind: 'creators' })).items[0], {
+  assert.deepEqual((await lib.rankCreators()).items[0], {
     rank: 1,
     uid: '7495234997042594875',
     name: '征蓬落日圆',
@@ -798,12 +806,12 @@ test('rank_innovation creators converts the award to yuan', async () => {
   });
 });
 
-test('rank_innovation pages the creator board, which arrives whole', async () => {
+test('rank_creators pages the creator board, which arrives whole', async () => {
   const users = [1, 2, 3].map((n) => `{"rank_no":${n},"uid":749523499704259487${n},"username":"u${n}"}`).join(',');
   const { lib, to } = setup({ 'GET /cam_api/innovation_plan/v1/user_month_rank': `{"code":0,"data":[${users}]}` });
-  const first = await lib.rankInnovation({ kind: 'creators', count: 2 });
+  const first = await lib.rankCreators({ count: 2 });
   assert.deepEqual({ ranks: first.items.map((u) => u.rank), total: first.total, next: first.next_offset, more: first.has_more }, { ranks: [1, 2], total: 3, next: 2, more: true });
-  const last = await lib.rankInnovation({ kind: 'creators', offset: 2, count: 2 });
+  const last = await lib.rankCreators({ offset: 2, count: 2 });
   assert.deepEqual({ ranks: last.items.map((u) => u.rank), uid: last.items[0].uid, more: last.has_more }, { ranks: [3], uid: '7495234997042594873', more: false });
   assert.equal(to('/cam_api/innovation_plan/v1/rank_list').length, 0);
 });
@@ -827,7 +835,8 @@ test('rank_innovation picks ask for the artwork type and page by the requested s
   assert.deepEqual({ next: out.next_offset, more: out.has_more, total: out.total }, { next: 40, more: true, total: 249 });
   await lib.rankInnovation({ kind: 'effect' });
   assert.equal(to('/cam_api/innovation_plan/v1/rank_list')[1].query.artwork_type, '0');
-  await assert.rejects(lib.rankInnovation({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: creators, template, effect/);
+  await assert.rejects(lib.rankInnovation({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: template, effect/);
+  await assert.rejects(lib.rankInnovation({ kind: 'creators' }), /INVALID_KIND: creators; valid: template, effect/);
   assert.equal(to('/cam_api/innovation_plan/v1/user_month_rank').length, 0);
 });
 
@@ -1038,9 +1047,9 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   const answers = {
     inspiration_list: { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_url: 'https://c/1.png' }] },
     inspiration_detail: { inspiration_id: '2', title: '锦鲤妆', images: ['https://c/2.png', 'https://c/2b.png'] },
-    rank_hotspots: { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_url: null }] }] },
-    tasks_list: { kind: 'growth', items: [{ task_id: 'g', kind: 'growth' }], raw: [{ kind: 'growth', item_id: null, extra: null }] },
-    task_detail: { kind: 'growth', inspirations: [{ inspiration_id: '4', title: '重返2018', cover_url: 'https://c/4.png' }] },
+    hotspot_inspirations: { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_url: null }] }] },
+    growth_tasks_list: { items: [{ task_id: 'g' }] },
+    growth_task_detail: { inspirations: [{ inspiration_id: '4', title: '重返2018', cover_url: 'https://c/4.png' }] },
     rank_list: { items: [] },
   };
   const client = await connect({
@@ -1059,14 +1068,17 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   assert.deepEqual(list, { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_ref: 'img:1' }] });
   assert.deepEqual(seen[1].opts, { projectPath: '/proj/X' });
   assert.deepEqual(await json('inspiration_detail', { inspiration_id: '2' }), answers.inspiration_detail);
-  assert.deepEqual(await json('rank_hotspots', { topic_id: '13439' }), { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_ref: null }] }] });
-  await json('tasks_list', { kind: 'growth' });
-  assert.deepEqual(await json('task_detail', { task_id: 'g' }), { task_id: 'g', kind: 'growth', inspirations: [{ inspiration_id: '4', title: '重返2018', cover_ref: 'img:2' }] });
+  assert.deepEqual(await json('hotspot_inspirations', { topic_id: '13439' }), { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_ref: null }] }] });
+  await json('growth_tasks_list', {});
+  assert.deepEqual(await json('growth_task_detail', { task_id: 'g' }), { task_id: 'g', inspirations: [{ inspiration_id: '4', title: '重返2018', cover_ref: 'img:2' }] });
   assert.equal((await json('inspiration_list', {})).items[0].cover_ref, 'img:1');
   for (const name of ['rank_list', 'rank_subjects']) {
     const tooMany = await client.callTool({ name, arguments: { count: 21 } });
     assert.equal(tooMany.isError, true, name);
   }
+  // The creator board has its own tool now.
+  assert.equal((await client.callTool({ name: 'rank_innovation', arguments: { kind: 'creators' } })).isError, true);
+  assert.equal(seen.filter((x) => x.method === 'rank_innovation').length, 0);
 });
 
 test('tasks_list pages what it keeps whole, and every listed task stays usable for task_detail', async () => {
@@ -1076,8 +1088,8 @@ test('tasks_list pages what it keeps whole, and every listed task stays usable f
     listInstances: () => [{ pid: 7 }],
     callPlugin: async (method, params) => {
       seen.push({ method, params });
-      if (method === 'tasks_list') return { kind: 'effect', items, raw: items.map((t) => ({ kind: 'task', item_id: t.task_id, extra: null })) };
-      return { kind: 'task', title: 't', content: [] };
+      if (method === 'tasks_list') return { items, raw: items.map((t) => ({ kind: 'task', item_id: t.task_id, extra: null })) };
+      return { title: 't', content: [] };
     },
   });
   const page = async (args) => JSON.parse((await client.callTool({ name: 'tasks_list', arguments: args })).content[0].text);
@@ -1089,7 +1101,7 @@ test('tasks_list pages what it keeps whole, and every listed task stays usable f
   await client.callTool({ name: 'tasks_list', arguments: {} });
   const detail = await client.callTool({ name: 'task_detail', arguments: { task_id: '124' } });
   assert.equal(detail.isError, undefined, detail.content[0].text);
-  assert.deepEqual(seen.at(-1).params, { kind: 'task', id: '124' });
+  assert.deepEqual(seen.at(-1).params, { id: '124' });
 });
 
 test('task_detail keeps the raw answer out of the reply and writes it only when save_to is given', async () => {
@@ -1111,11 +1123,10 @@ test('task_detail keeps the raw answer out of the reply and writes it only when 
   assert.match(relative.content[0].text, /SAVE_TO_NOT_ABSOLUTE: out/);
 });
 
-test('task tools take the tasks_list task_id and hand the plugin the id each task kind needs', async () => {
+test('task tools take the task_id of their own list and hand the plugin the id it needs', async () => {
   const seen = [];
   const lists = {
-    effect: {
-      kind: 'effect',
+    tasks_list: {
       items: [
         { task_id: 'A1', kind: 'activity' },
         { task_id: '108117', kind: 'task' },
@@ -1125,36 +1136,44 @@ test('task tools take the tasks_list task_id and hand the plugin the id each tas
         { kind: 'task', item_id: '108116', extra: null },
       ],
     },
-    growth: { kind: 'growth', items: [{ task_id: 'headdress_decoration', kind: 'growth' }], raw: [{ kind: 'growth', item_id: null, extra: null }] },
+    growth_tasks_list: { items: [{ task_id: 'headdress_decoration' }] },
   };
   const client = await connect({
     listInstances: () => [{ pid: 7 }],
     callPlugin: async (method, params, opts) => {
       seen.push({ method, params, opts });
-      if (method === 'tasks_list') return lists[params.kind || 'effect'];
-      if (method === 'task_detail') return { kind: params.kind, title: 't' };
+      if (lists[method]) return lists[method];
+      if (method === 'task_detail' || method === 'growth_task_detail') return { title: 't' };
       if (method === 'task_receive') return { title: 't', designer_task_id: '9001', status: 'WAIT_SUBMIT' };
       throw Error(`unexpected ${method}`);
     },
   });
   const call = async (name, args) => client.callTool({ name, arguments: args });
-  assert.match((await call('task_detail', { task_id: '108117' })).content[0].text, /UNKNOWN_TASK: 108117/);
+  assert.match((await call('task_detail', { task_id: '108117' })).content[0].text, /UNKNOWN_TASK: 108117; call tasks_list first/);
+  assert.match((await call('growth_task_detail', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_GROWTH_TASK: headdress_decoration; call growth_tasks_list first/);
   const list = JSON.parse((await call('tasks_list', {})).content[0].text);
   assert.equal(list.raw, undefined);
-  await call('tasks_list', { kind: 'growth' });
-  assert.deepEqual(seen.map((s) => s.params), [{}, { kind: 'growth' }]);
+  await call('growth_tasks_list', {});
+  assert.deepEqual(
+    seen.map((s) => [s.method, s.params]),
+    [
+      ['tasks_list', {}],
+      ['growth_tasks_list', {}],
+    ],
+  );
   const detail = JSON.parse((await call('task_detail', { task_id: '108117' })).content[0].text);
-  assert.deepEqual(seen.at(-1).params, { kind: 'task', id: '108116' });
+  assert.deepEqual(seen.at(-1), { method: 'task_detail', params: { id: '108116' }, opts: { pid: 7 } });
   assert.equal(detail.task_id, '108117');
-  await call('task_detail', { task_id: 'headdress_decoration' });
-  assert.deepEqual(seen.at(-1).params, { kind: 'growth', id: 'headdress_decoration' });
+  assert.deepEqual(JSON.parse((await call('growth_task_detail', { task_id: 'headdress_decoration' })).content[0].text), { task_id: 'headdress_decoration', title: 't' });
+  assert.deepEqual(seen.at(-1), { method: 'growth_task_detail', params: { id: 'headdress_decoration' }, opts: { pid: 7 } });
+  assert.match((await call('task_detail', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_TASK: headdress_decoration/);
   assert.match((await call('task_detail', { task_id: 'A1' })).content[0].text, /NO_TASK_DETAIL: A1 is an activity/);
   const got = JSON.parse((await call('task_receive', { task_id: '108117' })).content[0].text);
   assert.deepEqual(seen.at(-1).params, { item_id: '108116' });
   assert.deepEqual(got, { task_id: '108117', title: 't', designer_task_id: '9001', status: 'WAIT_SUBMIT' });
-  assert.match((await call('task_receive', { task_id: 'headdress_decoration' })).content[0].text, /TASK_NOT_RECEIVABLE: headdress_decoration is not an effect task \(kind=growth\)/);
+  assert.match((await call('task_receive', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_TASK: headdress_decoration/);
   assert.match((await call('task_receive', { task_id: 'A1' })).content[0].text, /TASK_NOT_RECEIVABLE: A1 is not an effect task \(kind=activity\)/);
-  assert.match((await call('task_bind', { path: '/proj/X', task_id: 'headdress_decoration' })).content[0].text, /TASK_NOT_BINDABLE: headdress_decoration is a growth task/);
+  assert.match((await call('task_bind', { path: '/proj/X', task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_TASK: headdress_decoration/);
   assert.equal(seen.filter((s) => s.method === 'task_receive').length, 1);
 });
 
