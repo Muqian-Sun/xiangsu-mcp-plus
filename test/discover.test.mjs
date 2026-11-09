@@ -114,7 +114,7 @@ test('effect_detail reads the 发现 page detail of any effect and keeps what it
     functions: ['美瞳', '辉光'],
     designer: { uid: '3578226660096025', name: '落落小魔王', level_name: '小白特效师' },
     tags: [],
-    videos: [{ url: 'https://play/v1', cover_url: 'https://img/c1.jpeg', likes: '46.0万' }],
+    videos: [{ video_url: 'https://play/v1', cover_url: 'https://img/c1.jpeg', likes: '46.0万' }],
     unread: {
       is_choiceness: 0,
       effect_source: 1,
@@ -254,6 +254,15 @@ test('effect_search, inspiration_search and tutorial_search send their app searc
   assert.deepEqual(EFFECT_SEARCH_KINDS, ['effect', 'template']);
 });
 
+test('a search answered whole in one page says there is no next page, whatever cursor the server hands back', async () => {
+  // tutorial_search, 2026-11-09: count 3 brought back all 8 courses, total 8, with cursor 3.
+  const course = SEARCH[1].course_list[0];
+  const all = Array.from({ length: 8 }, (_, i) => ({ ...course, id: String(i + 1) }));
+  const { lib } = setup({ 'GET /cam_api/search/v1/search_list': ok({ search_type: 1, cursor: 3, total: 8, course_list: all }) });
+  const out = await lib.tutorialSearch({ query: '美妆', count: 3 });
+  assert.deepEqual([out.items.length, out.total, out.next_cursor, out.has_more], [8, 8, 8, false]);
+});
+
 test('the searches end on an empty page and check their arguments before asking', async () => {
   const { lib, calls } = setup({ 'GET /cam_api/search/v1/search_list': ok({ search_type: 2, cursor: 0, count: 0, total: 0, effect_list: null }) });
   await assert.rejects(lib.effectSearch({ query: '  ' }), /INVALID_QUERY/);
@@ -391,7 +400,7 @@ async function connect(deps) {
 test('the discover tools go to the lowest-pid window, lists hand out media refs and arguments are checked', async () => {
   const seen = [];
   const answers = {
-    effect_detail: { name: '好友', icon_url: 'https://c/i.png', videos: [{ url: 'https://v/1', cover_url: 'https://c/1.jpeg' }] },
+    effect_detail: { name: '好友', icon_url: 'https://c/d.png', videos: [{ video_url: 'https://v/1', cover_url: 'https://c/1.jpeg' }] },
     effect_videos: { videos: [{ title: 't', cover_url: 'https://c/v.jpeg', video_url: 'https://v/2.mp4' }] },
     effect_search: { items: [{ name: '醉美妆', icon_url: 'https://c/z.png' }] },
     inspiration_search: { items: [{ title: '彩妆', cover_url: 'https://c/i.png' }] },
@@ -410,15 +419,15 @@ test('the discover tools go to the lowest-pid window, lists hand out media refs 
     assert.equal(res.isError, undefined, `${name}: ${res.content[0].text}`);
     return JSON.parse(res.content[0].text);
   };
-  // A detail keeps the addresses of its own pictures and videos.
-  assert.deepEqual(await json('effect_detail', { app_effect_id: '273663451' }), answers.effect_detail);
-  assert.deepEqual(await json('effect_videos', { effect_id: '88649924', app_effect_id: '273663451' }), { videos: [{ title: 't', cover_ref: 'img:1', video_ref: 'video:2' }] });
-  assert.deepEqual(await json('effect_search', { query: '美妆', kind: 'template', cursor: 20, count: SEARCH_MAX }), { items: [{ name: '醉美妆', icon_ref: 'img:3' }] });
-  assert.deepEqual(await json('inspiration_search', { query: '美妆' }), { items: [{ title: '彩妆', cover_ref: 'img:4' }] });
-  assert.deepEqual(await json('tutorial_search', { query: '美妆', cursor: 3 }), { items: [{ title: '课', cover_ref: 'img:5' }] });
-  assert.deepEqual(await json('tutorials_list', { tab_id: 25 }), { items: [{ title: '课', link: 'https://doc/1', cover_ref: 'img:6', video_ref: 'video:7' }] });
+  // The detail's icon and video addresses are signed CDN links hundreds of characters long, so it hands out refs too.
+  assert.deepEqual(await json('effect_detail', { app_effect_id: '273663451' }), { name: '好友', icon_ref: 'img:1', videos: [{ video_ref: 'video:2', cover_ref: 'img:3' }] });
+  assert.deepEqual(await json('effect_videos', { effect_id: '88649924', app_effect_id: '273663451' }), { videos: [{ title: 't', cover_ref: 'img:4', video_ref: 'video:5' }] });
+  assert.deepEqual(await json('effect_search', { query: '美妆', kind: 'template', cursor: 20, count: SEARCH_MAX }), { items: [{ name: '醉美妆', icon_ref: 'img:6' }] });
+  assert.deepEqual(await json('inspiration_search', { query: '美妆' }), { items: [{ title: '彩妆', cover_ref: 'img:7' }] });
+  assert.deepEqual(await json('tutorial_search', { query: '美妆', cursor: 3 }), { items: [{ title: '课', cover_ref: 'img:8' }] });
+  assert.deepEqual(await json('tutorials_list', { tab_id: 25 }), { items: [{ title: '课', link: 'https://doc/1', cover_ref: 'img:9', video_ref: 'video:10' }] });
   await json('shoot_activity', {});
-  assert.deepEqual(await json('shoot_scripts', { tag: 3, count: SCRIPT_MAX }), { items: [{ name: '脚本', cover_ref: 'img:8', video_ref: 'video:9' }] });
+  assert.deepEqual(await json('shoot_scripts', { tag: 3, count: SCRIPT_MAX }), { items: [{ name: '脚本', cover_ref: 'img:11', video_ref: 'video:12' }] });
   assert.deepEqual(seen, [
     { method: 'effect_detail', params: { app_effect_id: '273663451' }, opts: { pid: 200 } },
     { method: 'effect_videos', params: { effect_id: '88649924', app_effect_id: '273663451' }, opts: { pid: 200 } },
@@ -446,4 +455,28 @@ test('the discover tools go to the lowest-pid window, lists hand out media refs 
     assert.equal((await client.callTool({ name, arguments: args })).isError, true, `${name} ${JSON.stringify(args)}`);
   }
   assert.equal(seen.length, 8);
+});
+
+test('shoot_scripts takes the tag code written as a string too', async () => {
+  const seen = [];
+  const client = await connect({ listInstances: () => [{ pid: 200 }], callPlugin: async (method, params) => (seen.push(params), { items: [] }) });
+  const res = await client.callTool({ name: 'shoot_scripts', arguments: { tag: '3' } });
+  assert.equal(res.isError, undefined, res.content[0].text);
+  assert.deepEqual(seen, [{ tag: 3 }]);
+  const bad = await client.callTool({ name: 'shoot_scripts', arguments: { tag: '美妆' } });
+  assert.equal(bad.isError, true);
+});
+
+test('effect_detail waits longer for its answer than the other requests', async () => {
+  const waits = [];
+  const timeout = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => (waits.push(ms), timeout.call(AbortSignal, ms));
+  try {
+    const { lib } = setup({ 'GET /effectcam/v2/discover_effect_detail': ok(DETAIL), 'GET /cam_api/search/v1/search_list': ok(SEARCH[2]) });
+    await lib.effectDetail({ app_effect_id: '273663451' });
+    await lib.effectSearch({ query: '美妆' });
+  } finally {
+    AbortSignal.timeout = timeout;
+  }
+  assert.deepEqual(waits, [45000, 15000]);
 });

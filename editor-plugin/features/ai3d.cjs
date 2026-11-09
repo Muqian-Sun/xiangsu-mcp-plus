@@ -254,7 +254,10 @@ const methods = {
       // On timeout this cancels the task itself, as the panel's window does.
       res = await this.mod(M.aiApiUtils).QueryTaskResult(seg_task_id, 1000, wait_s * 1000);
     } catch (e) {
-      throw Error(`AI3D_SUBJECT_FAILED: ${e.message} (task ${seg_task_id})`);
+      const why = /timeout/i.test(e.message)
+        ? `; the editor stopped waiting before the cloud answered (wait_s ${wait_s}), which says nothing about the video: retry with a larger wait_s`
+        : '';
+      throw Error(`AI3D_SUBJECT_FAILED: ${e.message} (task ${seg_task_id})${why}`);
     }
     const node = (((res && res.result) || {}).output_node_list || [])[0] || {};
     const subject_image_url = (node.image_url_list || [])[0];

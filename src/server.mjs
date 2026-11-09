@@ -110,8 +110,17 @@ const OFFICIAL_NOTES = {
   get_scene: '先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。',
   inspect: '一次看多个对象、按组件类型或属性名过滤、只留关键参数时用 inspect_many（逐个调用本工具并整理结果）。',
   edit_by_dsl:
-    '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。{"$ref": X, "component_type": T} 里的 X 不是本批前面命令的 alias 时，可以写已有对象的 guid（sNN）、名称或层级路径（同 inspect_many），转发前换成该对象上 T 组件的 guid；官方自己只认本批的 alias，已有对象的 sNN 配 component_type 会报 has no component。T 写 inspect 里的组件类型名（FaceMask、EyeColorV2、GanComponent、PostProcess 等）。',
+    '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。{"$ref": X, "component_type": T} 里的 X 不是本批前面命令的 alias 时，可以写已有对象的 guid（sNN）、名称或层级路径（同 inspect_many），转发前换成该对象上 T 组件的 guid；官方自己只认本批的 alias，已有对象的 sNN 配 component_type 会报 has no component。T 写 inspect 里的组件类型名（FaceMask、EyeColorV2、GanComponent、PostProcess 等）。set_component 的 properties 写成对象（{"属性名": 值}），写成数组会在转发前被拒；单条命令 status=success 不等于写进去了，看它 result.changes 里有没有这个属性（2026-11-09 见过单条 success、属性没写上、只有整批报 error）。',
+  interact_by_dsl: '窗口最小化或不可见时 screenshot 动作截到的是黑图；要看画面用 preview_frames（取自渲染结果，后台也能截）。',
+  list_preview_videos: '一次返回约 70 KB；只要挑视频名（给 preview_frames、makeup_compare 的 videos）时用 preview_videos，只给每类的视频名和当前视频。',
+  upload_workflow_image: '图片要写成对象 {"kind": "local_path", "file_path": "<绝对路径>"}，只传路径字符串会被拒（2026-11-09 实测）。',
+  generate_assets_batch: 'assets 里每项的类型字段叫 kind，写成 type 会被拒（2026-11-09 实测）。',
+  get_workflow_capabilities: 'algorithm_list 只给 baseModelId，algorithm_detail 要的 algorithm_id 不在列表里，二者不是同一个值；2026-11-09 因此没能加上生图节点，没找到绕过的办法。',
+  apply_workflow_patch: '校验不过时官方报错是整个联合校验的展开（几十 KB），有用的通常只有 source / target 那一句；超过 4000 字的官方报错会被截断，全文存到返回的文件里。',
 };
+// Picked: an official error this long is a validator dump (apply_workflow_patch answered tens of KB);
+// the head says what went wrong, the rest goes to a file.
+const OFFICIAL_ERROR_CHARS = 4000;
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -180,6 +189,8 @@ export function createServer(deps = {}) {
     sleep,
     openTimeoutMs: 90000,
     closeTimeoutMs: 30000,
+    // Picked: the trial saw the slot freed a few seconds after project_close returned.
+    launchRetryMs: 8000,
     instanceTimeoutMs: 30000,
     saveTimeoutMs: 15000,
     progressMs: PROGRESS_MS,
@@ -336,6 +347,9 @@ export function createServer(deps = {}) {
     if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
     return { pid: pids[0] };
   };
+  // Received state and bindings change outside tasks_list (task_receive, the app), so a miss or a
+  // stale entry is re-read once before it is reported.
+  const refreshTasks = async (win) => seenTasks.keep(await d.callPlugin('tasks_list', {}, win));
   const library = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
     return text(seenLib.keep(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }))));
@@ -397,7 +411,7 @@ export function createServer(deps = {}) {
     {
       name: 'ext_status',
       description:
-        '扩展自身状态：官方 MCP 连接情况，以及每个已加载 XiangsuMcpExt 插件的工程窗口（pid、工程路径、对应的官方 instance_id、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
+        '扩展自身状态：官方 MCP 连接情况，以及每个已加载 XiangsuMcpExt 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
       shape: {},
       run: async () => {
         const official = await d.official.listTools().then(() => d.official.status());
@@ -407,7 +421,8 @@ export function createServer(deps = {}) {
           const self_check = await d
             .callPlugin('self_check', {}, { pid: w.pid, timeoutMs: 5000 })
             .catch((e) => ({ ok: false, error: `${e.message}（该窗口里的插件是旧版本，保存后重开工程窗口即可）` }));
-          windows.push({ ...w, instance_id: ids.get(w.pid) ?? null, self_check });
+          const state = await d.callPlugin('project_state', {}, { pid: w.pid, timeoutMs: 5000 }).catch(() => null);
+          windows.push({ ...w, instance_id: ids.get(w.pid) ?? null, unsaved_changes: state ? state.changed : null, self_check });
         }
         return text({ official, windows });
       },
@@ -584,7 +599,7 @@ export function createServer(deps = {}) {
     {
       name: 'works_download',
       description:
-        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。同一窗口的多个下载会排队一个个下，可以一起发出。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
+        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件概况：key_files 只列学做法要读的文件（effect.dyehpj、场景 .scene 及其 .extra、Graph 下的文件和 .js / .ts 脚本，相对路径和大小），其余贴图、模型只给总数 file_count 和按扩展名的计数 by_extension，要看时自己列目录。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。同一窗口的多个下载会排队一个个下，可以一起发出。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
       shape: {
         ...target,
         template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。'),
@@ -612,6 +627,7 @@ export function createServer(deps = {}) {
         '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
       shape: { ...target, template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。') },
       run: async (a) => {
+        await projects.ensureFreeWindow();
         const got = await downloadWork(a);
         try {
           const opened = await projects.open({ path: got.project_path, template_id: got.template_id });
@@ -768,13 +784,15 @@ export function createServer(deps = {}) {
       name: 'task_detail',
       refs: true,
       description:
-        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 须来自本会话的 tasks_list；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
+        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list 或 my_task_status（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        if (!seenTasks.map.has(String(task_id))) await refreshTasks(win);
         const t = seenTasks.get(task_id);
         if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect tasks have details`);
-        const { raw, ...out } = await d.callPlugin('task_detail', { id: t.raw.item_id }, await homeWindow({ project_path, instance_id }));
+        const { raw, ...out } = await d.callPlugin('task_detail', { id: t.raw.item_id }, win);
         if (save_to === undefined) return text({ task_id, ...out });
         const file = saveFile(save_to, `task_detail-${task_id}.json`, JSON.stringify(raw ?? out, null, 2));
         return text({ task_id, ...out, raw_saved_to: file });
@@ -792,13 +810,16 @@ export function createServer(deps = {}) {
     },
     {
       name: 'task_receive',
-      description: '领取一个征集任务（写入当前登录账号，与活动中心的「领取」按钮相同，领取后不能撤销）。只有状态为 WAIT_RECEIVE 的任务能领，其它状态直接拒绝。返回 designer_task_id 和新状态；领取后重新 tasks_list，该任务即可 task_bind。',
+      description: '领取一个征集任务（写入当前登录账号，与活动中心的「领取」按钮相同，领取后不能撤销）。只有状态为 WAIT_RECEIVE 的任务能领，其它状态直接拒绝。返回 designer_task_id 和新状态；领取后本工具会重新读一次任务列表，接着就能 task_bind。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的任务 task_id。') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
         const t = seenTasks.get(task_id);
         if (t.raw.kind !== 'task') throw Error(`TASK_NOT_RECEIVABLE: ${task_id} is not an effect task (kind=${t.raw.kind})`);
-        return text({ task_id, ...(await d.callPlugin('task_receive', { item_id: t.raw.item_id }, await homeWindow({ project_path, instance_id }))) });
+        const win = await homeWindow({ project_path, instance_id });
+        const out = await d.callPlugin('task_receive', { item_id: t.raw.item_id }, win);
+        await refreshTasks(win);
+        return text({ task_id, ...out });
       },
     },
     {
@@ -810,11 +831,20 @@ export function createServer(deps = {}) {
         task_id: z.string().min(1).describe('tasks_list 返回的 task_id（须 bindable=true）。'),
       },
       run: async ({ path: projectDir, task_id }) => {
-        const t = seenTasks.get(task_id);
+        let t = seenTasks.get(task_id);
+        if (!t.raw.extra) {
+          await refreshTasks(await homeWindow({}));
+          t = seenTasks.get(task_id);
+        }
         if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it with task_receive first`);
         const open = (await projects.windows()).some((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
         if (open) await projects.close({ project_path: projectDir });
-        return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
+        try {
+          return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
+        } catch (e) {
+          if (!open) throw e;
+          throw Error(`BIND_REOPEN_FAILED: ${projectDir} was closed to bind the task but did not reopen (${e.message}); the task is not bound: reopen it with project_open, then task_bind again`);
+        }
       },
     },
     {
@@ -854,9 +884,10 @@ export function createServer(deps = {}) {
     {
       name: 'hotspot_inspirations',
       refs: true,
-      description: '一个热点下的灵感，按热点页的页签分组：每条的 inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）。详情用 inspiration_detail。',
-      shape: { ...target, topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。') },
-      run: community('hotspot_inspirations'),
+      description: '一个热点下的灵感，按热点页页签的顺序、按 offset / count 分页：每条的页签 tab、inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）；tabs 是全部页签名。详情用 inspiration_detail。',
+      shape: { ...target, topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。'), ...pageShape },
+      run: async ({ project_path, instance_id, topic_id, offset = 0, count = 20 }) =>
+        text(pageOf(await d.callPlugin('hotspot_inspirations', { topic_id }, await homeWindow({ project_path, instance_id })), offset, count)),
     },
     {
       name: 'douyin_hot_list',
@@ -878,19 +909,19 @@ export function createServer(deps = {}) {
     {
       name: 'douyin_hot_videos',
       refs: true,
-      description: '一个抖音实时热点下的热门视频（像塑移动版「热点详情」页同一接口）：视频 ID、播放地址 video_ref、封面 cover_ref、点赞数、作者（昵称、头像）。用来看这个梗、玩法实际怎么拍。hot_id 须来自本会话的 douyin_hot_list。',
-      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
-      run: async ({ project_path, instance_id, hot_id }) => {
+      description: '一个抖音实时热点下的视频（像塑移动版「热点详情」页同一接口，按接口原样的顺序，不是按热度排的，点赞常常只有几十）：视频 ID、播放地址 video_ref、封面 cover_ref、点赞数、作者昵称，按 offset / count 分页。用来看这个梗、玩法实际怎么拍。hot_id 须来自本会话的 douyin_hot_list。',
+      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。'), ...pageShape },
+      run: async ({ project_path, instance_id, hot_id, offset = 0, count = 20 }) => {
         const { raw } = seenHots.get(hot_id);
-        return text(await d.callPlugin('douyin_hot_videos', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })));
+        return text(pageOf(await d.callPlugin('douyin_hot_videos', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })), offset, count));
       },
     },
     {
       name: 'baidu_hot_list',
       refs: true,
-      description: '百度热搜榜（top.baidu.com，不用登录、不用开像塑）：置顶条 pinned 和 50 条热搜，每条有名次、词、摘要、热度、配图 image_ref、链接 link，榜单更新时间 updated_at。看站外正在发生的社会、娱乐话题。',
-      shape: {},
-      run: async () => text(await baiduHotList(d.fetchJson)),
+      description: '百度热搜榜（top.baidu.com，不用登录、不用开像塑）：置顶条 pinned 和 50 条热搜，按 offset / count 分页（默认前 20 条），每条有名次、词、摘要、热度、配图 image_ref、链接 link，榜单更新时间 updated_at。看站外正在发生的社会、娱乐话题。',
+      shape: { ...pageShape },
+      run: async ({ offset = 0, count = 20 }) => text(pageOf(await baiduHotList(d.fetchJson), offset, count)),
     },
     {
       name: 'bilibili_popular',
@@ -938,7 +969,7 @@ export function createServer(deps = {}) {
     {
       name: 'rank_innovation',
       refs: true,
-      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面。创作者月榜用 rank_creators。',
+      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签 labels（同一页里同一个特效带不同标签出现多次时合成一条）、投稿量、总收益、入选日期、封面。服务端的 offset 不按条目计，翻页时上一页的特效会再出现，返回的 date 也可能变；要全看时按 effect_id 去重。创作者月榜用 rank_creators。',
       shape: {
         ...target,
         kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效。'),
@@ -949,7 +980,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_creators',
-      description: '创新计划的创作者月榜，按 offset / count 分页：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金（元）。',
+      refs: true,
+      description: '创新计划的创作者月榜，按 offset / count 分页：名次、创作者 uid、昵称和头像 avatar_ref、上榜素材数、跟拍量、预计奖金（元）。',
       shape: { ...target, ...pageShape },
       run: community('rank_creators'),
     },
@@ -1033,8 +1065,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'effect_detail',
+      refs: true,
       description:
-        '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、几条示例视频（地址和封面）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
+        '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、图标 icon_ref、几条示例视频（video_ref 和封面 cover_ref）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
       shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、my_effects 返回的 app_effect_id。') },
       run: community('effect_detail'),
     },
@@ -1112,7 +1145,7 @@ export function createServer(deps = {}) {
       description: `像塑官方的拍摄脚本（移动版「拍摄脚本」同一接口）：教你用特效拍什么样的视频（如「【测一测】表演有梗结果」「【美妆】带特效前后反差」），每条有脚本 ID、名称、完整说明 description（脚本解读和「尝试拍一个」的具体做法）、标签代码 tags、播放数 views、拍摄数 shoots、封面 cover_ref 和示范视频 video_ref。tag 按标签代码筛选，App 里没有标签名，实测各代码下的脚本：${SCRIPT_TAG_TEXT}。type 是接口给的脚本类型代码，含义也没给出（1 多为技巧合集，2 多为具体演绎）。全部约 50 条，按 offset / count 分页。`,
       shape: {
         ...target,
-        tag: z.number().int().optional().describe(`标签代码：${SCRIPT_TAG_TEXT}；省略时全部。`),
+        tag: z.coerce.number().int().optional().describe(`标签代码（整数，写成 "3" 也行）：${SCRIPT_TAG_TEXT}；省略时全部。`),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
         count: z.number().int().min(1).max(SCRIPT_MAX).optional().describe(`每页数量，默认 20（最大 ${SCRIPT_MAX}）。`),
       },
@@ -1303,7 +1336,7 @@ export function createServer(deps = {}) {
           .max(MAX_COMPARE_REGIONS)
           .describe('区域：按画面比例给框，或用 eye + calibration 按每位模特自己的眼睛位置取（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏）。'),
         reference: z.string().min(1).optional().describe('参考图（PNG / JPEG）的绝对路径；和区域的 ref 一起用。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（list_preview_videos 返回的 video_name）；不给就用当前视频。'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
         at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再截基线（毫秒），默认 ${HOLD_AT_MS}（AI 变脸要过一会儿才完全生效）。`),
         zoom: z.number().int().min(1).max(8).optional().describe('并排图的放大倍数，默认 3。'),
@@ -1371,6 +1404,8 @@ export function createServer(deps = {}) {
               for (const s of states) s.to_reference = { rgb: s.rgb.map((v, c) => Number((v - target.rgb[c]).toFixed(1))), luma: Number((s.luma - target.luma).toFixed(1)), detail: Number((s.detail - target.detail).toFixed(2)) };
             }
             const drift = frameDiff(frames[0], again, r);
+            // Deltas are rounded to 0.1, so all zeros means no variant moved the box's average at all.
+            const unchanged = states.length > 1 && states.slice(1).every((s) => s.delta.luma === 0 && s.delta.rgb.every((v) => v === 0));
             const file = path.join(dir, `${prefix}compare-${j + 1}.png`);
             fs.writeFileSync(file, sideBySide([...frames.map((img) => ({ img, box: r })), ...(target ? [{ img: ref, box: given.ref }] : [])], zoom));
             const box = pixelBox(frames[0], r);
@@ -1381,6 +1416,7 @@ export function createServer(deps = {}) {
               ...(target ? { reference: target } : {}),
               drift,
               ...(drift.mean > DRIFT_MEAN ? { warning: '前后两次基线不一样，这期间画面自己在变（会动的视频或自带动画的特效），各状态之间的差别不全是改动造成的' } : {}),
+              ...(unchanged ? { note: '所有状态在这个区域都和基线完全一样：框可能压在贴纸或别的遮挡上，或者框到了这些改动画不到的地方，看并排图核对框的位置' } : {}),
               image: file,
             };
           });
@@ -1400,7 +1436,7 @@ export function createServer(deps = {}) {
       shape: {
         ...target,
         layout: z.enum(Object.keys(LAYOUTS)).describe('要标定的贴图布局：face 整脸、eye 眼部、lips 唇部。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次在这些预览视频上标定（list_preview_videos 的 video_name），如几位模特的正脸视频；不给就用当前视频。'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次在这些预览视频上标定（preview_videos 列出的 video_name），如几位模特的正脸视频；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
         at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再截图（毫秒），默认 ${HOLD_AT_MS}。`),
         save_to: saveTo,
@@ -1489,14 +1525,30 @@ export function createServer(deps = {}) {
       },
     },
     {
+      name: 'preview_videos',
+      description: '可用的预览视频名，按 tracking_type 分组（face、two_person、body、hand、pet、environment），外加当前视频 current：只给名字，用来挑 preview_frames、makeup_compare、makeup_calibrate 的 videos 和官方 set_preview_video 的 video_name。要地址、有没有本地文件等全部字段用官方 list_preview_videos（约 70 KB）。',
+      shape: { ...target, tracking_type: z.string().min(1).optional().describe('只列这一类，如 face；不给就全列。') },
+      run: async (a) => {
+        const instance_id = await officialInstance(a);
+        const all = await d.official.callJson('list_preview_videos', { instance_id, intention: '列出预览视频名' });
+        const groups = all.videos || {};
+        if (a.tracking_type !== undefined && !Object.prototype.hasOwnProperty.call(groups, a.tracking_type)) throw Error(`INVALID_TRACKING_TYPE: ${a.tracking_type}; valid: ${Object.keys(groups).join(', ')}`);
+        const pick = a.tracking_type === undefined ? Object.keys(groups) : [a.tracking_type];
+        return text({
+          current: all.current ? { tracking_type: all.current.tracking_type, video_name: all.current.video_name ?? null } : null,
+          videos: Object.fromEntries(pick.map((k) => [k, groups[k].map((v) => v.video_name)])),
+        });
+      },
+    },
+    {
       name: 'preview_frames',
       description:
-        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
+        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
       shape: {
         ...target,
         count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
         interval_ms: z.number().int().min(100).max(10000).optional().describe('相邻两张的间隔（毫秒），默认 700。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（list_preview_videos 返回的 video_name）；不给就用当前视频。'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，如 face、body、hand，默认 face。'),
         reset: z.boolean().optional().describe('每组截图前先重置预览，默认 true。'),
         crop: z
@@ -1744,7 +1796,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ar_video_cancel',
-      description: '取消一个还在 running（或 unconfirmed）的 AR 视频生成任务，等同面板里的「取消生成」。取消确认后任务从记录里消失（cancelled=true）；取消前它已经结束时返回 cancelled=false 和结束时的 status。',
+      description: '取消一个还在 running（或 unconfirmed）的 AR 视频生成任务，等同面板里的「取消生成」。取消确认后任务从记录里消失（cancelled=true）；取消前它已经结束时返回 cancelled=false 和结束时的 status。已经结束的任务（完成、失败、已取消）不能取消，直接报 AR_VIDEO_NOT_RUNNING。',
       shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
       run: plugin('ar_video_cancel'),
     },
@@ -1831,10 +1883,21 @@ export function createServer(deps = {}) {
   const rewritten = {
     edit_by_dsl: async (args) => {
       if (!Array.isArray(args.commands)) return args;
+      for (const [i, c] of args.commands.entries()) {
+        if (c && c.command_type === 'set_component' && Array.isArray(c.params?.properties)) throw Error(`INVALID_ARGUMENTS(edit_by_dsl): commands[${i}] set_component properties must be an object such as {"intensity": 0.5}, not an array`);
+      }
       const instance_id = String(args.instance_id);
       const inspect = (guid) => d.official.callJson('inspect', { instance_id, guid, intention: '把 $ref 的对象换成组件 guid' });
       return { ...args, commands: await resolveComponentRefs(args.commands, { objects: async () => sceneObjects(await namesTree(instance_id)), inspect }) };
     },
+  };
+
+  const clipError = (name, res) => {
+    if (!res || !res.isError) return res;
+    const body = (res.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+    if (body.length <= OFFICIAL_ERROR_CHARS) return res;
+    const file = d.spill.write(`${name}-error`, body);
+    return failure(`${body.slice(0, OFFICIAL_ERROR_CHARS)}\n…（官方报错共 ${body.length} 字，已截断，全文在 ${file}）`);
   };
 
   const callTool = async (name, args) => {
@@ -1866,9 +1929,9 @@ export function createServer(deps = {}) {
       }
     }
     try {
-      return await d.official.callTool(name, forward);
+      return clipError(name, await d.official.callTool(name, forward));
     } catch (e) {
-      if (e instanceof McpError) return failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`);
+      if (e instanceof McpError) return clipError(name, failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`));
       if (e instanceof OfficialUnreachable) return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);
       return failure(`OFFICIAL_MCP_DISCONNECTED(${name}): ${e.message}；调用发出后连接断了，编辑器里可能已经执行（生成类调用可能已扣额度），没有自动重发：先确认结果（如 get_scene、生成任务的状态）再决定要不要重新调用`);
     }

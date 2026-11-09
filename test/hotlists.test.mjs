@@ -131,10 +131,14 @@ test('the outside hot list tools answer through the injected fetcher, need no ed
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
   const call = async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
-  assert.equal((await call('baidu_hot_list')).items[0].image_ref, 'img:2');
+  const baidu = await call('baidu_hot_list');
+  assert.equal(baidu.items[0].image_ref, 'img:2');
+  assert.deepEqual([baidu.total, baidu.items.length, baidu.next_offset, baidu.has_more], [2, 2, 20, false]);
   assert.equal((await call('bilibili_popular', { page: 1, count: 5 })).items[0].cover_ref, 'img:3');
   assert.equal((await call('bilibili_hot_search')).items.length, 2);
   assert.deepEqual(urls.slice(1, 2), ['https://api.bilibili.com/x/web-interface/popular?ps=5&pn=1']);
+  const second = await call('baidu_hot_list', { offset: 1, count: 1 });
+  assert.deepEqual([second.items.map((i) => i.rank), second.has_more, second.pinned.length], [[2], false, 1]);
   const { tools } = await client.listTools();
   // The site answers -400 above 50 a page (2026-11-09).
   assert.equal(tools.find((t) => t.name === 'bilibili_popular').inputSchema.properties.count.maximum, 50);

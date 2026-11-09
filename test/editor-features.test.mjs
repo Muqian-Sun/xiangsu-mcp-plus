@@ -263,13 +263,14 @@ test('menu_preview returns description plus a CDN url or an existing bundled fil
 test('menu_list details adds description and picture to each match, and only for a narrow query', () => {
   const { lib } = setup();
   assert.deepEqual(lib.menuList({ query: '面部生成', details: true }), {
-    total: 4,
+    total: 2,
+    menu_total: 4,
     items: [
       { menu_id: 'smokey', name: '烟熏妆', path: 'AI 玩法/面部生成', kind: 'builtin', components: ['GanComponent'], description: '一键烟熏妆', image_url: 'https://cdn/smokey.png', image_file: null },
       { menu_id: 'SausageLips', name: '香肠嘴', path: 'AI 玩法/面部生成', kind: 'package', components: [], description: '香肠嘴说明', image_url: null, image_file: null },
     ],
   });
-  assert.deepEqual(lib.menuList({ query: '没有这项', details: true }), { total: 4, items: [] });
+  assert.deepEqual(lib.menuList({ query: '没有这项', details: true }), { total: 0, menu_total: 4, items: [] });
   assert.equal(lib.menuList({ query: '面部生成' }).items[0].description, undefined);
   const many = setup();
   const entries = Array.from({ length: MAX_MENU_PREVIEW + 1 }, (_, i) => ({ menu_id: `m${i}`, name: `项${i}`, path: 'p', kind: 'builtin', components: [] }));

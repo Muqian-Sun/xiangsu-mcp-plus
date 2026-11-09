@@ -23,6 +23,9 @@ const SEARCH_PAGE = 50;
 // Picked, not measured beyond the runs noted at worksSearchAll: one more pass when the first falls short.
 const SEARCH_PASSES = 2;
 const MAX_TERMS = 8;
+// Picked: enough to fill a page the server answers short (one work for three asked, trial) without
+// turning one call into a crawl.
+const LIST_FILL_PAGES = 4;
 // Picked, not measured: long enough to page through one search, short enough that new works show up.
 const CACHE_MS = 10 * 60 * 1000;
 const CACHE_ENTRIES = 20;
@@ -65,7 +68,8 @@ function slimWork(t, transform) {
     use_count: w.bindMaterialUseCnt ?? null,
     file_size: w.fileSize ?? null,
     cover_url: w.coverPath || w.backupCoverPath || null,
-    gif_url: w.gifPath || null,
+    // Some works give the cover again as their animation.
+    gif_url: w.gifPath && w.gifPath !== (w.coverPath || w.backupCoverPath) ? w.gifPath : null,
     tutorial: w.tutorial || null,
   };
 }
@@ -101,17 +105,29 @@ const methods = {
     return { items: raw.map((t) => slimWork(t, transform)), raw, next, has_more: !!next };
   },
 
+  // The server can answer a page with fewer works than asked for while more follow, so short pages
+  // are topped up from the next ones, up to LIST_FILL_PAGES requests.
   async worksList({ category_id, cursor, count = 20, sort } = {}) {
     const ranker = sortValue(sort);
-    const state = decodeCursor(cursor);
+    let state = decodeCursor(cursor);
     const nav = await this.worksNav();
     const category = await this.worksCategory(category_id, nav);
-    const data = body(
-      await this.mod(M.worksCategory).apiTemplatesCategory({ ...state, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
-      'GET_WORKS_LIST',
-    );
-    const { next, ...page } = this.worksPage(data.dataInfos || {});
-    return { category, categories: nav.categories, ...page, next_cursor: encodeCursor(next) };
+    const items = [];
+    const raw = [];
+    let next = null;
+    for (let i = 0; i < LIST_FILL_PAGES && items.length < count; i++) {
+      const data = body(
+        await this.mod(M.worksCategory).apiTemplatesCategory({ ...state, count: count - items.length, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
+        'GET_WORKS_LIST',
+      );
+      const page = this.worksPage(data.dataInfos || {});
+      items.push(...page.items);
+      raw.push(...page.raw);
+      next = page.next;
+      if (!next) break;
+      state = next;
+    }
+    return { category, categories: nav.categories, items, raw, has_more: !!next, next_cursor: encodeCursor(next) };
   },
 
   // Same request the homepage search box sends, scoped to one category; `state` is where the page starts.

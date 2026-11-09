@@ -88,6 +88,9 @@ function keepBigInts(key, value, context) {
   return typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value) ? context.source : value;
 }
 
+// Picked: the app's pages answer within a few seconds; one that has not in 15 s is stuck.
+const REQUEST_TIMEOUT_MS = 15000;
+
 async function request(lib, what, path, opts = {}) {
   let out = await send(lib, what, path, opts);
   if (out.code === BUSY_CODE && !opts.json && !opts.form) {
@@ -98,7 +101,7 @@ async function request(lib, what, path, opts = {}) {
   return out.data;
 }
 
-async function send(lib, what, path, { query = {}, json, form } = {}) {
+async function send(lib, what, path, { query = {}, json, form, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   lib.ensureCompatible('community');
   const base = lib.mod(M.urls).Domain.kBackendApiURL;
   const utils = lib.mod(M.bizUtils);
@@ -109,7 +112,7 @@ async function send(lib, what, path, { query = {}, json, form } = {}) {
   };
   const url = new URL(path, base);
   for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
-  const init = { method: 'GET', headers, signal: AbortSignal.timeout(15000) };
+  const init = { method: 'GET', headers, signal: AbortSignal.timeout(timeoutMs) };
   if (json) {
     headers['content-type'] = 'application/json';
     Object.assign(init, { method: 'POST', body: JSON.stringify(json) });
@@ -151,8 +154,8 @@ function slimVideo(v) {
 }
 
 function tagNames(tags) {
-  if (typeof tags === 'string') return tags.split(',').filter(Boolean);
-  return (tags || []).map((t) => (t && t.name) || t).filter(Boolean);
+  if (typeof tags === 'string') return [...new Set(tags.split(',').filter(Boolean))];
+  return [...new Set((tags || []).map((t) => (t && t.name) || t).filter(Boolean))];
 }
 
 const days = (ms) => (typeof ms === 'number' && ms >= 0 ? Math.floor(ms / 86400000) : null);
@@ -244,12 +247,31 @@ function taskBlock(b) {
     if (TASK_LISTS.includes(key)) out.items = (v || []).map(taskItem).filter((x) => Object.keys(x).length);
     else if (key === 'link' && v && v.url) links.push({ text: v.desc || '', url: v.url });
     else if (key === 'statement' && v && v.link && v.link.url) links.push({ text: b.contentBlockName || '', url: v.link.url });
-    else if (key === 'recommendProject') out.project_ids = ((v && v.ids) || []).map(String);
+    else if (key === 'recommendProject') {
+      const { ids, ...rest } = v || {};
+      out.project_ids = (ids || []).map(String);
+      if (Object.keys(rest).length) unread[key] = rest;
+    }
     else unread[key] = v;
   }
   if (links.length) out.links = links;
   if (Object.keys(unread).length) out.unread = unread;
   return out;
+}
+
+// The task page's 推荐工程 arrive as a JSON string of template ids; anything else is handed on as it
+// came rather than failing the whole detail.
+function templateIds(list) {
+  if (list === undefined || list === null || list === '') return [];
+  let ids = list;
+  if (typeof list === 'string') {
+    try {
+      ids = JSON.parse(list);
+    } catch (_) {
+      return { unparsed: list };
+    }
+  }
+  return Array.isArray(ids) ? ids.map(String) : { unparsed: list };
 }
 
 function slimGrowthLevel(l) {
@@ -387,8 +409,13 @@ function slimArtwork(e) {
 }
 
 // The 作品详情 / 我的 pages' figure cards: a label, its value and the text shown for it.
+// Money cards carry fen in val next to yuan in the text (本月收入 5100 / "51.00"); value is in yuan.
 function slimFigures(list) {
-  return (list || []).map((f) => ({ name: f.display_type, value: f.val ?? null, text: f.display_val ?? null }));
+  return (list || []).map((f) => ({
+    name: f.display_type,
+    value: typeof f.val === 'number' && /收入|收益/.test(f.display_type || '') ? f.val / 100 : f.val ?? null,
+    text: f.display_val ?? null,
+  }));
 }
 
 const day = (s) => (/^\d{8}$/.test(String(s)) ? `${String(s).slice(0, 4)}-${String(s).slice(4, 6)}-${String(s).slice(6)}` : s ?? null);
@@ -622,7 +649,7 @@ const methods = {
       title: d.title,
       status: this.taskStatus(d.process_status),
       status_text: d.s_desc || null,
-      tags: (d.tags || []).map((x) => x.name),
+      tags: [...new Set((d.tags || []).map((x) => x.name))],
       reward_begin: d.reward_begin || null,
       reward_end: d.reward_end || null,
       offline_at: iso(d.offline_at_unix),
@@ -630,6 +657,7 @@ const methods = {
       finish_status: d.fin_status || null,
       level_task: !!d.is_level_task,
       my_effects: (d.task_effect_list || []).map(slimTaskEffect),
+      recommended_template_ids: templateIds(d.template_id_list),
       content: modules.map(taskBlock),
       raw: { detail: d, content: modules },
     };
@@ -718,21 +746,23 @@ const methods = {
     };
   },
 
-  // A hotspot's inspirations, grouped by the tabs of the hotspot page.
+  // A hotspot's inspirations in the order of the hotspot page's tabs, each naming its tab; the page
+  // sends them all at once, so the MCP server pages them.
   async hotspotInspirations({ topic_id } = {}) {
     const id = requireId(topic_id, 'INVALID_TOPIC_ID');
     const d = await request(this, 'GET_HOTSPOT_INSPIRATIONS', '/cam_api/hotspot/v1/insp_tabs', { query: { topic_id: id } });
-    const tabs = (d.insp_tabs || []).map((t) => ({
-      tab: t.title,
-      inspirations: (t.insps || []).map((i) => ({
+    const tabs = d.insp_tabs || [];
+    const items = tabs.flatMap((t) =>
+      (t.insps || []).map((i) => ({
+        tab: t.title,
         inspiration_id: String(i.id),
         title: i.title,
         tag: i.tag || null,
         description: i.detail || '',
         cover_url: first(i.cover && i.cover.urlList),
       })),
-    }));
-    return { topic_id: id, tabs };
+    );
+    return { topic_id: id, tabs: tabs.map((t) => t.title), items };
   },
 
   // The board is one short list (79 hotspots, measured), read whole and paged here.
@@ -816,12 +846,23 @@ const methods = {
     const d = await request(this, 'GET_INNOVATION_PICKS', '/cam_api/innovation_plan/v1/rank_list', {
       query: { page_size: count, offset, tab_id: 'all', artwork_type: PICK_KINDS[kind] },
     });
-    const items = (d.effect_list || []).map((e) => ({
+    // The same effect can come twice in a page under different labels; it is listed once with both.
+    const byId = new Map();
+    for (const e of d.effect_list || []) {
+      const id = str(e.effect_id_str);
+      const had = byId.get(id);
+      if (had) {
+        if (e.label && !had.labels.includes(e.label)) had.labels.push(e.label);
+        continue;
+      }
+      byId.set(id, { e, labels: e.label ? [e.label] : [] });
+    }
+    const items = [...byId.values()].map(({ e, labels }) => ({
       effect_id: str(e.effect_id_str),
       app_effect_id: str(e.app_effect_id_str),
       name: e.name,
       icon_url: e.icon || null,
-      label: e.label || null,
+      labels,
       publish_count: e.pub_val ?? null,
       revenue_total: e.total_rev ?? null,
       reviewed_on: e.review_date || null,
@@ -1059,7 +1100,7 @@ const methods = {
         cover_url: x.icon || null,
         likes: x.digg_v ?? null,
         likes_text: x.digg || null,
-        author: x.author ? { id: str(x.author.id), name: x.author.name || '', avatar_url: x.author.avatar || null } : null,
+        author: x.author ? { id: str(x.author.id), name: x.author.name || '' } : null,
       })),
     };
   },

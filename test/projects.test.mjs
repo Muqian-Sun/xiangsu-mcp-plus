@@ -30,6 +30,7 @@ function world() {
     sleep: async () => {},
     openTimeoutMs: 50,
     closeTimeoutMs: 50,
+    launchRetryMs: 50,
     instanceTimeoutMs: 50,
     saveTimeoutMs: 50,
     listInstances: () => [...windows.keys()].map((pid) => ({ pid })),
@@ -168,4 +169,70 @@ test('open and create wait until the new window scene is editable', async () => 
   assert.equal(ready.get(200), 2);
   setReadyAfter(Infinity);
   await assert.rejects(new Projects(d).create({ path: path.join(tmp(), 'n') }), /SCENE_NOT_READY: window 201/);
+});
+
+test('a launch refused at the window cap right after a close is retried until the slot frees', async () => {
+  const { d, windows, calls } = world();
+  let refusals = 2;
+  const plugin = d.callPlugin;
+  d.callPlugin = async (method, params, opts) => {
+    if (method === 'project_launch' && refusals-- > 0) {
+      calls.push(['plugin', method, params, opts]);
+      throw Error('WINDOW_LIMIT: all 2 project windows 像塑 allows are in use; close one with project_close first');
+    }
+    return plugin(method, params, opts);
+  };
+  const dir = project();
+  const out = await new Projects(d).open({ path: dir });
+  assert.equal(out.pid, 200);
+  assert.equal(calls.filter((c) => c[1] === 'project_launch').length, 3);
+  assert.equal(windows.get(200), dir);
+});
+
+test('a launch still refused when the retry time is up names the windows that hold the slots', async () => {
+  const { d } = world();
+  let now = 0;
+  const realNow = Date.now;
+  Date.now = () => now;
+  d.sleep = async (ms) => {
+    now += ms;
+  };
+  d.launchRetryMs = 3000;
+  const plugin = d.callPlugin;
+  let launches = 0;
+  d.callPlugin = async (method, params, opts) => {
+    if (method === 'project_launch') {
+      launches += 1;
+      throw Error('WINDOW_LIMIT: all 2 project windows 像塑 allows are in use; close one with project_close first');
+    }
+    return plugin(method, params, opts);
+  };
+  try {
+    await assert.rejects(new Projects(d).open({ path: project() }), /WINDOW_LIMIT: all 2 project windows .*; open windows: 100 .*S16/);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(launches, 4);
+});
+
+test('other launch failures are not retried', async () => {
+  const { d } = world();
+  const plugin = d.callPlugin;
+  let launches = 0;
+  d.callPlugin = async (method, params, opts) => {
+    if (method === 'project_launch') {
+      launches += 1;
+      throw Error('LAUNCH_FAILED: {"status":"failed"}');
+    }
+    return plugin(method, params, opts);
+  };
+  await assert.rejects(new Projects(d).open({ path: project() }), /^Error: LAUNCH_FAILED/);
+  assert.equal(launches, 1);
+});
+
+test('ensureFreeWindow refuses when both windows are taken and lists them', async () => {
+  const { d, windows } = world();
+  await new Projects(d).ensureFreeWindow();
+  windows.set(200, '/proj/B');
+  await assert.rejects(new Projects(d).ensureFreeWindow(), /WINDOW_LIMIT: all 2 project windows .*in use \(100 .*S16 \| 200 \/proj\/B\)/);
 });

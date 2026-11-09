@@ -10,7 +10,7 @@ import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotoc
 import { createServer } from '../src/server.mjs';
 import { OfficialUnreachable } from '../src/official.mjs';
 import { fetchImage, readImageFile } from '../src/images.mjs';
-import { MediaRefs } from '../src/outputs.mjs';
+import { MediaRefs, Spill } from '../src/outputs.mjs';
 
 const OWN = [
   'ai3d_animation_submit',
@@ -77,6 +77,7 @@ const OWN = [
   'my_task_status',
   'object_remove',
   'preview_frames',
+  'preview_videos',
   'project_close',
   'project_new',
   'project_open',
@@ -369,14 +370,16 @@ test('ext_status reports the official connection and each window with instance i
     listInstances: () => [{ pid: 100 }, { pid: 101 }],
     callPlugin: async (method, _p, opts) => {
       if (method === 'status') return { projectPath: `/proj/${opts.pid}` };
+      if (method === 'project_state' && opts.pid === 100) return { project_path: '/proj/100', changed: true, scene_ready: true };
       if (opts.pid === 101) throw Error('PLUGIN_ERROR(self_check): unknown method: self_check');
       return { ok: true, missing: [] };
     },
   });
   const res = JSON.parse((await client.callTool({ name: 'ext_status', arguments: {} })).content[0].text);
   assert.deepEqual(res.official, { connected: true, tools: 1 });
-  assert.deepEqual(res.windows[0], { pid: 100, project_path: '/proj/100', instance_id: '1', self_check: { ok: true, missing: [] } });
+  assert.deepEqual(res.windows[0], { pid: 100, project_path: '/proj/100', instance_id: '1', unsaved_changes: true, self_check: { ok: true, missing: [] } });
   assert.equal(res.windows[1].instance_id, null);
+  assert.equal(res.windows[1].unsaved_changes, null);
   assert.match(res.windows[1].self_check.error, /unknown method: self_check.*重开工程窗口/);
 });
 
@@ -545,4 +548,72 @@ test('ar_video tools go to the target project window, where the task is composed
   assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'dance' })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): mode/);
   assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'motion', duration_s: 9.5 })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): duration_s/);
   assert.equal(seen.length, 5);
+});
+
+test('official tools that trip agents carry a note on what to pass or use instead', async () => {
+  const names = ['edit_by_dsl', 'interact_by_dsl', 'list_preview_videos', 'upload_workflow_image', 'generate_assets_batch', 'get_workflow_capabilities', 'apply_workflow_patch'];
+  const { client } = await connect({ official: fakeOfficial({ tools: names.map((name) => ({ name, description: 'official', inputSchema: { type: 'object' } })) }), callPlugin: async () => ({}) });
+  const { tools } = await client.listTools();
+  const note = (name) => tools.find((t) => t.name === name).description;
+  assert.match(note('edit_by_dsl'), /properties 写成对象.*result\.changes/);
+  assert.match(note('interact_by_dsl'), /screenshot 动作截到的是黑图.*preview_frames/);
+  assert.match(note('list_preview_videos'), /preview_videos/);
+  assert.match(note('upload_workflow_image'), /\{"kind": "local_path", "file_path"/);
+  assert.match(note('generate_assets_batch'), /kind，写成 type 会被拒/);
+  assert.match(note('get_workflow_capabilities'), /baseModelId.*algorithm_id/);
+  assert.match(note('apply_workflow_patch'), /超过 4000 字的官方报错会被截断/);
+});
+
+test('edit_by_dsl refuses set_component properties given as an array before anything reaches the editor', async () => {
+  const official = fakeOfficial({ call: () => ({ content: [{ type: 'text', text: '{"status":"success"}' }] }) });
+  const { client } = await connect({ official, callPlugin: async () => ({}) });
+  const commands = [{ command_type: 'set_component', params: { guid: 'c1', properties: [{ intensity: 0.5 }] } }];
+  const res = await client.callTool({ name: 'edit_by_dsl', arguments: { instance_id: '1', commands } });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /commands\[0\] set_component properties must be an object/);
+  assert.deepEqual(official.seen, []);
+  const ok = await client.callTool({ name: 'edit_by_dsl', arguments: { instance_id: '1', commands: [{ command_type: 'set_component', params: { guid: 'c1', properties: { intensity: 0.5 } } }] } });
+  assert.equal(ok.isError, undefined);
+  assert.equal(official.seen.length, 1);
+});
+
+test('an official error over 4000 characters is cut, with the whole text in a file', async () => {
+  const dump = `Invalid patch: source must be set. ${'x'.repeat(9000)}`;
+  const official = fakeOfficial({ call: (name) => ({ isError: true, content: [{ type: 'text', text: name === 'get_scene' ? 'short' : dump }] }) });
+  const { client } = await connect({ official, callPlugin: async () => ({}), spill: new Spill({ stateDir: tmpdir('xs-spill-') }) });
+  const res = await client.callTool({ name: 'apply_workflow_patch', arguments: {} });
+  assert.equal(res.isError, true);
+  const text = res.content[0].text;
+  assert.ok(text.startsWith('Invalid patch: source must be set.'));
+  const file = text.match(/全文在 (\S+)）$/)[1];
+  assert.equal(fs.readFileSync(file, 'utf8'), dump);
+  assert.ok(text.length < 4200, String(text.length));
+  const short = await client.callTool({ name: 'get_scene', arguments: {} });
+  assert.deepEqual(short.content, [{ type: 'text', text: 'short' }]);
+});
+
+test('preview_videos lists only the video names by tracking type, and the current one', async () => {
+  const official = fakeOfficial();
+  official.callJson = async (name, args) => {
+    official.seen.push([name, args]);
+    if (name === 'list_instances') return { instances: [{ instance_id: '1', generation: '100-1', project_path: '/proj/A' }] };
+    if (name === 'list_preview_videos') {
+      return {
+        total: 3,
+        videos: {
+          face: [{ video_name: '模特D清秀||女', tracking_type: 'face', resource_url: '/v/d.mp4', has_local_file: true }, { video_name: 'preview_single_shake_head||女', tracking_type: 'face', resource_url: '/v/s.mp4' }],
+          two_person: [{ video_name: 'preview_two_person_normal', tracking_type: 'two_person', resource_url: '/v/t.mp4' }],
+        },
+        current: { video_name: '模特D清秀||女', tracking_type: 'face', resource_url: '/v/d.mp4', input_stream: 'x' },
+      };
+    }
+    throw Error(`unexpected ${name}`);
+  };
+  const { client } = await connect({ official, listInstances: () => [{ pid: 100 }], callPlugin: async () => ({}) });
+  const all = JSON.parse((await client.callTool({ name: 'preview_videos', arguments: { instance_id: '1' } })).content[0].text);
+  assert.deepEqual(all, { current: { tracking_type: 'face', video_name: '模特D清秀||女' }, videos: { face: ['模特D清秀||女', 'preview_single_shake_head||女'], two_person: ['preview_two_person_normal'] } });
+  const face = JSON.parse((await client.callTool({ name: 'preview_videos', arguments: { instance_id: '1', tracking_type: 'two_person' } })).content[0].text);
+  assert.deepEqual(face.videos, { two_person: ['preview_two_person_normal'] });
+  const bad = await client.callTool({ name: 'preview_videos', arguments: { instance_id: '1', tracking_type: 'cat' } });
+  assert.match(bad.content[0].text, /INVALID_TRACKING_TYPE: cat; valid: face, two_person/);
 });

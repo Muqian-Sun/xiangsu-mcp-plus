@@ -7,6 +7,9 @@ import path from 'node:path';
 // Editor cache, regenerated on open and useless as a reference.
 const SKIP_DIRS = new Set(['Library']);
 const MAX_FILES = 500;
+// What studying a work reads: the project file, the scenes and the scripts. A work lists hundreds of
+// textures and models besides (500 entries, 69 KB, in the trial), which only the counts stand for.
+const isKeyFile = (rel) => rel === 'effect.dyehpj' || /\.scene(\.extra)?$/.test(rel) || rel.startsWith(`Graph${path.sep}`) || /\.(js|ts)$/.test(rel);
 // Picked, not measured: long enough to study a work within a working day, short enough that other
 // people's projects do not pile up. works_cleanup deletes earlier.
 export const DOWNLOAD_TTL_MS = 24 * 60 * 60 * 1000;
@@ -111,6 +114,7 @@ export function outlineProject(root) {
   const files = [];
   const byExt = {};
   let bytes = 0;
+  let count = 0;
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(dir, e.name);
@@ -122,10 +126,11 @@ export function outlineProject(root) {
         const ext = path.extname(e.name).toLowerCase() || '(none)';
         byExt[ext] = (byExt[ext] || 0) + 1;
         bytes += size;
-        files.push({ path: rel, size });
+        if (isKeyFile(rel)) files.push({ path: rel, size });
+        count++;
       }
     }
   };
   walk(root);
-  return { file_count: files.length, total_bytes: bytes, by_extension: byExt, files: files.slice(0, MAX_FILES), files_truncated: files.length > MAX_FILES };
+  return { file_count: count, total_bytes: bytes, by_extension: byExt, key_files: files.slice(0, MAX_FILES), key_files_truncated: files.length > MAX_FILES };
 }

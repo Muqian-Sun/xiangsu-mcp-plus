@@ -607,6 +607,49 @@ test('task_bind needs a received task from tasks_list and reopens the project wi
   assert.deepEqual(launch[1], { operation: 'openLocal', path: proj, activity: { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } });
 });
 
+test('task_bind re-reads the task list once when its copy says not received, and says so when the project does not reopen', async () => {
+  const proj = tmpdir('xs-bind-');
+  fs.writeFileSync(path.join(proj, 'effect.dyehpj'), '{}');
+  const windows = new Map([
+    [7, proj],
+    [9, '/other'],
+  ]);
+  const extra = { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' };
+  let received = false;
+  const seen = [];
+  const client = await connect({
+    launchRetryMs: 0,
+    listInstances: () => [...windows.keys()].map((pid) => ({ pid })),
+    callPlugin: async (method, params, opts) => {
+      seen.push(method);
+      if (method === 'status') return { projectPath: windows.get(opts.pid) };
+      if (method === 'project_state') return { scene_ready: true };
+      if (method === 'tasks_list') return { items: [{ task_id: '22', bindable: received }], raw: [{ kind: 'task', item_id: '2', extra: received ? extra : null }] };
+      if (method === 'project_close') {
+        windows.delete(opts.pid);
+        return { closing: true, project_path: proj, discarded_changes: false };
+      }
+      if (method === 'project_launch') throw Error('WINDOW_LIMIT: all 2 project windows 像塑 allows are in use; close one with project_close first');
+      throw Error(`unexpected ${method}`);
+    },
+  });
+  await client.callTool({ name: 'tasks_list', arguments: {} });
+  const stale = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
+  assert.match(stale.content[0].text, /TASK_NOT_RECEIVED: 22/);
+  assert.equal(seen.filter((m) => m === 'tasks_list').length, 2);
+  assert.ok(!seen.includes('project_close'));
+  // Received in the app after the list was read.
+  received = true;
+  const res = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
+  assert.equal(seen.filter((m) => m === 'tasks_list').length, 3);
+  assert.match(res.content[0].text, /BIND_REOPEN_FAILED: .* was closed to bind the task but did not reopen \(WINDOW_LIMIT: .*; open windows: 9 \/other\); the task is not bound/);
+  // The only window closed: nothing is left to launch from.
+  windows.delete(9);
+  windows.set(7, proj);
+  const alone = await client.callTool({ name: 'task_bind', arguments: { path: proj, task_id: '22' } });
+  assert.match(alone.content[0].text, /BIND_REOPEN_FAILED: .*\(NO_EDITOR_WINDOW/);
+});
+
 test('music_categories, music_list and music_search each do one thing, and music_apply sends the raw track with its category', async () => {
   const seen = [];
   const client = await connect({

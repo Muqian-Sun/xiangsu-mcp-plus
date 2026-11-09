@@ -54,10 +54,10 @@ const methods = {
     const all = this.menuEntries();
     const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
     const items = q ? all.filter((e) => `${e.path}/${e.name}/${e.menu_id}`.toLowerCase().includes(q)) : all;
-    if (!details) return { total: all.length, items };
+    if (!details) return { total: items.length, menu_total: all.length, items };
     if (items.length > MAX_MENU_PREVIEW) throw Error(`MENU_DETAILS_TOO_MANY: ${items.length} items match; narrow the query to at most ${MAX_MENU_PREVIEW} for details`);
     const tips = items.length ? this.menuPreview({ menu_ids: items.map((e) => e.menu_id) }) : [];
-    return { total: all.length, items: items.map((e, i) => ({ ...e, description: tips[i].description, image_url: tips[i].image_url, image_file: tips[i].image_file })) };
+    return { total: items.length, menu_total: all.length, items: items.map((e, i) => ({ ...e, description: tips[i].description, image_url: tips[i].image_url, image_file: tips[i].image_file })) };
   },
 
   menuEntry(menu_id) {

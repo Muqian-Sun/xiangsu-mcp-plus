@@ -8,6 +8,9 @@ const { request, requireId, str, iso, appEffectId, slimInspiration, DOUYIN_APP_I
 // discover_effect_detail answers 「请求参数错误」 without effect_source, but any value (0, 1, 2, 3, 5 and 6
 // tried on 2026-11-09) returns the same effect and the answer carries its real source.
 const ANY_SOURCE = 1;
+// Picked: one effect (284648191, the top of a board) ran past the usual 15 s twice in a row while
+// others answered at once (2026-11-09).
+const EFFECT_DETAIL_TIMEOUT_MS = 45000;
 // The app's search types, read off live answers (2026-11-09): each type fills one of the answer's lists.
 const SEARCH_TYPES = { effect: 2, template: 4, inspiration: 3, tutorial: 1 };
 const EFFECT_SEARCH_KINDS = ['effect', 'template'];
@@ -78,7 +81,7 @@ const methods = {
   // The 发现 page's effect detail, for any online effect or template.
   async effectDetail({ app_effect_id } = {}) {
     const id = requireId(app_effect_id, 'INVALID_APP_EFFECT_ID');
-    const d = (await request(this, 'GET_EFFECT_DETAIL', '/effectcam/v2/discover_effect_detail', { query: { app_effect_id: id, app_effect_id_str: id, effect_source: ANY_SOURCE } })) || {};
+    const d = (await request(this, 'GET_EFFECT_DETAIL', '/effectcam/v2/discover_effect_detail', { query: { app_effect_id: id, app_effect_id_str: id, effect_source: ANY_SOURCE }, timeoutMs: EFFECT_DETAIL_TIMEOUT_MS })) || {};
     // Unknown ids are refused with code 3000 (「特效不存在」) before this.
     const { base, data, project, designer, videos, effect_tags, ...rest } = d;
     const { effect_name, effect_icon, app_effect_id: _id, app_effect_id_str: _idStr, id: effectId, type_desc, first_online_at, effect_desc, ...baseRest } = base;
@@ -130,7 +133,7 @@ const methods = {
       functions: fn_types ? fn_types.map((f) => f.name) : null,
       designer: designer ? { uid: str(designer.designer_id), name: designer.name || null, level_name: designer.ly_name || null } : null,
       tags: effect_tags || [],
-      videos: (videos || []).map((v) => ({ url: v.video_url || null, cover_url: v.video_img || null, likes: str(v.video_digg) })),
+      videos: (videos || []).map((v) => ({ video_url: v.video_url || null, cover_url: v.video_img || null, likes: str(v.video_digg) })),
       unread,
     };
   },
@@ -175,8 +178,10 @@ const methods = {
     const q = typeof query === 'string' ? query.trim() : '';
     if (!q) throw Error('INVALID_QUERY: pass a non-empty query');
     const d = (await request(this, 'SEARCH', '/cam_api/search/v1/search_list', { query: { type, content: q, cursor, count } })) || {};
+    // The server can ignore `count` and hand back everything left while its cursor moves on by `count`
+    // only (8 results, cursor 3, for count 3), so the next page starts past whichever is further.
     const found = d[list] || [];
-    const next = d.cursor ?? cursor + found.length;
+    const next = Math.max(d.cursor ?? 0, cursor + found.length);
     const total = d.total ?? null;
     return { query: q, total, items: found.map(slim), next_cursor: next, has_more: found.length > 0 && total !== null && next < total };
   },

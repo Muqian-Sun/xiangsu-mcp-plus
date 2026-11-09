@@ -337,7 +337,12 @@ test('ai3d_gs_segment finds the subject first; ai3d_gs_submit then builds it as 
 
 test('ai3d_gs_segment reports a failed or empty subject search', async () => {
   const failed = setup({ segment: 'fail' });
-  await assert.rejects(failed.lib.ai3dGsSegment({ video_path: file(failed.root, 'v.mp4') }), /AI3D_SUBJECT_FAILED: timeout \(task task-1\)/);
+  await assert.rejects(failed.lib.ai3dGsSegment({ video_path: file(failed.root, 'v.mp4'), wait_s: 60 }), /AI3D_SUBJECT_FAILED: timeout \(task task-1\); the editor stopped waiting before the cloud answered \(wait_s 60\), which says nothing about the video/);
+  const odd = setup({ segment: 'fail' });
+  odd.modules[M.aiApiUtils].QueryTaskResult = async () => {
+    throw Error('video has no subject');
+  };
+  await assert.rejects(odd.lib.ai3dGsSegment({ video_path: file(odd.root, 'v.mp4') }), /AI3D_SUBJECT_FAILED: video has no subject \(task task-1\)$/);
   const empty = setup({ segment: 'empty' });
   await assert.rejects(empty.lib.ai3dGsSegment({ video_path: file(empty.root, 'v.mp4') }), /AI3D_SUBJECT_NOT_FOUND/);
 });

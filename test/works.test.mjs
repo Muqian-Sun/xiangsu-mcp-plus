@@ -131,7 +131,7 @@ test('worksNav lists homepage categories and sorts', async () => {
 
 test('works_list defaults to the first category, maps sort to the ranker and slims items', async () => {
   const { lib, calls } = setup();
-  const out = await lib.worksList({});
+  const out = await lib.worksList({ count: 2 });
   assert.deepEqual(out.categories, [
     { id: '44668', name: '推荐' },
     { id: '40669', name: '官方工程' },
@@ -161,10 +161,10 @@ test('works_list defaults to the first category, maps sort to the ranker and sli
   assert.equal(typeof out.next_cursor, 'string');
   assert.equal(out.has_more, true);
   // The next page needs the previous page's sortingPosition and version, not just the cursor.
-  await lib.worksList({ category_id: '40669', sort: 'latest', cursor: out.next_cursor, count: 5 });
+  await lib.worksList({ category_id: '40669', sort: 'latest', cursor: out.next_cursor, count: 2 });
   assert.deepEqual(
     { c: calls.list[1].categoryId, r: calls.list[1].ranker, cur: calls.list[1].cursor, sp: calls.list[1].sortingPosition, v: calls.list[1].version, n: calls.list[1].count },
-    { c: '40669', r: 2, cur: 2, sp: 2, v: 'v9', n: 5 },
+    { c: '40669', r: 2, cur: 2, sp: 2, v: 'v9', n: 2 },
   );
   await assert.rejects(lib.worksList({ cursor: '2' }), /INVALID_CURSOR: 2; pass the previous page's next_cursor as is/);
   await assert.rejects(lib.worksList({ cursor: 'not-a-token' }), /INVALID_CURSOR/);
@@ -172,6 +172,29 @@ test('works_list defaults to the first category, maps sort to the ranker and sli
   await assert.rejects(lib.worksList({ sort: 'hot' }), /INVALID_SORT: hot/);
 });
 
+
+test('works_list tops a short page up from the next ones and stops when there are no more', async () => {
+  const { lib, calls } = setup();
+  // Each page of the fake holds two works and says more follow.
+  const out = await lib.worksList({ count: 5 });
+  assert.deepEqual(calls.list.map((c) => c.count), [5, 3, 1]);
+  assert.deepEqual([out.items.length, out.raw.length, out.has_more], [6, 6, true]);
+  assert.deepEqual(calls.list.slice(1).map((c) => c.cursor), [2, 2]);
+  const capped = setup();
+  await capped.lib.worksList({ count: 100 });
+  assert.equal(capped.calls.list.length, 4);
+});
+
+test('works_list drops an animation that is only the cover again', async () => {
+  const { lib, modules } = setup();
+  const transform = modules[M.worksUtil].transformTemplate;
+  modules[M.worksUtil].transformTemplate = (t) => {
+    const w = transform(t);
+    return t.templateId === '1' ? { ...w, gifPath: w.coverPath } : w;
+  };
+  const out = await lib.worksList({ count: 2 });
+  assert.deepEqual(out.items.map((w) => [w.cover_url, w.gif_url]), [['https://cdn/1.png', null], ['https://cdn/2.png', 'https://cdn/2.gif']]);
+});
 test('works_search sends the homepage search word within a category', async () => {
   const { lib, calls } = setup();
   const out = await lib.worksSearch({ query: ' 合掌 ' });
@@ -349,13 +372,14 @@ function fakeProject() {
 test('outline lists project files without the Library cache', () => {
   const root = fakeProject();
   const o = outlineProject(root);
+  // Only what studying a work reads is listed; everything else is counted.
   assert.deepEqual(
-    o.files.map((f) => f.path),
-    ['Assets/Library/keep.txt', 'Assets/main.scene', 'effect.dyehpj', 'Graph/ScriptTemplate/OnStart/CGOnStart.js'].sort((a, b) => a.localeCompare(b)),
+    o.key_files.map((f) => f.path),
+    ['Assets/main.scene', 'effect.dyehpj', 'Graph/ScriptTemplate/OnStart/CGOnStart.js'].sort((a, b) => a.localeCompare(b)),
   );
   assert.equal(o.file_count, 4);
   assert.deepEqual(o.by_extension, { '.txt': 1, '.scene': 1, '.dyehpj': 1, '.js': 1 });
-  assert.equal(o.files_truncated, false);
+  assert.equal(o.key_files_truncated, false);
 });
 
 test('copyProject copies into an empty target only, skipping the Library cache', () => {
@@ -596,6 +620,17 @@ test('works_open deletes the download when the window never opens', async () => 
   assert.match(res.content[0].text, /OPEN_TIMEOUT/);
   assert.equal(fs.existsSync(dl.guid), false);
   assert.deepEqual(deps.downloads.list(), []);
+});
+
+test('works_open refuses before downloading when both project windows are taken', async () => {
+  const { seen, state, deps } = worksWorld({ open: '/proj/B' });
+  const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
+  const res = await client.callTool({ name: 'works_open', arguments: { template_id: '1' } });
+  assert.match(res.content[0].text, /WINDOW_LIMIT: all 2 project windows .*\(7 \(no project\) \| 8 \/proj\/B\)/);
+  assert.ok(!seen.some((s) => s.method === 'works_download'));
+  assert.deepEqual(deps.downloads.list(), []);
+  state.open = null;
 });
 
 // A connected official MCP keeps an HTTP request open; this stand-in never answers, which holds the

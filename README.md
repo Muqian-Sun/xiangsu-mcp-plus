@@ -43,7 +43,7 @@
 
 | 工具 | 作用 |
 | --- | --- |
-| `ext_status` | 官方 MCP 连接状态；每个工程窗口的 pid、工程路径、instance_id、编辑器接口自检 |
+| `ext_status` | 官方 MCP 连接状态；每个工程窗口的 pid、工程路径、instance_id、有没有未保存的改动、编辑器接口自检 |
 | `project_open` / `project_new` / `project_close` | 打开已有工程、新建空白工程并保存到指定目录、关闭工程窗口（有未保存改动时默认拒绝） |
 | `image_view` | 看图：列表类工具返回的引用（`cover_ref`、`gif_ref`、任务内容块的 `image_refs` 等，形如 `img:12`）、详情类工具返回的地址（灵感 `images`、菜单示意图）或本机图片路径都放进它的 `images` 数组；视频和音频引用（`video:3`、`audio:5`）返回原地址；一次最多 8 张，动图等大图一次给不完时把没给的列在 `not_returned` 里（单次响应不超过 MCP stdio 的 10 MiB 上限） |
 | `library_list` / `library_search` | 官方素材库面板清单（不传 `panel_key`，含素材广场、收藏）和面板里的分页列表、关键词搜索：逐个面板查标题以拿全结果；词正好是面板名或子分类名时也带出那里的素材（「滤镜」「腮红」「复古滤镜」），按标题匹配程度排序，`queries` 一次搜多个词，返回各面板条数和展开了哪些分类，结果缓存 10 分钟供翻页；每条素材带 `kind`、封面 `cover_ref` 和命中方式 `matched`；第一页还附带「添加对象」菜单里同名的项到 `menu_items`（如「脸蛋天才」，用 `menu_add` 加） |
@@ -51,7 +51,7 @@
 | `library_apply` | 下载素材包、校验 MD5、导入并放进场景（可撤销）；素材广场卡片按 `kind` 走编辑器自己的应用流程（AI 图片可用 `image_index` 选第几张）；返回新增对象和素材包文件夹 |
 | `works_list` / `works_search` | 首页作品分页列表（每页带上全部分类：推荐、官方工程、新手必做、游戏、妆容、AI玩法…；可按推荐 / 最新 / 使用量排序，`next_cursor` 原样传回翻页）、按作品名搜索（默认搜全部分类并合并去重，每条带 `found_in`；`queries` 一次搜多个词；按 `offset` 分页，结果缓存 10 分钟） |
 | `works_by_effect` | 按特效 ID 查排行榜等处的特效在首页有没有工程（一次最多 20 个），逐个返回 `found` / `same_style`（移动版「做同款」指向的首页工程，常是别人的另一个特效，`same_style` 给出是哪个）/ `same_name` / `not_on_homepage` |
-| `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件清单；`dest` 给定时把工程放到该目录；同一窗口的下载自动排队 |
+| `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件概况（`key_files` 只列工程文件、场景和脚本，其余贴图模型只给计数）；`dest` 给定时把工程放到该目录；同一窗口的下载自动排队 |
 | `works_open` | 下载并在新窗口里按首页的方式打开（不弹版本升级提示，工程处于未保存状态），返回 pid 和 instance_id |
 | `works_cleanup` | 删除下载过的作品（含 `dest`）；编辑器窗口开着的保留，其它路径一律拒绝 |
 | `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个），并像「图标制作」窗口的「完成」一样上传到特效平台（提交窗口只认上传过的图标）；或打开「图标制作」窗口 |
@@ -64,22 +64,22 @@
 | `tasks_list` / `task_detail` | 活动中心的活动和特效征集任务的列表（按 `offset` / `count` 分页）与征集任务详情（状态和状态说明、奖励、整理过的任务说明：每个内容块的条目、参考图和视频引用、奖项金额和名额、链接，`save_to` 另存原始返回；征集任务详情还有自己提交到这个任务的特效 `my_effects`：审核状态、拍摄 / 播放 / 投稿峰值、获奖金额、任务评定 `task_state`（`pending` / `unfinished` / `done`）和是否被标「主题不符合」`off_theme`） |
 | `growth_tasks_list` / `growth_task_detail` | 活动中心的成长任务列表（奖励、参考工程，分页）与详情（参考工程、相关灵感、教程） |
 | `growth_route` | 移动版「成长之路」：当前特效师等级，每一级的奖励、状态和目标进度（如「绑定灵感上线 0/3 个作品 ¥10」），最高级的权益 |
-| `task_receive` | 领取一个待领取（`WAIT_RECEIVE`）的征集任务（写账号，不能撤销），其它状态直接拒绝 |
+| `task_receive` | 领取一个待领取（`WAIT_RECEIVE`）的征集任务（写账号，不能撤销），其它状态直接拒绝；领完自动重读任务列表，接着就能 `task_bind` |
 | `task_bind` | 已领取的任务按任务详情页「去创作」的方式重开工程绑定 |
 | `rank_list` | 分页读移动版排行榜（榜单和筛选项写在参数说明里），可按日期、每级一个分类、特效等级、面板、偏好、来自工具、年轻喜爱度过滤；每页带上该榜当天的两级分类（大类如人像美化、细类如美妆） |
 | `rank_hotspots` | 热点榜（按 `offset` / `count` 分页） |
-| `hotspot_inspirations` | 一个热点下的灵感，按热点页的页签分组 |
+| `hotspot_inspirations` | 一个热点下的灵感，按热点页页签的顺序分页，每条标出页签 |
 | `douyin_hot_list` | 抖音实时热点榜（约 5 分钟一版）前 20 条：名次、名称、分类（娱乐、站内玩法、话题互动、二次元等）、热度 |
 | `douyin_hot_detail` | 一个抖音实时热点的上榜时间、近 7 天每天和今天每小时的热度、站内已有的特效数（「上线特效0个」说明还没人做） |
-| `douyin_hot_videos` | 一个抖音实时热点下的热门视频：播放地址、封面、点赞、作者 |
-| `baidu_hot_list` | 百度热搜榜：置顶条和 50 条热搜，每条有摘要、热度、配图、链接（不用登录、不用开像塑） |
+| `douyin_hot_videos` | 一个抖音实时热点下的视频（接口原样顺序，不按热度）：播放地址、封面、点赞、作者昵称，分页 |
+| `baidu_hot_list` | 百度热搜榜：置顶条和 50 条热搜（分页，默认前 20 条），每条有摘要、热度、配图、链接（不用登录、不用开像塑） |
 | `bilibili_popular` | B 站「热门」视频：标题、链接、封面、分区、UP 主、播放 / 点赞 / 评论 / 弹幕、上热门的理由，分页（不用登录、不用开像塑） |
 | `bilibili_hot_search` | B 站热搜词和热度（不用登录、不用开像塑） |
 | `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），按 `cursor` 分页 |
 | `rank_subjects_search` | 按榜名在专题合集全部期里搜索 |
 | `rank_subject_detail` | 一个专题榜的全部特效 |
-| `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`） |
-| `rank_creators` | 创新计划创作者月榜 |
+| `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）；同页重复的特效合成一条、标签合并，服务端翻页会出现上一页的特效 |
+| `rank_creators` | 创新计划创作者月榜（头像给短引用） |
 | `my_effects` | 自己提交过的特效，最新的在前：审核状态、绑定的任务和灵感、能否编辑 / 申诉；审核未通过、测试未通过、申诉审核未通过的带上最近一条审核记录（去掉标记的原因正文、分条原因、链接） |
 | `my_effect_reviews` | 一个自己的特效的完整审核记录：「上线审核」和「精选审核」两条时间线 |
 | `my_effect_data` | 一个自己已上线特效的「作品详情」数据卡片（要 `effect_id` 和 `app_effect_id`，都在 `my_effects` 里）：各 App 的上线状态和投稿、用到的功能、累计曝光 / 投稿 / 播放 / 跟拍、平台判定的特效类型、等级、年轻喜爱度、流量状态、播放数、绑定的任务和灵感 |
@@ -89,7 +89,7 @@
 | `my_revenue` | 钱包收益：累计和某个月的总额、按来源、按天 |
 | `messages_list` | 移动版「消息」页的站内信（全部 / 服务 / 官方），每条的标题、正文、时间、是否已读、审核状态和对应的 `effect_id`、链接，按 `cursor` 翻页 |
 | `my_task_status` | 一次列出所有已领取任务里自己的作品和任务评定（`task_state`、`off_theme`），并按评定计数 |
-| `effect_detail` | 任意已上线特效或模板的详情（按 `app_effect_id`，别人的也行）：等级代码、累计投稿 / 点赞 / 评论、喜爱度、男女比例、受众、风格、平台判定的类型、来自哪个工具、流量状态、用到的编辑器能力 `functions`、作者及等级、几条示例视频 |
+| `effect_detail` | 任意已上线特效或模板的详情（按 `app_effect_id`，别人的也行）：等级代码、累计投稿 / 点赞 / 评论、喜爱度、男女比例、受众、风格、平台判定的类型、来自哪个工具、流量状态、用到的编辑器能力 `functions`、作者及等级、几条示例视频（图标和视频给短引用） |
 | `effect_videos` | 用一个特效拍的热门抖音视频（标题、作者、点赞、跟拍、抖音视频 ID、封面和视频引用）和累计点赞、跟拍 |
 | `effect_search` | 移动版搜索：按关键词搜全平台已上线的特效（最多 100 条）或模板（`kind`），按 `cursor` 翻页，每页最多 20 |
 | `inspiration_search` / `tutorial_search` | 移动版搜索：按关键词搜灵感、官方教程（字段同 `inspiration_list`、`tutorials_list`） |
@@ -105,7 +105,8 @@
 | `makeup_compare` | 在同一张脸上比较几种妆容状态（关掉某层、男女强度、面板不透明度，或任意组件的数值属性如 AI 脸 Transparency、发光强度）：重置预览后截基线、逐个实时套上改动截图并改回、最后再截一次基线核对画面没变。要用静态照片做的模特视频；区域可以按画面比例给，也可以给 `eye` + 标定文件。可传 `reference` 参考图，区域带 `ref` 框时每种状态另给相对参考的差值，并排图末格是参考。每个区域返回平均色、亮度、皮肤细节及差值，并排放大图（不插值，一行放不下时换行） |
 | `makeup_calibrate` | 量出妆容贴图在当前模特脸上的位置：临时加一个贴着「颜色即坐标」标定贴图的妆容层，截图期间其它妆容和滤镜强度临时调成 0，解码出每个画面像素对应的贴图坐标；返回标注图（贴图 y 等高线、x 刻度）、贴图格点落在画面上的位置，眼部布局另给每只眼上眼皮边和上眼缘最暗处的贴图 y。跑完改回所有强度、删掉临时层和标定贴图 |
 | `preview_frames` | 按间隔连续截取预览，720×1280 原始分辨率（官方截图是 320×569），取自渲染结果，窗口在后台或最小化时也能截；默认先重置预览并等到重载后的画面再计时，截图期间临时恢复正常帧率（后台窗口平时 6 fps）；可依次换几个预览视频各截一组、截完切回，可按比例裁出局部；每帧存成文件并返回，默认 24 小时后删除。这些截图 / 标定 / 对比工具都可传 `save_to` 把结果另存到目录长期保留 |
-| `menu_list` / `menu_add` | 「添加对象」菜单项列表（`details=true` 时带说明和示意图，一次最多 8 项）、按菜单项添加（可撤销）；云端 AI 生成项不暴露（AI 组合效果用下面两个工具） |
+| `preview_videos` | 预览视频名，按 `tracking_type` 分组，外加当前视频；只给名字，挑 `preview_frames`、`makeup_compare` 的 `videos` 用（官方 `list_preview_videos` 约 70 KB） |
+| `menu_list` / `menu_add` | 「添加对象」菜单项列表（`total` 是命中数，`menu_total` 是菜单总数；`details=true` 时带说明和示意图，一次最多 8 项）、按菜单项添加（可撤销）；云端 AI 生成项不暴露（AI 组合效果用下面两个工具） |
 | `ai_combine_new` | 新建一张「AI 组合效果」工作流，等同 AI 效果窗口的「新建工作流」：本地建 AI Graph，只有「输入图」「效果组合」两个节点且未连线，不联网、不扣额度、不建云端草稿；返回 `ai_graph_id` 和各节点的 `node_id`（与官方 `get_workflow_context` 的节点 ID 相同） |
 | `ai_combine_apply` | 把一张 AI 工作流放进场景，等同「应用」（可撤销）：编辑器编译工作流、上传工作流文件，再添加「AI 组合效果」对象（没有 2D 前景时一并建「2D 前景」「2D 摄像机」）；不扣额度、不建草稿，生成过预览视频时一并上传供审核；编辑器拒绝时返回它的提示原文（如「请先连接效果组合器」）；返回新增对象和 `draft_id` |
 | `ai3d_image_submit` | 素材库「AI 3D › 3D模型」：上传参考图（PNG/JPG/JPEG，不超过 10 MB、4000 像素），按精度（low / medium / high = 1000 / 10000 / 50000 面）提交图生 3D，返回 `task_id`；产物是静态网格，没有骨骼 |
@@ -125,9 +126,9 @@
 使用顺序示例：
 
 - 套用官方素材：`library_search` → `image_view` 看 `cover_ref` → `library_apply` → `capture_preview` → `save_project`。
-- 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
+- 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.key_files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
-- 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，在窗口里点「提交审核」。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
+- 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，在窗口里点「提交审核」。要参加任务的，`tasks_list` → `task_receive` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
 - 找热梗：`douyin_hot_list` 看抖音正在火什么（分类「站内玩法」多是梗和跟拍玩法）→ `douyin_hot_detail` 看热度是在涨还是在落、站内有没有人做过特效 → `douyin_hot_videos` 看实际怎么拍；站外话题用 `baidu_hot_list`、`bilibili_popular`、`bilibili_hot_search`；梗的出处和用法用联网搜索查。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 或 `same_style` 的用返回的 `template_id` 走 `works_download` / `works_open`（`same_style` 下载到的是 `same_style` 里那个特效的工程，不是榜上这个特效本身的）。
@@ -155,14 +156,14 @@
 几点约定：
 
 - `library_apply` / `library_images` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`；`works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
-- 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。
+- 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。刚 `project_close` 完名额要过几秒才释放，开窗遇到 `WINDOW_LIMIT` 会每秒重试、最多 8 秒；仍失败时报错列出占着名额的窗口。`works_open` 在下载之前先查名额，满了直接拒绝。
 - 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方 `edit_by_dsl` 的 `delete_render_group` 命令。
 - 素材库的搜索接口只匹配标题，很多素材的名字里没有人们会搜的词（美妆 › 腮红里是「雾堇胭」「红玫瑰」，没有素材叫「滤镜」），所以 `library_search` 还会展开名字与搜索词相同的面板或子分类，以及「子分类 + 面板」组合（「复古滤镜」）；「面板 + 其它词」（「韩系滤镜」）只在该面板里按标题搜「韩系」。名字只是包含搜索词的子分类不展开，列在 `related_categories`。每个面板或子分类最多取 300 条（实测子分类 17–125 条）。什么都没匹配到时返回 `hint`。
 - `works_*`、`inspiration_*`、`task_*`、`rank_*`、`my_effects`、`my_effect_reviews`、`my_effect_data`、`my_effect_trend`、`my_effect_revenue`、`my_profile`、`my_revenue`、`messages_list`、`my_task_status`、`effect_detail`、`effect_videos`、`effect_search`、`inspiration_search`、`tutorial_search`、`tutorials_list`、`shoot_activity`、`shoot_scripts`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - 返回资料的方式：
   - 列表默认每页 20 条（服务端上限更小的按上限），只给挑选时要看的字段；要细节用对应的详情工具。
-  - 列表里的图片、视频、音频不给地址，给短引用 `*_ref` / `*_refs`（`img:12`、`video:3`、`audio:5`），交给 `image_view`：一个签名 CDN 地址有几百字，实测占列表每条的 43%–93%。引用记在 MCP 服务里，这次运行期间有效（最多记 2 万个，超出时忘掉最久没用的）；详情工具（`inspiration_detail`、`menu_list` 的 `details`）给的是这个对象自己的图，仍给地址。
-  - 我们自己的工具回答超过 3 万字时，全文写进 `~/.xiangsu-mcp-ext/outputs/`（24 小时后删除），回答换成文件路径和结构概要（每个字段的值或条数，列表给每条有哪些字段），用读文件的工具按需读，或用分页参数分几次取。3 万是拍的：`task_detail` 原来一次回 4.8 万字，读不全。官方工具原样转发，不受影响。
+  - 列表里的图片、视频、音频不给地址，给短引用 `*_ref` / `*_refs`（`img:12`、`video:3`、`audio:5`），交给 `image_view`：一个签名 CDN 地址有几百字，实测占列表每条的 43%–93%。引用记在 MCP 服务里，这次运行期间有效（最多记 2 万个，超出时忘掉最久没用的）；详情工具（`inspiration_detail`、`menu_list` 的 `details`）给的是这个对象自己的图，仍给地址；`effect_detail` 的图标和视频是签名长地址，也给短引用。
+  - 我们自己的工具回答超过 3 万字时，全文写进 `~/.xiangsu-mcp-ext/outputs/`（24 小时后删除），回答换成文件路径和结构概要（每个字段的值或条数，列表给每条有哪些字段），用读文件的工具按需读，或用分页参数分几次取。3 万是拍的：`task_detail` 原来一次回 4.8 万字，读不全。官方工具原样转发，不受影响；只有官方报错超过 4000 字时（如 `apply_workflow_patch` 校验失败的整段展开）截断，全文写进同一目录。
   - 字段命名：投稿量统一叫 `publish_*`（`publish_count`、`publish_peak`、`publish_total`），跟拍量叫 `follow_shoot`，页面原样给的展示文字（如「1.2万」「¥50」）以 `_text` 结尾，换算过的金额以 `_yuan` 结尾；看不出单位的数（任务奖项的 `money`、`award_amount`）原样给，不换算。
 - 灵感、任务、排行榜按编辑器首页活动中心的方式请求（编辑器的登录 Cookie 和签名请求头），读写的都是编辑器里登录的账号。排行榜和成长之路用的是像塑移动版的接口，榜单名和筛选项取值与移动版一致，后端改版时可能失效。灵感和任务详情的接口移动版和编辑器是同一个（2026-11-08 对照移动版 v17.7.0 安装包里的接口逐个实测，返回完全相同），移动版看到的内容都在工具的返回里；热点内容流、任务筛选、每日任务、创新任务这几个移动版接口暂未接入（参数未知，或当前账号没有内容可核对）。
 - 作品数据、账号和消息（`my_effect_*`、`my_profile`、`my_revenue`、`messages_list`）的参数取自移动版 v17.7.0 安装包反编译出的 Dart 代码，2026-11-09 用自己的账号逐个实测：作品详情的接口都要 `effect_id`、`app_effect_id` 和 `app_id`（抖音是 184），只给其中一两个时服务端答「参数错误」；数据趋势的 `cycle` 是页面「近7日」「上线后」两个标签的序号加 1，其它值答「参数不正确」；消息按上一页最后一条的 ID 翻页。趋势里按天的曝光和投稿是逐日累计值，数据隔天才更新。等级是数字代码，接口不给对应的字母；投稿门槛以移动版「激励规则」页为准。作品详情里的 `tips` 和 `scarce_category` 两张卡片对试过的特效都没返回内容，有内容时原样放在 `unread`。

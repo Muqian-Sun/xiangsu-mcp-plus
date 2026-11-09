@@ -96,21 +96,27 @@ export class Spill {
     }
   }
 
+  // Writes body to a new file kept SPILL_TTL_MS and returns its path.
+  write(tool, body, ext = 'txt') {
+    this.prune();
+    fs.mkdirSync(this.dir, { recursive: true });
+    const file = path.join(this.dir, `${tool}-${new Date(this.now()).toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
+    fs.writeFileSync(file, body);
+    return file;
+  }
+
   // A text-only answer over the limit goes to a file; errors and answers with images pass unchanged.
   apply(tool, result) {
     if (!result || result.isError || !result.content.every((c) => c.type === 'text')) return result;
     const body = result.content.map((c) => c.text).join('\n');
     if (body.length <= this.limit) return result;
-    this.prune();
     let parsed;
     try {
       parsed = JSON.parse(body);
     } catch (_) {
       parsed = undefined;
     }
-    fs.mkdirSync(this.dir, { recursive: true });
-    const file = path.join(this.dir, `${tool}-${new Date(this.now()).toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}.${parsed === undefined ? 'txt' : 'json'}`);
-    fs.writeFileSync(file, body);
+    const file = this.write(tool, body, parsed === undefined ? 'txt' : 'json');
     const summary = {
       spilled_to: file,
       chars: body.length,

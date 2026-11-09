@@ -72,7 +72,10 @@ export function resolveObject(objects, ref) {
   const byGuid = objects.filter((o) => o.guid === ref);
   const parts = ref.split('/');
   const hits = byGuid.length ? byGuid : objects.filter((o) => parts.length <= o.path.length && parts.every((p, i) => p === o.path[o.path.length - parts.length + i]));
-  if (hits.length > 1) throw Error(`AMBIGUOUS_OBJECT: ${ref} matches ${hits.length} objects: ${hits.map((o) => `${o.guid} ${o.path.join('/')}`).join(' | ')}; pass the guid or more of the path`);
+  if (hits.length > 1) {
+    const samePath = new Set(hits.map((o) => o.path.join('/'))).size === 1;
+    throw Error(`AMBIGUOUS_OBJECT: ${ref} matches ${hits.length} objects: ${hits.map((o) => `${o.guid} ${o.path.join('/')}`).join(' | ')}; ${samePath ? 'they share the same path, so only the guid tells them apart' : 'pass the guid or more of the path'}`);
+  }
   return hits[0] ?? null;
 }
 
@@ -200,7 +203,7 @@ export async function resolveRefs(value, lookup, { root, cache = new Map() } = {
   const walk = async (v) => {
     if (Array.isArray(v)) return Promise.all(v.map(walk));
     if (isHandle(v)) {
-      if (v.guid === 'null') return null;
+      if (v.guid === 'null' || v.guid === 'undefined') return null;
       if (!cache.has(v.guid)) cache.set(v.guid, lookup(v.guid).catch((e) => ({ error: String(e.message ?? e) })));
       const r = await cache.get(v.guid);
       if (r.error) return { guid: v.guid, error: r.error };

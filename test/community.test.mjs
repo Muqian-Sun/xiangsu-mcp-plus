@@ -48,7 +48,8 @@ const INSPIRATION_DETAIL = {
   ],
   stickers: [],
 };
-const ACTIVITY = { id: 'A1', title: '新人成长路线', tags: '新手,必做', ttl: 3 * 86400000 + 5 };
+// The task list can carry a tag twice (「特效/模板」 seen twice, 2026-11-09).
+const ACTIVITY = { id: 'A1', title: '新人成长路线', tags: '新手,必做,新手', ttl: 3 * 86400000 + 5 };
 const EFFECT_TASKS = {
   cursor: 0,
   total: 2,
@@ -60,7 +61,10 @@ const EFFECT_TASKS = {
       process_status_desc: '查看官方指导，帮您完成任务',
       designer_task_id: '',
       item_id: 108116,
-      tags: [{ type: 3, name: '特效' }],
+      tags: [
+        { type: 3, name: '特效' },
+        { type: 5, name: '特效' },
+      ],
       revenue: '0',
       icon_url: 'https://cdn/t.png',
       can_fin_times: -1,
@@ -252,8 +256,9 @@ function setup(routes = {}) {
 test('community requests carry the editor login cookie and signing headers and keep 19-digit ids exact', async () => {
   const { lib, calls, cookieUrls } = setup();
   const out = await lib.hotspotInspirations({ topic_id: '13439' });
-  assert.equal(out.tabs[0].inspirations[0].inspiration_id, '7704552248298391592');
-  assert.equal(out.tabs[0].inspirations[0].cover_url, 'https://cdn/hi.png');
+  assert.equal(out.items[0].inspiration_id, '7704552248298391592');
+  assert.equal(out.items[0].cover_url, 'https://cdn/hi.png');
+  assert.equal(out.items[0].tab, out.tabs[0]);
   const month = await lib.rankCreatorsMonth();
   assert.equal(month.items[0].uid, '7495234997042594875');
   assert.equal(calls[0].origin, 'https://api.test');
@@ -448,7 +453,10 @@ test('task_detail reads an effect task like the task window, and growth_task_det
       process_status: 1,
       s_desc: '未领取',
       title: '冷空气网感美妆定向征集赛',
-      tags: [{ name: '特效', type: 3 }],
+      tags: [
+        { name: '特效', type: 3 },
+        { name: '特效', type: 5 },
+      ],
       reward_begin: '12月21日',
       reward_end: '12月31日',
       template_id_list: '["7408401210929053711","7411422748410609714"]',
@@ -539,6 +547,7 @@ test('task_detail reads an effect task like the task window, and growth_task_det
         icon_url: null,
       })),
     ],
+    recommended_template_ids: ['7408401210929053711', '7411422748410609714'],
     content: [{ name: '参与要求', items: [{ title: '主题要求', text: '年轻美妆' }] }],
   });
   assert.deepEqual(raw.content, [{ type: 3, contentBlockName: '参与要求', demandList: [{ tit: '主题要求', desc: '年轻美妆' }] }]);
@@ -553,6 +562,13 @@ test('task_detail reads an effect task like the task window, and growth_task_det
   assert.equal(to('/effectcam/v2/effect_task_detail').length, 1);
   await assert.rejects(lib.growthTaskDetail({}), /INVALID_TASK_ID/);
   await assert.rejects(lib.taskDetail({}), /INVALID_TASK_ID/);
+});
+
+test('task_detail hands on recommended template ids it cannot read as they came', async () => {
+  const { lib } = setup({ 'GET /effectcam/v2/effect_task_detail': ok({ title: '征集赛', tags: [], template_id_list: '7408,' }), 'GET /effectcam/v2/effect_task_content': ok({ modules: [] }) });
+  assert.deepEqual((await lib.taskDetail({ id: '1' })).recommended_template_ids, { unparsed: '7408,' });
+  const none = setup({ 'GET /effectcam/v2/effect_task_detail': ok({ title: '征集赛', tags: [] }), 'GET /effectcam/v2/effect_task_content': ok({ modules: [] }) });
+  assert.deepEqual((await none.lib.taskDetail({ id: '1' })).recommended_template_ids, []);
 });
 
 test('task_detail reads each content block into entries, media, awards and links, keeping what it does not know', async () => {
@@ -825,7 +841,7 @@ test('rank_innovation picks ask for the artwork type and page by the requested s
     app_effect_id: '7703570232371232802',
     name: '用这首歌官宣好朋友',
     icon_url: 'https://cdn/p.png',
-    label: '音频配文',
+    labels: ['音频配文'],
     publish_count: '5741',
     revenue_total: '67.54',
     reviewed_on: '2026-11-03',
@@ -838,6 +854,13 @@ test('rank_innovation picks ask for the artwork type and page by the requested s
   await assert.rejects(lib.rankInnovation({ kind: 'emoji' }), /INVALID_KIND: emoji; valid: template, effect/);
   await assert.rejects(lib.rankInnovation({ kind: 'creators' }), /INVALID_KIND: creators; valid: template, effect/);
   assert.equal(to('/cam_api/innovation_plan/v1/user_month_rank').length, 0);
+});
+
+test('rank_innovation lists an effect the page carries twice once, with both labels', async () => {
+  const pick = (label) => ({ effect_id_str: '91518554', app_effect_id_str: '1', name: '官宣', label });
+  const { lib } = setup({ 'GET /cam_api/innovation_plan/v1/rank_list': ok({ effect_list: [pick('音频配文'), { ...pick('AI'), effect_id_str: '2' }, pick('热歌')], total: 3, has_more: false }) });
+  const out = await lib.rankInnovation({});
+  assert.deepEqual(out.items.map((e) => [e.effect_id, e.labels]), [['91518554', ['音频配文', '热歌']], ['2', ['AI']]]);
 });
 
 test('community calls refuse without sending anything when the editor modules are missing', async () => {
@@ -1047,7 +1070,7 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   const answers = {
     inspiration_list: { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_url: 'https://c/1.png' }] },
     inspiration_detail: { inspiration_id: '2', title: '锦鲤妆', images: ['https://c/2.png', 'https://c/2b.png'] },
-    hotspot_inspirations: { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_url: null }] }] },
+    hotspot_inspirations: { topic_id: '13439', tabs: ['全部'], items: [{ tab: '全部', inspiration_id: '3', title: '咕嘟', cover_url: null }] },
     growth_tasks_list: { items: [{ task_id: 'g' }] },
     growth_task_detail: { inspirations: [{ inspiration_id: '4', title: '重返2018', cover_url: 'https://c/4.png' }] },
     rank_list: { items: [] },
@@ -1068,7 +1091,7 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   assert.deepEqual(list, { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_ref: 'img:1' }] });
   assert.deepEqual(seen[1].opts, { projectPath: '/proj/X' });
   assert.deepEqual(await json('inspiration_detail', { inspiration_id: '2' }), answers.inspiration_detail);
-  assert.deepEqual(await json('hotspot_inspirations', { topic_id: '13439' }), { topic_id: '13439', tabs: [{ tab: '全部', inspirations: [{ inspiration_id: '3', title: '咕嘟', cover_ref: null }] }] });
+  assert.deepEqual(await json('hotspot_inspirations', { topic_id: '13439' }), { topic_id: '13439', tabs: ['全部'], total: 1, items: [{ tab: '全部', inspiration_id: '3', title: '咕嘟', cover_ref: null }], next_offset: 20, has_more: false });
   await json('growth_tasks_list', {});
   assert.deepEqual(await json('growth_task_detail', { task_id: 'g' }), { task_id: 'g', inspirations: [{ inspiration_id: '4', title: '重返2018', cover_ref: 'img:2' }] });
   assert.equal((await json('inspiration_list', {})).items[0].cover_ref, 'img:1');
@@ -1149,27 +1172,21 @@ test('task tools take the task_id of their own list and hand the plugin the id i
     },
   });
   const call = async (name, args) => client.callTool({ name, arguments: args });
-  assert.match((await call('task_detail', { task_id: '108117' })).content[0].text, /UNKNOWN_TASK: 108117; call tasks_list first/);
+  // A task_id this session has not listed yet (say from my_task_status) reads the task list first.
+  const detail = JSON.parse((await call('task_detail', { task_id: '108117' })).content[0].text);
+  assert.deepEqual(seen.map((s) => [s.method, s.params]), [['tasks_list', {}], ['task_detail', { id: '108116' }]]);
+  assert.deepEqual(seen.at(-1), { method: 'task_detail', params: { id: '108116' }, opts: { pid: 7 } });
+  assert.equal(detail.task_id, '108117');
   assert.match((await call('growth_task_detail', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_GROWTH_TASK: headdress_decoration; call growth_tasks_list first/);
   const list = JSON.parse((await call('tasks_list', {})).content[0].text);
   assert.equal(list.raw, undefined);
   await call('growth_tasks_list', {});
-  assert.deepEqual(
-    seen.map((s) => [s.method, s.params]),
-    [
-      ['tasks_list', {}],
-      ['growth_tasks_list', {}],
-    ],
-  );
-  const detail = JSON.parse((await call('task_detail', { task_id: '108117' })).content[0].text);
-  assert.deepEqual(seen.at(-1), { method: 'task_detail', params: { id: '108116' }, opts: { pid: 7 } });
-  assert.equal(detail.task_id, '108117');
   assert.deepEqual(JSON.parse((await call('growth_task_detail', { task_id: 'headdress_decoration' })).content[0].text), { task_id: 'headdress_decoration', title: 't' });
   assert.deepEqual(seen.at(-1), { method: 'growth_task_detail', params: { id: 'headdress_decoration' }, opts: { pid: 7 } });
   assert.match((await call('task_detail', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_TASK: headdress_decoration/);
   assert.match((await call('task_detail', { task_id: 'A1' })).content[0].text, /NO_TASK_DETAIL: A1 is an activity/);
   const got = JSON.parse((await call('task_receive', { task_id: '108117' })).content[0].text);
-  assert.deepEqual(seen.at(-1).params, { item_id: '108116' });
+  assert.deepEqual(seen.slice(-2).map((s) => [s.method, s.params]), [['task_receive', { item_id: '108116' }], ['tasks_list', {}]]);
   assert.deepEqual(got, { task_id: '108117', title: 't', designer_task_id: '9001', status: 'WAIT_SUBMIT' });
   assert.match((await call('task_receive', { task_id: 'headdress_decoration' })).content[0].text, /UNKNOWN_TASK: headdress_decoration/);
   assert.match((await call('task_receive', { task_id: 'A1' })).content[0].text, /TASK_NOT_RECEIVABLE: A1 is not an effect task \(kind=activity\)/);
@@ -1429,7 +1446,7 @@ test('my_profile reads the 我的 page: the designer, their levels, the figures 
     ],
     figures: [
       { name: '本月上线', value: 16, text: '16' },
-      { name: '本月收入', value: 5100, text: '51.00' },
+      { name: '本月收入', value: 51, text: '51.00' },
     ],
     month: { date: '2026-11-09', online_count: '16', revenue_yuan: 51, previous_day_revenue_yuan: 10, revenue_total_yuan: 51, unread: { panel_amount: '14', all_pub: '4' } },
   });
@@ -1667,7 +1684,7 @@ test('douyin_hot_videos reads a hotspot\'s videos with their author', async () =
   assert.deepEqual(await lib.douyinHotVideos({ hot_id: '2734604', t: 3, v: '20261109162000' }), {
     hot_id: '2734604',
     items: [
-      { video_id: '7705408880076374699', video_url: 'https://v5/v1', cover_url: 'https://p5/c1.jpeg', likes: 985, likes_text: '985', author: { id: '2909771706674073', name: '力力欣.', avatar_url: 'https://p11/a1.jpeg' } },
+      { video_id: '7705408880076374699', video_url: 'https://v5/v1', cover_url: 'https://p5/c1.jpeg', likes: 985, likes_text: '985', author: { id: '2909771706674073', name: '力力欣.' } },
       { video_id: '7705756183349817545', video_url: 'https://v5/v2', cover_url: 'https://p3/c2.jpeg', likes: 19, likes_text: '19', author: null },
     ],
   });
@@ -1681,7 +1698,7 @@ test('douyin hot tools take the hot_id from douyin_hot_list and send its t and v
     callPlugin: async (method, params, opts) => {
       seen.push({ method, params, opts });
       if (method === 'douyin_hot_list') return { updated_at: null, items: [{ hot_id: '2734604', name: 'x' }], raw: [{ t: 3, v: '20261109162000' }] };
-      if (method === 'douyin_hot_videos') return { hot_id: params.hot_id, items: [{ video_url: 'https://v5/v1', cover_url: 'https://p5/c1.jpeg' }] };
+      if (method === 'douyin_hot_videos') return { hot_id: params.hot_id, items: [{ video_url: 'https://v5/v1', cover_url: 'https://p5/c1.jpeg' }, { video_url: 'https://v5/v2', cover_url: null }] };
       return { hot_id: params.hot_id };
     },
   });
@@ -1690,12 +1707,19 @@ test('douyin hot tools take the hot_id from douyin_hot_list and send its t and v
   const list = JSON.parse((await call('douyin_hot_list', {})).content[0].text);
   assert.equal(list.raw, undefined);
   await call('douyin_hot_detail', { hot_id: '2734604' });
-  const videos = JSON.parse((await call('douyin_hot_videos', { hot_id: '2734604' })).content[0].text);
+  const videos = JSON.parse((await call('douyin_hot_videos', { hot_id: '2734604', count: 1 })).content[0].text);
   assert.deepEqual(videos.items, [{ video_ref: 'video:1', cover_ref: 'img:2' }]);
+  assert.deepEqual([videos.total, videos.next_offset, videos.has_more], [2, 1, true]);
   assert.deepEqual(seen, [
     { method: 'douyin_hot_list', params: {}, opts: { pid: 200 } },
     { method: 'douyin_hot_detail', params: { hot_id: '2734604', t: 3, v: '20261109162000' }, opts: { pid: 200 } },
     { method: 'douyin_hot_videos', params: { hot_id: '2734604', t: 3, v: '20261109162000' }, opts: { pid: 200 } },
   ]);
   assert.equal((await call('douyin_hot_videos', { hot_id: 'abc' })).isError, true);
+});
+
+test('rank_creators hands out the avatars as refs', async () => {
+  const client = await connect({ listInstances: () => [{ pid: 7 }], callPlugin: async () => ({ total: 1, items: [{ uid: '1', name: 'u', avatar_url: 'https://p/avatar-signed-long.jpeg' }] }) });
+  const out = JSON.parse((await client.callTool({ name: 'rank_creators', arguments: {} })).content[0].text);
+  assert.deepEqual(out.items, [{ uid: '1', name: 'u', avatar_ref: 'img:1' }]);
 });

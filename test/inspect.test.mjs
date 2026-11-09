@@ -244,13 +244,15 @@ test('resolveRefs replaces handles with the resource or object they name, once p
     if (guid === 's9') return { kind: 'sceneObject', name: '头' };
     throw Error('gone');
   };
-  const out = await resolveRefs({ a: { guid: 'r1' }, b: [{ guid: 'r1' }, { guid: 's9' }], c: { guid: 'null' }, d: { guid: 'r7' }, e: { guid: 'r1', x: 1 } }, lookup, { root: '/p/A' });
+  // An unbound slot reads { guid: "null" }, or { guid: "undefined" } on AudioComponent.audioRef.
+  const out = await resolveRefs({ a: { guid: 'r1' }, b: [{ guid: 'r1' }, { guid: 's9' }], c: { guid: 'null' }, d: { guid: 'r7' }, e: { guid: 'r1', x: 1 }, f: { guid: 'undefined' } }, lookup, { root: '/p/A' });
   assert.deepEqual(out, {
     a: { resource: '韩系甜妹', type: 'AlgorithmAsset', file: '_DynamicAsset/韩系甜妹.algo' },
     b: [{ resource: '韩系甜妹', type: 'AlgorithmAsset', file: '_DynamicAsset/韩系甜妹.algo' }, { object: 's9', name: '头' }],
     c: null,
     d: { guid: 'r7', error: 'gone' },
     e: { guid: 'r1', x: 1 },
+    f: null,
   });
   assert.deepEqual(looked.sort(), ['r1', 'r7', 's9']);
 });
@@ -714,6 +716,10 @@ test('resolveObject takes a guid, a name or the tail of a path, and lists the ca
   assert.throws(() => resolveObject(objects, '2D 摄像机'), /AMBIGUOUS_OBJECT: 2D 摄像机 matches 2 objects: s4 2D 前景\/2D 摄像机 \| s7 音乐\/2D 摄像机/);
   assert.equal(resolveObject(objects, '摄像机'), null, 'a segment matches whole, not as a fragment');
   assert.equal(resolveObject(objects, '别处/AI 组合效果'), null);
+  assert.throws(() => resolveObject(objects, '2D 摄像机'), /; pass the guid or more of the path$/);
+  // Objects with the same path all the way up: only the guid tells them apart.
+  const same = sceneObjects({ renderGroups: [{ name: '面部面具', sceneObjects: [{ guid: 's1', name: '面部妆容' }, { guid: 's2', name: '面部妆容' }] }] });
+  assert.throws(() => resolveObject(same, '面部面具/面部妆容'), /AMBIGUOUS_OBJECT: 面部面具\/面部妆容 matches 2 objects: s1 面部面具\/面部妆容 \| s2 面部面具\/面部妆容; they share the same path, so only the guid tells them apart$/);
 });
 
 function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {} } = {}) {

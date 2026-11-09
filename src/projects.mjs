@@ -20,6 +20,10 @@ const real = (p) => {
   }
 };
 const samePath = (a, b) => !!a && !!b && real(a) === real(b);
+// The editor's CHILD_PROCESS_LIMIT: two project windows at a time. Its own WINDOW_LIMIT answer stays
+// the authority; this only refuses early.
+export const MAX_WINDOWS = 2;
+const listWindows = (windows) => windows.map((w) => `${w.pid} ${w.project_path ?? '(no project)'}`).join(' | ') || 'none with the plugin loaded';
 
 export async function waitFor(fn, { timeoutMs, intervalMs = 1000, sleep }) {
   const end = Date.now() + timeoutMs;
@@ -51,6 +55,27 @@ export class Projects {
   async officialInstances() {
     const { instances = [] } = await this.d.official.callJson('list_instances', {});
     return instances.map((i) => ({ ...i, pid: Number(String(i.generation || '').split('-')[0]) }));
+  }
+
+  // Refuses up front when every window is taken, before slow work such as a download.
+  async ensureFreeWindow() {
+    const windows = await this.windows();
+    if (windows.length >= MAX_WINDOWS) throw Error(`WINDOW_LIMIT: all ${MAX_WINDOWS} project windows 像塑 allows are in use (${listWindows(windows)}); save and project_close one first`);
+  }
+
+  // A window closed just before is gone from the plugin's list a moment before the editor frees its
+  // slot, so a launch right after a close can still be refused; it is retried for launchRetryMs.
+  async launch(pid, params) {
+    const end = Date.now() + this.d.launchRetryMs;
+    for (;;) {
+      try {
+        return await this.d.callPlugin('project_launch', params, { pid });
+      } catch (e) {
+        if (!/^WINDOW_LIMIT/.test(e.message)) throw e;
+        if (Date.now() >= end) throw Error(`${e.message}; open windows: ${listWindows(await this.windows())}`);
+        await this.d.sleep(1000);
+      }
+    }
   }
 
   async instanceIdForPid(pid, timeoutMs = 0) {
@@ -94,7 +119,7 @@ export class Projects {
     if (already) return { already_open: true, pid: already.pid, project_path: already.project_path, instance_id: await this.instanceIdForPid(already.pid, this.d.instanceTimeoutMs) };
     const launch = template_id === undefined ? { operation: 'openLocal', path: abs } : { operation: 'openTemplate', path: abs, template_id };
     if (activity !== undefined) launch.activity = activity;
-    if (windows.length) await this.d.callPlugin('project_launch', launch, { pid: windows[0].pid });
+    if (windows.length) await this.launch(windows[0].pid, launch);
     else if (template_id === undefined && activity === undefined) await this.d.openWithApp(path.join(abs, 'effect.dyehpj'));
     else throw Error('NO_EDITOR_WINDOW: open any project window first; template and task launches go through an open editor window');
     const w = await waitFor(async () => (await this.windows()).find((x) => samePath(x.project_path, abs)), { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep });
@@ -109,7 +134,7 @@ export class Projects {
     const windows = await this.windows();
     if (!windows.length) throw Error('NO_EDITOR_WINDOW: open any project first; new projects are created through an open editor window');
     const seen = new Set(windows.map((w) => `${w.pid}|${w.project_path}`));
-    await this.d.callPlugin('project_launch', { operation: 'createNew' }, { pid: windows[0].pid });
+    await this.launch(windows[0].pid, { operation: 'createNew' });
     const w = await waitFor(
       async () => (await this.windows()).find((x) => !seen.has(`${x.pid}|${x.project_path}`) && x.project_path && x.project_path.includes(TMP_MARK)),
       { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep },

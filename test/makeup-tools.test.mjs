@@ -176,11 +176,27 @@ test('makeup_compare shoots the baseline and each variant on the playing preview
   assert.deepEqual([r.states[1].delta.rgb, r.states[2].delta.rgb], [[-60, 0, 0], [40, 0, 0]]);
   assert.deepEqual(r.drift, { mean: 0, max: 0 });
   assert.equal(r.warning, undefined);
+  assert.equal(r.note, undefined);
   assert.deepEqual(r.box_px, [0, 100, 240, 20]);
   const strip = PNG.sync.read(fs.readFileSync(r.image));
   // Each cheek tile is 720×60; three of them wrap to one column under the 1024 px strip limit.
   assert.deepEqual([strip.width, strip.height], [720, 3 * 60 + 2 * 2]);
   assert.deepEqual(res.content.slice(1).map((c) => c.type), ['text', 'image']);
+});
+
+test('makeup_compare notes a region that no variant changed at all (a box over a sticker or off the makeup)', async () => {
+  const projectDir = project();
+  const win = fakeWindow({ projectDir });
+  const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
+  const res = await client.callTool({
+    name: 'makeup_compare',
+    arguments: { instance_id: '2', variants: [{ label: '关腮红', changes: [{ object_path: '腮红', female: 0 }] }], regions: [{ label: '额头', x: 0, y: 0, width: 1, height: 0.3 }, CHEEK], at_ms: 1500 },
+  });
+  assert.equal(res.isError, undefined, res.content[0].text);
+  const [top, cheek] = JSON.parse(res.content[0].text).runs[0].regions;
+  assert.deepEqual(top.states[1].delta, { rgb: [0, 0, 0], luma: 0, detail: 0 });
+  assert.match(top.note, /所有状态在这个区域都和基线完全一样/);
+  assert.equal(cheek.note, undefined);
 });
 
 test('makeup_compare measures each state against a reference crop and appends it to the strip', async () => {
