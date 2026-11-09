@@ -294,6 +294,29 @@ test('works_download surfaces the editor download failure stage and leaves no zi
   assert.deepEqual(fs.readdirSync(cache), []);
 });
 
+test('works_download runs one download at a time in a window, so calls sent together all succeed', async () => {
+  const { lib, calls } = setup();
+  // The editor's download fails a second download started while one is still running.
+  const Model = lib.mod(M.worksDownload).DownloadTemplateModel;
+  const start = Model.prototype.startDownload;
+  let running = 0;
+  Model.prototype.startDownload = async function (item) {
+    if (running) return { status: 'fail', unzipPath: '', errorInfo: 'download' };
+    running++;
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      return await start.call(this, item);
+    } finally {
+      running--;
+    }
+  };
+  const outs = await Promise.all(['1', '2', '3'].map((id) => lib.worksDownload({ item: work(id, `作品${id}`) })));
+  assert.deepEqual(outs.map((o) => o.template_id), ['1', '2', '3']);
+  assert.deepEqual(calls.download.map((d) => d.templateId), ['1', '2', '3']);
+  await assert.rejects(lib.worksDownload({}), /INVALID_WORK/);
+  assert.equal((await lib.worksDownload({ item: work('4', '作品4') })).template_id, '4', 'a failed call does not stop the queue');
+});
+
 test('works_download keeps a zip the user already had cached', async () => {
   const { lib, cache } = setup({ cached: true });
   assert.equal((await lib.worksDownload({ item: work('1', 'AI 修仙合掌转场') })).package_cached, true);

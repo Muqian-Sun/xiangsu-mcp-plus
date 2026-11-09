@@ -129,6 +129,42 @@ test('pickInspect preset "key" keeps transform, visibility, strength-like values
   assert.deepEqual(plus.components.find((c) => c.type === 'Camera').properties, { fovy: 60 });
 });
 
+test('pickInspect keeps a parameter block whose strength sits one level down, under the preset and under fields', () => {
+  // A 发光 post-process as a scene file gives it: its parameters live under bloom.serializedProperty.properties.
+  const bloom = { serializedProperty: { properties: { __scriptClassName: 'Bloom', enabled: true, pBloomIntensity: 3, pBloomThreshold: 0.85 } } };
+  const res = {
+    guid: '#14',
+    name: '发光',
+    components: [
+      { type: 'PostProcess', guid: '#14.3', properties: { enabled: true, bloom, postProcessList: [2] } },
+      { type: 'Camera', guid: '#14.2', properties: { renderTexture: { builtin: 'x' }, clearColor: { r: 0, g: 0, b: 0, a: 1 } } },
+    ],
+  };
+  const key = pickInspect(res, { preset: 'key' });
+  const post = key.components.find((c) => c.type === 'PostProcess');
+  assert.deepEqual(Object.keys(post.properties), ['enabled', 'bloom'], 'postProcessList has nothing strength-like and stays out');
+  assert.equal(post.properties.bloom.serializedProperty.properties.pBloomIntensity, 3);
+  const asked = pickInspect(res, { fields: ['threshold'] });
+  assert.deepEqual(Object.keys(asked.components[0].properties), ['bloom']);
+});
+
+test('pickInspect names a makeup layer\'s blend modes next to their numbers', () => {
+  const res = {
+    guid: '#20',
+    name: '面部_腮红',
+    components: [
+      { type: 'FaceMaskDY', guid: '#20.3', properties: { blendMode: 1, surfaceBlendMode: 13, intensity: 0.7 } },
+      { type: 'FaceMask', guid: '#21.3', properties: { blendMode: 99 } },
+      { type: 'Image', guid: '#22.2', properties: { blendMode: 1 } },
+    ],
+  };
+  const out = pickInspect(res);
+  assert.deepEqual(out.components[0].properties, { blendMode: 1, blendMode_name: '正片叠底', surfaceBlendMode: 13, surfaceBlendMode_name: '线性减淡', intensity: 0.7 });
+  assert.deepEqual(out.components[1].properties, { blendMode: 99, blendMode_name: '未知（99）' });
+  assert.deepEqual(out.components[2].properties, { blendMode: 1 }, 'other components keep their own numbering');
+  assert.deepEqual(pickInspect(res, { fields: ['intensity'] }).components[0].properties, { intensity: 0.7 }, 'a name only comes with its number');
+});
+
 test('resolveRefs replaces handles with the resource or object they name, once per handle', async () => {
   const looked = [];
   const lookup = async (guid) => {
@@ -327,6 +363,12 @@ test('loadScene inspect gives values, resources, references and script parameter
 
 test('loadScene fails closed on a missing or malformed scene and reports unreadable .extra files', () => {
   assert.throws(() => loadScene(tmpdir('xs-empty-')), /NO_MAIN_SCENE/);
+  const empty = tmpdir('xs-empty-scene-');
+  fs.mkdirSync(path.join(empty, 'Assets'));
+  fs.writeFileSync(path.join(empty, 'Assets', 'main.scene'), '%YAML 1.1\n--- !Scene &1\nname: !<str> ""\nvisible: true\n');
+  assert.deepEqual(loadScene(empty).tree({ depth: 6 }), [], 'a scene with no object saves no entities key');
+  fs.writeFileSync(path.join(empty, 'Assets', 'main.scene'), '%YAML 1.1\n--- !Scene &1\nentities: 3\n');
+  assert.throws(() => loadScene(empty), /SCENE_PARSE_FAILED: .*entities is not a list/);
   const dir = sceneProject({ badExtra: true });
   assert.match(loadScene(dir).unreadable.join(), /broken\.png\.extra/);
   const noEditor = loadScene(sceneProject({ badEditor: true }));

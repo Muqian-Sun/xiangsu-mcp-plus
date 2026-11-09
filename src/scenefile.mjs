@@ -74,7 +74,10 @@ export function loadScene(projectDir) {
   if (!fs.existsSync(file)) throw Error(`NO_MAIN_SCENE: ${file}`);
   const byId = parseDocs(file);
   const scene = byId.get(1);
-  if (scene?.tag !== 'Scene' || !Array.isArray(scene.value.entities)) throw Error(`SCENE_PARSE_FAILED: ${file}: document &1 is not the Scene`);
+  if (scene?.tag !== 'Scene') throw Error(`SCENE_PARSE_FAILED: ${file}: document &1 is not the Scene`);
+  // A scene with no object saves no entities key at all.
+  const raw = scene.value.entities ?? [];
+  if (!Array.isArray(raw)) throw Error(`SCENE_PARSE_FAILED: ${file}: the Scene's entities is not a list`);
   const editorFile = `${file}.extra`;
   const { index, unreadable } = resourceIndex(assets, new Set([editorFile]));
   const editor = new Map();
@@ -85,7 +88,7 @@ export function loadScene(projectDir) {
       unreadable.push(`main.scene.extra: ${e.message}`);
     }
   }
-  const entities = scene.value.entities.map((e, i) => ({ id: `#${i + 1}`, raw: e }));
+  const entities = raw.map((e, i) => ({ id: `#${i + 1}`, raw: e }));
   const byTransform = new Map();
   for (const e of entities) {
     const ref = (e.raw.components || []).find((c) => isRef(c) && /Transform$/.test(byId.get(lid(c))?.tag || ''));

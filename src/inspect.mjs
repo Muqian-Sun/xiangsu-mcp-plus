@@ -78,6 +78,18 @@ export function resolveObject(objects, ref) {
 
 const matches = (name, patterns) => patterns.some((p) => name.toLowerCase().includes(p.toLowerCase()));
 
+// BlendModeType of the editor's FaceMask plugin (CreationConfigBase.d.ts, FaceMask@1.0.6). The older
+// FaceMaskDY numbers its blend modes the same way (韩漫少女 saved both ways, 2026-11-09).
+export const BLEND_MODES = ['普通', '正片叠底', '叠加', '相加', '滤色', '柔光', '平均', '颜色加深', '颜色减淡', '变暗', '差值', '排除', '变亮', '线性减淡'];
+const BLEND_KEYS = ['blendMode', 'surfaceBlendMode'];
+
+// Post-processing and other components keep their parameters one block down (bloom.serializedProperty
+// .properties.pBloomIntensity): a block is kept when a key anywhere inside it matches.
+const nestedMatch = (v, patterns, depth = 0) =>
+  depth < 6 && !!v && typeof v === 'object' && Object.entries(v).some(([k, x]) => (!Array.isArray(v) && matches(k, patterns)) || nestedMatch(x, patterns, depth + 1));
+// Inside such a block only strength-like names count: `enabled` and `color` sit in nearly every block.
+const NESTED_KEY_FIELDS = ['intensity', 'strength', 'opacity', 'alpha', 'amount', 'weight'];
+
 // preset "key": the parameters that usually decide how an effect looks. Picked, not measured, from
 // the effects made so far (makeup, face warps, stickers, text); anything else is still reachable with
 // fields or component_types.
@@ -94,13 +106,19 @@ const hasBinding = (v) => (Array.isArray(v) ? v.some(hasBinding) : isBinding(v))
 // properties under the preset: they are the script's exposed parameters.
 export function pickInspect(res, { component_types, fields, preset } = {}) {
   const filtered = !!(fields || preset);
-  const keep = (c, k, v) => (fields && matches(k, fields)) || (preset === 'key' && (c.script || KEY_NAMES.includes(k) || matches(k, KEY_FIELDS) || hasBinding(v)));
+  const keep = (c, k, v) =>
+    (fields && (matches(k, fields) || nestedMatch(v, fields))) ||
+    (preset === 'key' && (c.script || KEY_NAMES.includes(k) || matches(k, KEY_FIELDS) || hasBinding(v) || nestedMatch(v, NESTED_KEY_FIELDS)));
+  // A makeup layer's blend mode is a bare number in the scene file; its name goes next to it.
+  const named = (c) => ([k, v]) =>
+    /^FaceMask/.test(c.type) && BLEND_KEYS.includes(k) && Number.isInteger(v) ? [[k, v], [`${k}_name`, BLEND_MODES[v] ?? `未知（${v}）`]] : [[k, v]];
   const components = (res.components || [])
     .filter((c) => !component_types || component_types.includes(c.type))
     .map((c) => {
       const props = Object.entries(c.properties || {})
         .map(([k, v]) => [k, unwrap(v)])
-        .filter(([k, v]) => !filtered || keep(c, k, v));
+        .filter(([k, v]) => !filtered || keep(c, k, v))
+        .flatMap(named(c));
       return { type: c.type, guid: c.guid, ...(c.script ? { script: true } : {}), properties: Object.fromEntries(props) };
     })
     .filter((c) => !filtered || Object.keys(c.properties).length);

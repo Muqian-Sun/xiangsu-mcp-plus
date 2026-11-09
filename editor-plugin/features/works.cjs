@@ -265,7 +265,16 @@ const methods = {
   // fresh copy into the instance's ProjectCreatedTmp/CreatedFromTemplate, exactly as opening a work
   // from the homepage does; the project itself is not opened. `item` is a raw record from works_list /
   // works_search / works_by_effect.
-  async worksDownload({ item: t }) {
+  // One download at a time per window: two started together in the same window fail at the download
+  // stage (2 of 3 sent at once, 2026-11-09), so later calls wait for the earlier ones.
+  worksDownload(args) {
+    const run = () => this.worksDownloadOne(args);
+    const next = (this.worksDownloading || Promise.resolve()).then(run, run);
+    this.worksDownloading = next.catch(() => {});
+    return next;
+  },
+
+  async worksDownloadOne({ item: t } = {}) {
     this.ensureCompatible('works');
     if (!t || !t.templateId) throw Error('INVALID_WORK: pass the raw work record returned by works_list / works_search / works_by_effect');
     if (!Object.values((t.businessExtra && t.businessExtra.fileMap) || {}).some((f) => f && f.url)) {

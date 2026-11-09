@@ -1,10 +1,11 @@
-// Reads a project's makeup layers (FaceMask, EyeColorV2) from its scene file and tells, for each one,
+// Reads a project's makeup layers (FaceMask, FaceMaskDY, EyeColorV2) from its scene file and tells, for each one,
 // which part of the face it paints and in what colour: layer names in published works are often
 // generic (面具1, 脸部妆容 (2)), so the part comes from the layer's region and its texture's pixels.
 import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { sniffImage } from './images.mjs';
+import { BLEND_MODES } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 
 // FaceMask (type, regionType) → the face area its texture is laid out for. These five pairs cover
@@ -40,8 +41,15 @@ const NAME_FITS = {
 };
 
 // Blend modes that can only lighten the skin (相加, 滤色, 颜色减淡, 变亮, 线性减淡): whatever the
-// texture's colour, such a layer is a highlight, never a blush or a contour.
+// texture's colour, such a layer is a highlight, never a blush or a contour. Black leaves the skin as
+// it is under them.
 const LIGHTENING = new Set([3, 4, 8, 12, 13]);
+// Blend modes that can only darken it (正片叠底, 颜色加深, 变暗); white leaves the skin as it is.
+const DARKENING = new Set([1, 7, 9]);
+// Picked: a texture this opaque carries no shape in its alpha (鼻子修容 of 妹宝甜豆妆 is fully opaque,
+// 97.8 % pure white, 2026-11-09), so the shape is read from how far each pixel is from the colour the
+// blend mode leaves unchanged.
+const OPAQUE_SHARE = 0.95;
 
 // Pixel rules, from the textures of the same 109 layers (positions are fractions of the texture):
 // neutral-grey full-face maps (rgb 125–128, 73–100 % covered) are light/shadow maps blended over the
@@ -75,9 +83,18 @@ const EYE_PARTS = ['眼影', '眼线', '睫毛', '卧蚕'];
 // The runtime classes of FaceMask and EyeColorV2: seen under these names only when the editor's side
 // (main.scene.extra) is missing, which also loses their region and texture.
 const RUNTIME_ONLY = ['EffectFaceMakeupFaceU', 'EyeColor'];
-// BlendModeType and SurfaceType of the editor's FaceMask plugin (CreationConfigBase.d.ts, FaceMask@1.0.6).
-export const BLEND_MODES = ['普通', '正片叠底', '叠加', '相加', '滤色', '柔光', '平均', '颜色加深', '颜色减淡', '变暗', '差值', '排除', '变亮', '线性减淡'];
+// SurfaceType of the editor's FaceMask plugin (CreationConfigBase.d.ts, FaceMask@1.0.6).
 const SURFACES = ['普通', '水润', '珠光', '渐变', '哑光', '丝绒', '金属'];
+// FaceMaskDY is the editor's older makeup layer, still in projects saved before it moved to FaceMask
+// (official 混血doll感娃娃妆, homepage 冰透蓝调; the same package applied today comes in as FaceMask).
+// Region and blend numbers are the same (韩漫少女 saved both ways, 2026-11-09); its panel has one
+// intensity, and its lips gloss is a second blend mode (surfaceBlendMode) instead of a surface type.
+const FACE_MASKS = ['FaceMask', 'FaceMaskDY'];
+// Where the editor keeps official packages it imported from: an imported texture's .extra points
+// there (…\DouyinAR\package\<id>\…, …/Instances/Instance1/EHpackage/<id>/…).
+const PACKAGE_PATH = /DouyinAR[\\/](?:package|.*[\\/]EHpackage)[\\/](\d+)[\\/]/;
+// A texture duplicated in the file manager to be edited (圆眼 - 副本.png).
+const COPY_NAME = /副本|copy/i;
 // A FaceMask draws on every face unless faceIds says otherwise; the editor's default is all five.
 const ALL_FACES = [0, 1, 2, 3, 4];
 
@@ -112,13 +129,63 @@ const hex = (r, g, b) => `#${[r, g, b].map((v) => Math.round(v).toString(16).pad
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
 // Alpha-weighted colour and placement of a texture's painted pixels. Pixels under 5 % alpha (texture
-// noise) do not count.
-export function textureStats(file) {
+// noise) do not count. An opaque texture under a darkening or lightening blend mode is weighed by how
+// much each pixel changes the skin instead (`opaque` is then set).
+export function textureStats(file, { blendMode } = {}) {
   const buf = fs.readFileSync(file);
   if (sniffImage(buf) !== 'image/png') throw Error('不是 PNG，没有分析像素');
-  const s = pixelStats(PNG.sync.read(buf));
+  const img = PNG.sync.read(buf);
+  const neutral = DARKENING.has(blendMode) ? 255 : LIGHTENING.has(blendMode) ? 0 : null;
+  const opaque = neutral !== null && opaqueShare(img) >= OPAQUE_SHARE;
+  let s;
+  try {
+    s = pixelStats(opaque ? byEffect(img, neutral) : img);
+  } catch (e) {
+    if (!opaque) throw e;
+    throw Error(`贴图不透明、几乎全是${neutral ? '白色' : '黑色'}，在${BLEND_MODES[blendMode]}下几乎不改变皮肤`);
+  }
   const round = (v) => Number(v.toFixed(3));
-  return { color: s.color, hsl: s.hsl, coverage: round(s.coverage), cx: round(s.cx), cy: round(s.cy), width: round(s.width), height: round(s.height) };
+  return { color: s.color, hsl: s.hsl, coverage: round(s.coverage), cx: round(s.cx), cy: round(s.cy), width: round(s.width), height: round(s.height), ...(opaque ? { opaque: true } : {}) };
+}
+
+function opaqueShare({ width: w, height: h, data }) {
+  let n = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i] >= 250) n++;
+  return n / (w * h);
+}
+
+// Each pixel composited over the colour the blend leaves unchanged (white or black), its alpha
+// replaced by how far it then is from that colour: under 正片叠底 a pixel of colour c multiplies the
+// skin by c, so white does nothing and the darkest channel says how much it does.
+function byEffect({ width, height, data }, neutral) {
+  const out = Buffer.alloc(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3] / 255;
+    let effect = 0;
+    for (let ch = 0; ch < 3; ch++) {
+      const c = data[i + ch] * a + neutral * (1 - a);
+      out[i + ch] = Math.round(c);
+      effect = Math.max(effect, Math.abs(c - neutral) / 255);
+    }
+    out[i + 3] = Math.round(effect * 255);
+  }
+  return { width, height, data: out };
+}
+
+// Where a texture came from, by its .extra: imported from an official package (assetPackageID, the
+// package's library template_id, or a path into the editor's package folder), or a file the author
+// imported; null without a readable .extra.
+function textureSource(file) {
+  let entry;
+  try {
+    entry = [].concat(JSON.parse(fs.readFileSync(`${file}.extra`, 'utf8')))[0];
+  } catch {
+    return null;
+  }
+  const from = typeof entry?.resourceFilePath === 'string' ? entry.resourceFilePath : null;
+  const pkg = entry?.assetPackageID ?? from?.match(PACKAGE_PATH)?.[1];
+  const source = pkg ? { from: '官方素材包', package_id: String(pkg) } : from ? { from: '作者导入', file: from.split(/[\\/]/).pop() } : { from: '未知' };
+  return COPY_NAME.test(path.basename(file)) ? { ...source, copy: true } : source;
 }
 
 // The same for RGBA pixels in memory, unrounded; positions are fractions of the texture, measured on
@@ -165,15 +232,16 @@ export function makeupLayers(projectDir) {
   const scene = loadScene(projectDir);
   const notes = [...scene.unreadable.map((u) => `资源描述文件读不了：${u}`)];
   const stats = new Map();
-  const statsOf = (file) => {
-    if (!stats.has(file)) {
+  const statsOf = (file, blendMode) => {
+    const key = `${blendMode}|${file}`;
+    if (!stats.has(key)) {
       try {
-        stats.set(file, textureStats(file));
+        stats.set(key, textureStats(file, { blendMode }));
       } catch (e) {
-        stats.set(file, { error: e.message });
+        stats.set(key, { error: e.message });
       }
     }
-    return stats.get(file);
+    return stats.get(key);
   };
 
   const all = [];
@@ -209,17 +277,20 @@ export function makeupLayers(projectDir) {
   for (const { n, path: objectPath, visible, components } of all) {
     for (const c of components) {
       if (RUNTIME_ONLY.includes(c.type)) blind.push(`${n.guid} ${n.name}`);
-      if (c.type !== 'FaceMask' && c.type !== 'EyeColorV2') continue;
+      if (!FACE_MASKS.includes(c.type) && c.type !== 'EyeColorV2') continue;
       const p = c.properties;
       const eye = c.type === 'EyeColorV2';
+      const dy = c.type === 'FaceMaskDY';
       const region = eye ? '美瞳' : REGIONS[`${p.type}/${p.regionType}`] ?? `${p.type}/${p.regionType}`;
-      const female = eye ? p.intensity : p.femaleIntensity;
-      const male = eye ? p.intensity : p.maleIntensity;
+      // FaceMaskDY's panel has a single intensity, but its runtime component keeps a female and a male
+      // opacity of their own (an official pack's are e.g. 0.6 / 0.3 under an intensity of 0.7), and those render.
+      const female = eye ? p.intensity : dy ? p.femaleOpacity : p.femaleIntensity;
+      const male = eye ? p.intensity : dy ? p.maleOpacity : p.maleIntensity;
       // The editor sets the shader's opacity to the slider times the external intensity
       // (FaceMaskComponentEditor's femaleIntensity setter); the runtime component keeps the product.
-      const external = eye ? null : { female: p.externalFemaleIntensity ?? 1, male: p.externalMaleIntensity ?? 1 };
-      const opacity = eye ? { female, male } : { female: round3(female * external.female), male: round3(male * external.male) };
-      if (!eye && typeof p.femaleOpacity === 'number' && (Math.abs(p.femaleOpacity - opacity.female) > 0.01 || Math.abs(p.maleOpacity - opacity.male) > 0.01)) {
+      const external = eye || dy ? null : { female: p.externalFemaleIntensity ?? 1, male: p.externalMaleIntensity ?? 1 };
+      const opacity = external ? { female: round3(female * external.female), male: round3(male * external.male) } : { female, male };
+      if (external && typeof p.femaleOpacity === 'number' && (Math.abs(p.femaleOpacity - opacity.female) > 0.01 || Math.abs(p.maleOpacity - opacity.male) > 0.01)) {
         notes.push(`${n.guid} ${n.name}：场景里运行时的不透明度（女 ${p.femaleOpacity} / 男 ${p.maleOpacity}）和强度 × 外部强度（女 ${opacity.female} / 男 ${opacity.male}）对不上，编辑器里可能有没保存的改动`);
       }
       const off = !visible
@@ -237,27 +308,35 @@ export function makeupLayers(projectDir) {
         blend = `未知（${p.blendMode}）`;
         notes.push(`${n.guid} ${n.name}：混合模式 ${p.blendMode} 不认识，按原值报告`);
       }
-      const layer = { object: n.guid, name: n.name, path: objectPath, active: !off, ...(off ? { off } : {}), region, part: null, part_from: null, blend, female, male };
-      if (!eye && (external.female !== 1 || external.male !== 1)) layer.external = external;
+      const layer = { object: n.guid, name: n.name, path: objectPath, ...(dy ? { component: 'FaceMaskDY' } : {}), active: !off, ...(off ? { off } : {}), region, part: null, part_from: null, blend, female, male };
+      if (external && (external.female !== 1 || external.male !== 1)) layer.external = external;
       layer.opacity = opacity;
       const set = setOf.get(n.guid);
       if (set) {
         layer.in_set = { object: set.object, name: set.name };
         set.layers.push(`${n.guid} ${n.name}`);
       }
-      if (Array.isArray(p.faceIds) && p.faceIds.join() !== ALL_FACES.join()) layer.faces = p.faceIds;
-      if (!eye && p.surfaceType) layer.surface = { type: SURFACES[p.surfaceType] ?? `未知（${p.surfaceType}）`, intensity: p.surfaceIntensity ?? null };
+      const faces = p.faceIds ?? (eye ? p.faceIndexes : undefined);
+      if (Array.isArray(faces) && faces.join() !== ALL_FACES.join()) layer.faces = faces;
+      if (!eye && !dy && p.surfaceType) layer.surface = { type: SURFACES[p.surfaceType] ?? `未知（${p.surfaceType}）`, intensity: p.surfaceIntensity ?? null };
+      if (dy && p.surfaceIntensity) layer.surface = { blend: BLEND_MODES[p.surfaceBlendMode] ?? `未知（${p.surfaceBlendMode}）`, intensity: p.surfaceIntensity };
       if (!eye && Array.isArray(p.color) && p.color.slice(0, 3).some((v) => v !== 1)) layer.tint = hex(p.color[0] * 255, p.color[1] * 255, p.color[2] * 255);
       if (!eye && typeof p.intensity === 'number') layer.intensity = p.intensity;
-      const tex = textureFile(projectDir, p.makeupTexture);
+      // Older EyeColor versions keep the iris texture under makeupTexture and the faces under faceIndexes.
+      const tex = textureFile(projectDir, eye ? (p.eyeTexture ?? p.makeupTexture) : p.makeupTexture);
       let s = null;
       if (tex.file) {
         layer.texture = tex.rel;
-        s = statsOf(tex.file);
+        const source = textureSource(tex.file);
+        if (source) layer.texture_source = source;
+        s = statsOf(tex.file, p.blendMode);
         if (s.error) {
           layer.texture_note = s.error;
           s = null;
-        } else Object.assign(layer, { color: s.color, hsl: s.hsl });
+        } else {
+          Object.assign(layer, { color: s.color, hsl: s.hsl });
+          if (s.opaque) layer.texture_note = `贴图不透明，颜色和范围按每个像素离${DARKENING.has(p.blendMode) ? '白色' : '黑色'}多远（${blend}下它不改变皮肤）算`;
+        }
       } else layer.texture_note = tex.note;
       if (eye && p.color) layer.tint = hex(p.color.r * 255, p.color.g * 255, p.color.b * 255);
 

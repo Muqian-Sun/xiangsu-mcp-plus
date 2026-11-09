@@ -612,7 +612,7 @@ export function createServer(deps = {}) {
     {
       name: 'works_download',
       description:
-        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
+        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。同一窗口的多个下载会排队一个个下，可以一起发出。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
       shape: {
         ...target,
         template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。'),
@@ -1221,7 +1221,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。fields 也会留下内部某一层属性名包含这些片段的整块参数（如后处理的 bloom 块里的 pBloomThreshold）。妆容层（FaceMask / FaceMaskDY）的混合模式编号旁边加上 blendMode_name / surfaceBlendMode_name（如「正片叠底」）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、内部含强度类参数的整块参数（如后处理的发光、调色）、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
@@ -1271,7 +1271,7 @@ export function createServer(deps = {}) {
     {
       name: 'makeup_layers',
       description:
-        '列出一个工程的全部美妆层（FaceMask 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
+        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：官方素材包（package_id 是这个包在素材库里的 template_id）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
       shape: {
         project_dir: z.string().min(1).describe('工程目录的绝对路径（含 Assets/main.scene），如 works_download 返回的 project_path 或自己的工程。'),
         save_to: saveTo,

@@ -37,11 +37,32 @@ const TEXTURES = {
   top: ['11111111-0000-0000-0000-00000000000c', png(100, 100, (x, y) => x >= 20 && x < 80 && y >= 5 && y < 20, [230, 200, 190, 255])],
   // Full-face layout: two soft patches on the cheeks.
   cheeks: ['11111111-0000-0000-0000-00000000000d', png(100, 100, (x, y) => (x < 40 || x >= 60) && x >= 25 && x < 75 && y >= 50 && y < 65, [240, 150, 160, 160])],
+  // Opaque white with a grey-brown strip down the nose: under 正片叠底 only the strip does anything.
+  whiteNose: ['11111111-0000-0000-0000-00000000000e', opaque(100, 100, (x, y) => x >= 46 && x < 54 && y >= 40 && y < 60, [150, 120, 100], [255, 255, 255])],
+  // Opaque and all but white: does nothing under 正片叠底.
+  blank: ['11111111-0000-0000-0000-00000000000f', opaque(20, 20, () => false, [0, 0, 0], [253, 253, 253])],
+  // Eye layout, a liner duplicated in the file manager to be edited.
+  '圆眼 - 副本': ['11111111-0000-0000-0000-000000000010', png(100, 50, (x, y) => y >= 25 && y < 31 && x >= 10 && x < 90, [115, 71, 70, 255])],
 };
+
+// What each texture's .extra says about where it came from (an official package, a file the author imported).
+const TEXTURE_EXTRA = {
+  brow: { assetPackageID: '7216630895652962362', resourceFilePath: '/Users/x/Library/Application Support/DouyinAR/Instances/Instance1/EHpackage/7216630895652962362/韩漫少女/纹理/brow000.png' },
+  cheeks: { resourceFilePath: 'C:\\Users\\1\\AppData\\Local\\DouyinAR\\package\\7389989461582692415\\纹理\\韩式.png' },
+  whiteNose: { resourceFilePath: 'D:\\特效-抖音\\美妆类psd\\面部\\鼻影.png' },
+  '圆眼 - 副本': { resourceFilePath: 'F:\\像塑\\图片\\圆眼.png' },
+};
+
+// A w×h opaque PNG: `ink` where `inside(x, y)` holds, `paper` elsewhere.
+function opaque(w, h, inside, ink, paper) {
+  const img = new PNG({ width: w, height: h });
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) img.data.set([...(inside(x, y) ? ink : paper), 255], (y * w + x) * 4);
+  return PNG.sync.write(img);
+}
 
 // [name, layer, { parent, hidden }]; a layer is a FaceMask ({ type, region, tex, female, male, enabled,
 // blend, external: [female, male], faces, surface, tint }), an EyeColor ({ eye: true, tex, intensity,
-// blend, faces }) or an AI face GAN driving some FaceMask layers by name ({ gan: [names], intensity }).
+// blend, faces, old: the older field names }) or an AI face GAN driving some FaceMask layers by name ({ gan: [names], intensity }).
 const OBJECTS = [
   ['面部面具', null],
   ['面具1', { type: 'FACEU_MASK', region: 0, tex: 'brow', female: 0.8, male: 0.3 }, { parent: '面部面具' }],
@@ -54,7 +75,7 @@ const OBJECTS = [
   ['鸢尾狐', { type: 'FACEU_JIEMAO', region: 2, tex: 'liner', female: 1, male: 0 }, { parent: '面部面具' }],
   ['唇部妆容', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'red', female: 0.7, male: 0.1, surface: [1, 0.4], faces: [0] }, { parent: '面部面具' }],
   ['唇面高光', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'red', female: 0.3, male: 0 }, { parent: '面部面具' }],
-  ['面具3', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'gloss', female: 0.3, male: 0 }, { parent: '面部面具' }],
+  ['面具3', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'gloss', female: 0.3, male: 0, blend: 4 }, { parent: '面部面具' }],
   ['牙齿美白', { type: 'FACEU_LIPS_KEYPOINT', region: 4, builtin: true, female: 0.3, male: 0.3 }, { parent: '面部面具' }],
   ['新区域', { type: 'FACEU_NEW', region: 9, tex: 'red', female: 0.5, male: 0.5 }, { parent: '面部面具' }],
   ['修容', { type: 'FACEU_MASK', region: 0, dangling: true, female: 0.5, male: 0.2, enabled: false }, { parent: '面部面具' }],
@@ -82,7 +103,7 @@ function makeupProject(objects = OBJECTS) {
   fs.mkdirSync(path.join(assets, 'tex'), { recursive: true });
   for (const [name, [uuid, buf]] of Object.entries(TEXTURES)) {
     fs.writeFileSync(path.join(assets, 'tex', `${name}.png`), buf);
-    fs.writeFileSync(path.join(assets, 'tex', `${name}.png.extra`), JSON.stringify([{ guid: { a: uuid, b: '' }, name, rttiType: 'Texture' }]));
+    fs.writeFileSync(path.join(assets, 'tex', `${name}.png.extra`), JSON.stringify([{ guid: { a: uuid, b: '' }, name, rttiType: 'Texture', ...TEXTURE_EXTRA[name] }]));
   }
   const index = new Map(objects.map(([name], i) => [name, i]));
   const tid = (i) => 100 + i;
@@ -109,9 +130,9 @@ function makeupProject(objects = OBJECTS) {
         '            __class: Map',
         `            intensity: ${layer.intensity}`,
         `            blendMode: ${layer.blend}`,
-        `            faceIds: [${layer.faces}]`,
+        `            ${layer.old ? 'faceIndexes' : 'faceIds'}: [${layer.faces}]`,
         '            color: {r: 1, g: 0.5, b: 0, a: 1}',
-        `            makeupTexture: {localId: 1, path: ${texRef(layer)}}`,
+        `            ${layer.old ? 'makeupTexture' : 'eyeTexture'}: {localId: 1, path: ${texRef(layer)}}`,
         '        enabled: true',
         '        className: !<str> EyeColor',
       );
@@ -129,23 +150,22 @@ function makeupProject(objects = OBJECTS) {
         `        femaleOpacity: ${layer.female * (layer.external?.[0] ?? 1)}`,
         `        maleOpacity: ${layer.male * (layer.external?.[1] ?? 1)}`,
       );
-      editor.push({
-        guid: { a: `e${i}` },
-        objGuid: `Guid(${i}, 2)`,
-        extraType: 'FaceMask',
-        rttiType: 'FaceMakeup',
-        regionType: layer.region,
-        makeupTexture: texRef(layer),
-        blendMode: layer.blend ?? 1,
-        intensity: 0.6,
-        color: layer.tint ?? [1, 1, 1, 1],
-        surfaceType: layer.surface?.[0] ?? 0,
-        surfaceIntensity: layer.surface?.[1] ?? 0,
-        femaleIntensity: layer.female,
-        maleIntensity: layer.male,
-        externalFemaleIntensity: layer.external?.[0] ?? 1,
-        externalMaleIntensity: layer.external?.[1] ?? 1,
-      });
+      const common = { guid: { a: `e${i}` }, objGuid: `Guid(${i}, 2)`, rttiType: 'FaceMakeup', regionType: layer.region, makeupTexture: texRef(layer), blendMode: layer.blend ?? 1, color: layer.tint ?? [1, 1, 1, 1] };
+      // The older FaceMaskDY: one panel intensity, the lips gloss as a second blend mode.
+      if (layer.dy) editor.push({ ...common, extraType: 'FaceMaskDY', intensity: layer.intensity, surfaceBlendMode: layer.surface?.[0] ?? 0, surfaceIntensity: layer.surface?.[1] ?? 0 });
+      else {
+        editor.push({
+          ...common,
+          extraType: 'FaceMask',
+          intensity: 0.6,
+          surfaceType: layer.surface?.[0] ?? 0,
+          surfaceIntensity: layer.surface?.[1] ?? 0,
+          femaleIntensity: layer.female,
+          maleIntensity: layer.male,
+          externalFemaleIntensity: layer.external?.[0] ?? 1,
+          externalMaleIntensity: layer.external?.[1] ?? 1,
+        });
+      }
     }
     entities.push(['  - __class: Entity', `    name: !<str> ${name}`, `    guid: {a: ${i}, b: 1}`, '    scene: {localId: 1}', `    selfvisible: ${!opts.hidden}`, '    components:', ...comps].join('\n'));
     const children = objects.map(([, , o], j) => (o?.parent === name ? `  - {localId: ${tid(j)}}` : null)).filter(Boolean);
@@ -188,6 +208,7 @@ test('makeupLayers tells the region, part and colour of each layer, by name wher
     opacity: { female: 0.8, male: 0.3 },
     intensity: 0.6,
     texture: path.join('tex', 'brow.png'),
+    texture_source: { from: '官方素材包', package_id: '7216630895652962362' },
     color: '#785A3C',
     hsl: [30, 33, 35],
   });
@@ -266,7 +287,7 @@ test('makeupLayers marks hidden, disabled and zero-strength layers inactive and 
     美瞳: ['#18 美瞳（美瞳，普通，女 0.5 / 男 0.5）'],
     颊: ['#4 腮红（腮红，正片叠底，女 0.25 / 男 0）', '#24 面具7（腮红/修容，正片叠底，女 0.4 / 男 0）'],
     轮廓: ['#3 面具2（明暗，柔光，女 0.6 / 男 0.3）', '#21 面具4（鼻部，正片叠底，女 0.4 / 男 0）', '#25 面具8（高光，滤色，女 0.4 / 男 0）'],
-    唇: ['#9 唇部妆容（口红，正片叠底，女 0.7 / 男 0.1）', '#10 唇面高光（唇部高光，正片叠底，女 0.3 / 男 0）', '#11 面具3（唇部高光，正片叠底，女 0.3 / 男 0）'],
+    唇: ['#9 唇部妆容（口红，正片叠底，女 0.7 / 男 0.1）', '#10 唇面高光（唇部高光，正片叠底，女 0.3 / 男 0）', '#11 面具3（唇部高光，滤色，女 0.3 / 男 0）'],
     点缀: ['#22 面具5（点缀，正片叠底，女 0.4 / 男 0）'],
     其他: ['#13 新区域（FACEU_NEW/9，正片叠底，女 0.5 / 男 0.5）', '#23 面具6（全脸其他，正片叠底，女 0.4 / 男 0）'],
   });
@@ -289,6 +310,53 @@ test('makeupLayers fails rather than reporting a look as bare when the editor da
   const dir = makeupProject();
   fs.writeFileSync(path.join(dir, 'Assets', 'main.scene.extra'), '[]');
   assert.throws(() => makeupLayers(dir), /MAKEUP_EDITOR_DATA_MISSING: 25 个妆容组件.*#2 面具1/);
+});
+
+// Layers of projects saved by older editors (FaceMaskDY) and opaque textures from published works.
+const OLD_LOOK = [
+  ['美妆', null],
+  ['面部_腮红', { dy: true, type: 'FACEU_MASK', region: 0, tex: 'cheeks', intensity: 0.7, female: 0.6, male: 0.3, tint: [1, 0.1, 0.9, 1] }, { parent: '美妆' }],
+  ['唇部妆容', { dy: true, type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'red', intensity: 1, female: 1, male: 0, surface: [13, 0.61] }, { parent: '美妆' }],
+  ['圆眼', { dy: true, type: 'FACEU_EYEPART', region: 1, tex: '圆眼 - 副本', intensity: 0.8, female: 0.8, male: 0.3 }, { parent: '美妆' }],
+  ['面具', { type: 'FACEU_MASK', region: 0, tex: 'whiteNose', female: 0.4, male: 0.4 }, { parent: '美妆' }],
+  ['面具2', { type: 'FACEU_MASK', region: 0, tex: 'blank', female: 0.4, male: 0.4 }, { parent: '美妆' }],
+  ['旧美瞳', { eye: true, old: true, tex: 'iris', intensity: 0.3, blend: 0, faces: [0] }],
+];
+
+test('makeupLayers reads the older FaceMaskDY layers, by the female and male opacity they render with, and the lips gloss blend', () => {
+  const out = makeupLayers(makeupProject(OLD_LOOK));
+  const l = byName(out);
+  const blush = l['面部_腮红'];
+  assert.deepEqual(
+    [blush.component, blush.region, blush.part, blush.blend, blush.female, blush.male, blush.opacity, blush.tint, blush.external, blush.intensity, blush.active],
+    ['FaceMaskDY', '全脸', '腮红', '正片叠底', 0.6, 0.3, { female: 0.6, male: 0.3 }, '#FF1AE6', undefined, 0.7, true],
+  );
+  assert.deepEqual([l['唇部妆容'].region, l['唇部妆容'].part, l['唇部妆容'].surface], ['唇部', '口红', { blend: '线性减淡', intensity: 0.61 }]);
+  assert.deepEqual([l['圆眼'].region, l['圆眼'].part], ['眼部', '眼线']);
+  assert.deepEqual([l['旧美瞳'].texture, l['旧美瞳'].color, l['旧美瞳'].faces], ['tex/iris.png', '#5A4632', [0]], 'an older EyeColor\'s texture and faces');
+  assert.deepEqual(out.groups.颊, ['#2 面部_腮红（腮红，正片叠底，女 0.6 / 男 0.3）']);
+  assert.ok(!out.absent.includes('唇') && !out.absent.includes('眼妆'), 'the old layers count');
+});
+
+test('makeupLayers reads an opaque texture by how far its pixels are from the colour the blend mode leaves unchanged', () => {
+  const l = byName(makeupLayers(makeupProject(OLD_LOOK)));
+  assert.deepEqual([l['面具'].color, l['面具'].part, l['面具'].part_from], ['#967864', '鼻部', '贴图']);
+  assert.match(l['面具'].texture_note, /^贴图不透明，颜色和范围按每个像素离白色多远（正片叠底下它不改变皮肤）算$/);
+  assert.deepEqual([l['面具2'].part, l['面具2'].color], [null, undefined]);
+  assert.equal(l['面具2'].texture_note, '贴图不透明、几乎全是白色，在正片叠底下几乎不改变皮肤');
+  const dir = tmpdir('xs-tex-');
+  const file = path.join(dir, 'a.png');
+  fs.writeFileSync(file, TEXTURES.whiteNose[1]);
+  assert.deepEqual(textureStats(file, { blendMode: 1 }), { color: '#967864', hsl: [24, 20, 49], coverage: 0.01, cx: 0.495, cy: 0.495, width: 0.08, height: 0.2, opaque: true });
+  assert.equal(textureStats(file, { blendMode: 0 }).width, 1, 'under 普通 the white is paint too');
+});
+
+test('makeupLayers tells whether a texture came from an official package or a file the author imported', () => {
+  const l = byName(makeupLayers(makeupProject(OLD_LOOK)));
+  assert.deepEqual(l['面部_腮红'].texture_source, { from: '官方素材包', package_id: '7389989461582692415' });
+  assert.deepEqual(l['面具'].texture_source, { from: '作者导入', file: '鼻影.png' });
+  assert.deepEqual(l['圆眼'].texture_source, { from: '作者导入', file: '圆眼.png', copy: true });
+  assert.deepEqual(l['唇部妆容'].texture_source, { from: '未知' });
 });
 
 test('makeup_layers tool reads a project folder, saves on request and fails on a folder without a scene', async () => {
