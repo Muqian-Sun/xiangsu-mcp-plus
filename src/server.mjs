@@ -13,7 +13,7 @@ import QRCode from 'qrcode';
 import { PNG } from 'pngjs';
 import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
-import { OfficialMcp } from './official.mjs';
+import { OfficialMcp, OfficialUnreachable } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
@@ -1979,7 +1979,8 @@ export function createServer(deps = {}) {
       return await d.official.callTool(name, args);
     } catch (e) {
       if (e instanceof McpError) return failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`);
-      return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);
+      if (e instanceof OfficialUnreachable) return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);
+      return failure(`OFFICIAL_MCP_DISCONNECTED(${name}): ${e.message}；调用发出后连接断了，编辑器里可能已经执行（生成类调用可能已扣额度），没有自动重发：先确认结果（如 get_scene、生成任务的状态）再决定要不要重新调用`);
     }
   };
 

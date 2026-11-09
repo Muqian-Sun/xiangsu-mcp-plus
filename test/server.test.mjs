@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../src/server.mjs';
+import { OfficialUnreachable } from '../src/official.mjs';
 import { fetchImage, readImageFile } from '../src/images.mjs';
 import { MediaRefs } from '../src/outputs.mjs';
 
@@ -152,11 +153,15 @@ test('official tools are proxied unchanged, images included', async () => {
 });
 
 test('official failures are reported as tool errors with their cause', async () => {
-  const down = fakeOfficial({ call: () => Promise.reject(Error('ECONNREFUSED')) });
+  const down = fakeOfficial({ call: () => Promise.reject(new OfficialUnreachable('fetch failed (ECONNREFUSED)')) });
   const { client } = await connect({ official: down, callPlugin: async () => ({}) });
   const res = await client.callTool({ name: 'get_scene', arguments: {} });
   assert.equal(res.isError, true);
-  assert.match(res.content[0].text, /OFFICIAL_MCP_UNAVAILABLE\(get_scene\): ECONNREFUSED/);
+  assert.match(res.content[0].text, /OFFICIAL_MCP_UNAVAILABLE\(get_scene\): fetch failed \(ECONNREFUSED\)；确认像塑已启动/);
+  const dropped = fakeOfficial({ call: () => Promise.reject(new TypeError('fetch failed (UND_ERR_SOCKET)')) });
+  const c3 = (await connect({ official: dropped, callPlugin: async () => ({}) })).client;
+  const res3 = await c3.callTool({ name: 'generate_image', arguments: {} });
+  assert.match(res3.content[0].text, /OFFICIAL_MCP_DISCONNECTED\(generate_image\): fetch failed \(UND_ERR_SOCKET\)；.*可能已经执行.*没有自动重发/);
   const bad = fakeOfficial({ call: () => Promise.reject(new McpError(-32602, 'Invalid arguments')) });
   const c2 = (await connect({ official: bad, callPlugin: async () => ({}) })).client;
   const res2 = await c2.callTool({ name: 'get_scene', arguments: {} });
@@ -426,7 +431,7 @@ test('a call that asked for progress gets beats while it runs, and every call is
   assert.ok(entries[0].progress >= 3);
   await client.callTool({ name: 'get_scene', arguments: {} });
   assert.equal(entries[1].progress, 'none', 'no beats without a progress token');
-  const down = await connect({ official: fakeOfficial({ call: () => Promise.reject(Error('ECONNREFUSED')) }), callPlugin: async () => ({}), callLog });
+  const down = await connect({ official: fakeOfficial({ call: () => Promise.reject(new OfficialUnreachable('ECONNREFUSED')) }), callPlugin: async () => ({}), callLog });
   await down.client.callTool({ name: 'get_scene', arguments: {} });
   assert.match(entries[2].result.content[0].text, /OFFICIAL_MCP_UNAVAILABLE/);
 });

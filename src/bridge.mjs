@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { longFetch } from './longfetch.mjs';
 
 const INSTANCE_DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), 'instances');
 
@@ -43,7 +44,7 @@ export function listInstances() {
 }
 
 async function post(instance, method, params, timeoutMs) {
-  const res = await fetch(`http://127.0.0.1:${instance.port}/rpc`, {
+  const res = await longFetch(`http://127.0.0.1:${instance.port}/rpc`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${instance.token}` },
     body: JSON.stringify({ method, params }),

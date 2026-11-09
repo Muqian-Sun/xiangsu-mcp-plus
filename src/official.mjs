@@ -3,14 +3,21 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { longFetch } from './longfetch.mjs';
 
 export const OFFICIAL_URL = process.env.XIANGSU_MCP_URL ?? 'http://127.0.0.1:17320/mcp';
 // Generation tools (images, audio, workflows) can run for minutes.
 const CALL_TIMEOUT_MS = 15 * 60 * 1000;
 
+// The call never reached an editor (none was listening), so nothing ran and it can simply be made again.
+export class OfficialUnreachable extends Error {}
+
+const refused = (e) => e?.cause?.code === 'ECONNREFUSED';
+const describe = (e) => `${e?.message ?? e}${e?.cause?.code ? ` (${e.cause.code})` : ''}`;
+
 async function defaultConnect(url) {
   const client = new Client({ name: 'xiangsu-mcp-ext', version: '0.3.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { fetch: longFetch }));
   return client;
 }
 
@@ -67,17 +74,25 @@ export class OfficialMcp {
     return this.tools;
   }
 
-  // Protocol-level errors (bad arguments, unknown tool) are the official server's answer and are not
-  // retried; transport failures (editor restarted, session expired) reconnect once and retry.
+  // Protocol-level errors (bad arguments, unknown tool, timeout) are the official server's answer.
+  // Nothing is sent twice: the official server answers each call with one plain JSON response when it
+  // is done (no session, no stream), so a connection lost after sending may leave the call running in
+  // the editor (a generation that charges the account). A transport failure only drops the client, and
+  // the next call connects afresh.
   async callTool(name, args) {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const client = await this.connect();
-        return await client.callTool({ name, arguments: args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS, resetTimeoutOnProgress: true });
-      } catch (e) {
-        if (e instanceof McpError || attempt >= 1) throw e;
-        this.reset();
-      }
+    let client;
+    try {
+      client = await this.connect();
+    } catch (e) {
+      throw new OfficialUnreachable(describe(e), { cause: e });
+    }
+    try {
+      return await client.callTool({ name, arguments: args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS, resetTimeoutOnProgress: true });
+    } catch (e) {
+      if (e instanceof McpError) throw e;
+      this.reset();
+      if (refused(e)) throw new OfficialUnreachable(describe(e), { cause: e });
+      throw e;
     }
   }
 

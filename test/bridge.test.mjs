@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import http from 'node:http';
 import { tmpdir } from './tmp.mjs';
-import { listInstances, resolveInstance, BRIDGE_TIMING } from '../src/bridge.mjs';
+import { callPlugin, listInstances, resolveInstance, BRIDGE_TIMING } from '../src/bridge.mjs';
 
 const DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE, 'instances');
 const PROCESS_START = Date.now() - process.uptime() * 1000;
@@ -90,6 +90,20 @@ test('a project in no window fails with the windows that did not answer', async 
   const err = await resolveInstance({ projectPath: tmpdir('xs-none-') }).catch((e) => e);
   assert.match(err.message, new RegExp(`NO_UNIQUE_PLUGIN_INSTANCE for .*: 0 matches; windows that did not answer: ${hung.pid} \\(`));
   assert.ok(!err.message.includes(String(stale.pid)), 'a window showing a deleted project did answer');
+});
+
+// The built-in fetch gives up on headers after 300 s whatever the signal allows (measured at 301 s), so
+// plugin calls that wait longer (effect checks, downloads, AR video) must not go through it.
+test('plugin calls do not go through the built-in fetch', async () => {
+  const target = tmpdir('xs-proj-');
+  writeRecords([await window(target)]);
+  const builtin = globalThis.fetch;
+  globalThis.fetch = () => Promise.reject(Error('built-in fetch used'));
+  try {
+    assert.deepEqual(await callPlugin('status', {}, { projectPath: target }), { projectPath: target });
+  } finally {
+    globalThis.fetch = builtin;
+  }
 });
 
 test('a window that no longer shows the project it was last seen with sends the lookup to every window', async () => {
