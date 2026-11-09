@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.mjs';
 
 const require = createRequire(import.meta.url);
-const { Library, M, INNOVATION_KINDS, RANK_FILTERS, SUBJECT_KINDS } = require('../editor-plugin/library.cjs');
+const { Library, M, INNOVATION_KINDS, RANK_FILTERS, SUBJECT_KINDS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX } = require('../editor-plugin/library.cjs');
 
 const ok = (data) => JSON.stringify({ code: 0, message: 'success', data });
 
@@ -1187,6 +1187,9 @@ test('server kind and rank filter enums match the plugin tables', async () => {
   assert.deepEqual(props('rank_innovation').kind.enum, INNOVATION_KINDS);
   for (const key of Object.keys(RANK_FILTERS)) assert.deepEqual(props('rank_list')[key].items.enum, Object.keys(RANK_FILTERS[key].options), key);
   assert.deepEqual(props('rank_subjects').kind.enum, Object.keys(SUBJECT_KINDS));
+  assert.deepEqual(props('my_effect_stats').trend.enum, Object.keys(TREND_CYCLES));
+  assert.deepEqual(props('messages_list').group.enum, Object.keys(MESSAGE_GROUPS));
+  assert.equal(props('messages_list').count.maximum, MESSAGE_MAX);
 });
 
 test('growth_route reads the mobile app 成长之路 with each level, goal and state', async () => {
@@ -1217,4 +1220,318 @@ test('growth_route reads the mobile app 成长之路 with each level, goal and s
   assert.deepEqual(to('/cam_api/designer/v6/growth_route')[0].query, { app_version: '17.7.0' });
   const empty = setup({ 'GET /cam_api/designer/v6/growth_route': ok(null) });
   await assert.rejects(empty.lib.growthRoute(), /NO_GROWTH_ROUTE/);
+});
+
+// Trimmed from the 作品详情 answers for 「S16冠军」 (2026-11-09).
+const EFFECT_BASE = {
+  effect: { effect_id: 92012413, name: 'S16冠军', icon: 'https://cdn/s16.png', submit_at: 1794059970000, artwork_type: 0, artwork_type_desc: '特效', item_id: 7705653639092570147 },
+  designer: { uid: 1805811249320653, nickname: '沐谦', ly: 2, ly_name: '新手特效师' },
+  dy_app_effect: { app_id: 184, app_effect_id: '285940787', level: 0, online_status: 103, online_status_desc: '已上线抖音', peak_pub: '0', total_pub: '3', online_at: 1794061758000 },
+  other_app_effects: [{ app_id: 1164, app_effect_id: '285955413', level: 0, online_status: 114, online_status_desc: '已上线抖音极速版', peak_pub: '0', total_pub: '0', online_at: 1794061760000 }],
+  project: { fn_type: ['2D人脸形变'], fn_types: [{ name: '2D人脸形变', key: 'FaceDistortion2D' }, { name: '音频播放', key: 'AudioPlayer' }] },
+  tags: [{ tag_type: 4, text: '像塑探索版' }],
+};
+const EFFECT_ONLINE = {
+  display_list: [
+    { type: 1, display_type: '累计曝光', val: 77, display_val: '77' },
+    { type: 5, display_type: '特效类型', val: 5167, display_val: '玩法测试' },
+    { type: 8, display_type: '年轻喜爱度', val: 10, display_val: '10分' },
+  ],
+};
+const EFFECT_PUB_STAT = {
+  is_new_inc: true,
+  is_overtime: false,
+  cur_lv: 0,
+  cur_pub: '3',
+  next_lv: 29,
+  next_lv_need_pub: '297',
+  pub_stat: [
+    { date: '20261107', pub_val: 3, pub_val_display: '3' },
+    { date: '20261106', pub_val: 3, pub_val_display: '3' },
+    { date: '20261105', pub_val: 1, pub_val_display: '1' },
+  ],
+  show_stat: [
+    { date: '20261106', pub_val: 40, pub_val_display: '40' },
+    { date: '20261107', pub_val: 64, pub_val_display: '64' },
+    { date: '20261108', pub_val: 77, pub_val_display: '77' },
+  ],
+  total_show: '77',
+  total_trial: '5',
+  follow_shoot_pub: '0',
+  video_plays: '23',
+};
+const EFFECT_REVENUE = {
+  revenue_details: [
+    { type: 0, display_type: '总收益', amount: '0', unlocked: true, weight_flag: 0, weight_amount: '0' },
+    { type: 4, display_type: '精选奖', amount: '0', detail_text: '不符合精选标准', unlocked: false, weight_flag: 0 },
+  ],
+};
+const noData = JSON.stringify({ code: 0, message: 'success' });
+const EFFECT_ROUTES = {
+  'GET /cam_api/effect/v1/base': ok(EFFECT_BASE),
+  'GET /cam_api/effect/v1/online_data': ok(EFFECT_ONLINE),
+  'GET /effectcam/v1/effect_pub_stat': ok(EFFECT_PUB_STAT),
+  'GET /cam_api/effect/v1/revenue': ok(EFFECT_REVENUE),
+  'GET /cam_api/effect/v1/effect_traffic': ok({ traffic_status: 2, details: [{ tag: { type: 0, name: '流量正常' }, vv_real: '', schema: '' }] }),
+  'GET /effectcam/v1/effect_vv': ok({ vv_num: '43' }),
+  'GET /cam_api/effect/v1/related_info': ok({ details: [{ id: '107846', name: '扮演AR新玩法共创赛', type: 1, related_status: 2, type_desc: '绑定任务' }] }),
+  'GET /cam_api/effect/v1/tips': noData,
+  'GET /cam_api/effect/v1/scarce_category': noData,
+};
+
+test('my_effect_stats reads every 作品详情 card with the 抖音 app id and the trend window', async () => {
+  const { lib, to } = setup(EFFECT_ROUTES);
+  assert.deepEqual(await lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787' }), {
+    effect_id: '92012413',
+    app_effect_id: '285940787',
+    name: 'S16冠军',
+    type: '特效',
+    submitted_at: new Date(1794059970000).toISOString(),
+    icon_url: 'https://cdn/s16.png',
+    apps: [
+      { app_id: 184, app_effect_id: '285940787', status: 103, status_text: '已上线抖音', online_at: new Date(1794061758000).toISOString(), level_code: 0, publish_peak: '0', publish_total: '3' },
+      { app_id: 1164, app_effect_id: '285955413', status: 114, status_text: '已上线抖音极速版', online_at: new Date(1794061760000).toISOString(), level_code: 0, publish_peak: '0', publish_total: '0' },
+    ],
+    functions: ['2D人脸形变', '音频播放'],
+    tags: ['像塑探索版'],
+    figures: [
+      { name: '累计曝光', value: 77, text: '77' },
+      { name: '特效类型', value: 5167, text: '玩法测试' },
+      { name: '年轻喜爱度', value: 10, text: '10分' },
+    ],
+    level: { code: 0, publish: '3', next_code: 29, publish_to_next: '297', is_new: true, overtime: false },
+    trend: {
+      window: 'recent',
+      days: [
+        { date: '2026-11-05', exposure: null, publish: 1 },
+        { date: '2026-11-06', exposure: 40, publish: 3 },
+        { date: '2026-11-07', exposure: 64, publish: 3 },
+        { date: '2026-11-08', exposure: 77, publish: null },
+      ],
+      exposure_total: '77',
+      trial_total: '5',
+      follow_shoot: '0',
+      video_plays: '23',
+    },
+    traffic: { status: 2, tags: ['流量正常'] },
+    views: '43',
+    revenue: [
+      { name: '总收益', amount: '0', note: null, unlocked: true },
+      { name: '精选奖', amount: '0', note: '不符合精选标准', unlocked: false },
+    ],
+    related: [{ type: '绑定任务', id: '107846', name: '扮演AR新玩法共创赛', status: 2 }],
+  });
+  const keyed = { effect_id: '92012413', app_effect_id: '285940787', app_id: '184' };
+  for (const p of ['/cam_api/effect/v1/base', '/cam_api/effect/v1/online_data', '/cam_api/effect/v1/revenue', '/cam_api/effect/v1/related_info', '/cam_api/effect/v1/tips', '/cam_api/effect/v1/scarce_category']) {
+    assert.deepEqual(to(p)[0].query, keyed, p);
+  }
+  assert.deepEqual(to('/effectcam/v1/effect_pub_stat')[0].query, { ...keyed, cycle: '1' });
+  assert.deepEqual(to('/cam_api/effect/v1/effect_traffic')[0].query, { effect_id: '92012413', app_effect_id: '285940787' });
+  assert.deepEqual(to('/effectcam/v1/effect_vv')[0].query, { app_effect_id: '285940787', app_id: '184' });
+
+  await lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' });
+  assert.equal(to('/effectcam/v1/effect_pub_stat')[1].query.cycle, '2');
+
+  // Cards that answer without data leave their fields empty; tips and scarce_category with data stay unread.
+  const bare = setup({
+    ...EFFECT_ROUTES,
+    'GET /cam_api/effect/v1/online_data': noData,
+    'GET /effectcam/v1/effect_pub_stat': noData,
+    'GET /cam_api/effect/v1/scarce_category': ok({ category: '萌宠' }),
+  });
+  const thin = await bare.lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787' });
+  assert.deepEqual(thin.figures, []);
+  assert.deepEqual(thin.level, { code: null, publish: null, next_code: null, publish_to_next: null, is_new: null, overtime: null });
+  assert.deepEqual(thin.trend.days, []);
+  assert.deepEqual(thin.unread, { scarce_category: { category: '萌宠' } });
+
+  const wrong = setup({ ...EFFECT_ROUTES, 'GET /effectcam/v1/effect_vv': JSON.stringify({ code: 1004, message: '无法查询' }) });
+  await assert.rejects(wrong.lib.myEffectStats({ effect_id: '92012413', app_effect_id: '1' }), /GET_EFFECT_VV_FAILED: code=1004 message=无法查询/);
+  await assert.rejects(lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }), /INVALID_TREND: 7d; valid: recent, since_online/);
+  await assert.rejects(lib.myEffectStats({ effect_id: '92012413' }), /INVALID_APP_EFFECT_ID/);
+  await assert.rejects(lib.myEffectStats({ app_effect_id: '285940787' }), /INVALID_EFFECT_ID/);
+});
+
+test('my_overview reads the 我的 page figures, the month data it can name and the wallet revenue', async () => {
+  const routes = {
+    'GET /cam_api/designer/v1/base': ok({
+      designer: { uid: 1805811249320653, username: '沐谦', gender: 1, is_real_name: false, fans_num: 207 },
+      identity_list: [
+        { name: '特效作者', identity_type: 1, lv: 2, lv_name: '新手特效师' },
+        { name: '模板作者', identity_type: 2, lv: 2, lv_name: '新手模板师' },
+      ],
+    }),
+    'GET /cam_api/designer/v1/data': ok({
+      display_list: [
+        { type: 4, display_type: '本月上线', val: 16, display_val: '16' },
+        { type: 5, display_type: '本月收入', val: 5100, display_val: '51.00' },
+      ],
+    }),
+    'GET /effectcam/v1/month_data': ok({ date: '20261109', revenue: '51.00', pd_revenue: '10.00', on_amount: '16', panel_amount: '14', all_pub: '4', all_rev: '51.00' }),
+    'GET /effectcam/v1/account_revenue': ok({
+      partner_play_incentive: '0.00',
+      a_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', i: { uri: 'x' }, re: '51.00' }] },
+      m_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', re: '51.00' }], re_m: '202611' },
+      m_d_res: [
+        { d: '20261108', w_day: 7, re: '10.00' },
+        { d: '20261106', w_day: 5, re: '41.00' },
+      ],
+    }),
+  };
+  const { lib, to } = setup(routes);
+  assert.deepEqual(await lib.myOverview(), {
+    uid: '1805811249320653',
+    nickname: '沐谦',
+    fans: 207,
+    real_name: false,
+    identities: [
+      { name: '特效作者', level: 2, level_name: '新手特效师' },
+      { name: '模板作者', level: 2, level_name: '新手模板师' },
+    ],
+    figures: [
+      { name: '本月上线', value: 16, text: '16' },
+      { name: '本月收入', value: 5100, text: '51.00' },
+    ],
+    month: { date: '2026-11-09', online_count: '16', revenue_yuan: 51, previous_day_revenue_yuan: 10, revenue_total_yuan: 51, unread: { panel_amount: '14', all_pub: '4' } },
+    revenue: {
+      total_yuan: 51,
+      sources_total: [{ name: '投稿收益', share: '100%', yuan: 51 }],
+      month: '202611',
+      month_yuan: 51,
+      sources_month: [{ name: '投稿收益', share: '100%', yuan: 51 }],
+      days: [
+        { date: '2026-11-08', yuan: 10 },
+        { date: '2026-11-06', yuan: 41 },
+      ],
+      partner_play_incentive_yuan: 0,
+    },
+  });
+  assert.deepEqual(to('/effectcam/v1/account_revenue')[0].query, {});
+  await lib.myOverview({ month: '202610' });
+  assert.deepEqual(to('/effectcam/v1/account_revenue')[1].query, { d_m: '202610' });
+  await assert.rejects(lib.myOverview({ month: '2026-10' }), /INVALID_MONTH: 2026-10; expected YYYYMM/);
+});
+
+test('messages_list pages the 消息 page by the last message id and names each message group and effect', async () => {
+  const msg = (id, group, title, page, extra = {}) => ({ id, group, title, content: `${title}正文`, is_ack: true, time: 1794198270000, page, status_code: 0, status_text: '', ...extra });
+  const pages = {
+    '': {
+      has_more: true,
+      messages: [
+        msg('414984848', '2', 'AI 抽到SSR的我', 'https://effect.douyin.com/m/detail?id=92336836&showReviewList=1', { is_ack: false, status_code: 100, status_text: '审核中' }),
+        msg('414978447', '1', '获奖公布｜开学季热爆答题测试征集赛', 'https://effect.douyin.com/content/46hw70th/41y6q3nf?'),
+      ],
+    },
+    414978447: { has_more: false, messages: [msg('414970000', '9', '新分组', '')] },
+  };
+  const { lib, to } = setup({ 'GET /cam_api/message/v1/list': (call) => ok(pages[call.query.cursor]) });
+  const first = await lib.messagesList({ count: 2 });
+  assert.deepEqual(first, {
+    group: 'all',
+    items: [
+      { message_id: '414984848', group: '官方', title: 'AI 抽到SSR的我', content: 'AI 抽到SSR的我正文', at: new Date(1794198270000).toISOString(), read: false, status: 100, status_text: '审核中', effect_id: '92336836', link: 'https://effect.douyin.com/m/detail?id=92336836&showReviewList=1' },
+      { message_id: '414978447', group: '服务', title: '获奖公布｜开学季热爆答题测试征集赛', content: '获奖公布｜开学季热爆答题测试征集赛正文', at: new Date(1794198270000).toISOString(), read: true, status: null, status_text: null, effect_id: null, link: 'https://effect.douyin.com/content/46hw70th/41y6q3nf?' },
+    ],
+    next_cursor: '414978447',
+    has_more: true,
+  });
+  assert.deepEqual(to('/cam_api/message/v1/list')[0].query, { group: '0', cursor: '', count: '2' });
+  const last = await lib.messagesList({ group: 'service', cursor: first.next_cursor });
+  assert.deepEqual(to('/cam_api/message/v1/list')[1].query, { group: '1', cursor: '414978447', count: '20' });
+  assert.equal(last.items[0].group, '9');
+  assert.equal(last.items[0].link, null);
+  assert.equal(last.next_cursor, null);
+  assert.equal(last.has_more, false);
+  await assert.rejects(lib.messagesList({ group: 'system' }), /INVALID_GROUP: system; valid: all, service, official/);
+});
+
+test('my_task_status reads 我的作品 of every received task, in order, and counts the 评定', async () => {
+  const effects = {
+    108200: [
+      { effect_name: '跟着小猫做动作', effect_id: '92218559', effect_status: 103, effect_status_desc: '已上线', shoot_num: '3', vv_num: '12', pub_peak_num: '1', task_status: 2, is_fit_theme: 2, type_desc: '特效' },
+      { effect_name: '我和codex三天', effect_id: '92149570', effect_status: 103, effect_status_desc: '已上线', task_status: 3, is_fit_theme: 3, icon: { url_list: ['https://cdn/c.png'] } },
+    ],
+    108300: [],
+    108400: [
+      { effect_name: '资产稳定在A2', effect_id: '92258959', effect_status: 103, task_status: 1, is_fit_theme: 1 },
+      { effect_name: '把手握紧什么都没有', effect_id: '92146750', effect_status: 103, task_status: 3, is_fit_theme: 3 },
+    ],
+  };
+  const tasks = {
+    effect_tasks: [
+      EFFECT_TASKS.effect_tasks[0],
+      { ...EFFECT_TASKS.effect_tasks[1], title: '扮演AR新玩法共创赛' },
+      { title: '空任务', designer_task_id: '556', item_id: 108300, task_id: 108301 },
+      { title: '热梗语录', designer_task_id: '557', item_id: 108400 },
+    ],
+  };
+  const { lib, to } = setup({
+    'GET /creator_api/task/v1/effect_task_list': ok(tasks),
+    'GET /effectcam/v2/effect_task_detail': (call) => ok({ task_effect_list: effects[call.query.item_id] }),
+  });
+  const out = await lib.myTaskStatus();
+  assert.deepEqual(
+    to('/effectcam/v2/effect_task_detail').map((c) => c.query),
+    ['108200', '108300', '108400'].map((item_id) => ({ item_id, app_version: '11.3.0' })),
+  );
+  assert.equal(out.tasks_checked, 3);
+  assert.deepEqual(out.summary, { by_state: { unfinished: 1, done: 2, pending: 1 }, off_theme: 1 });
+  assert.deepEqual(
+    out.items.map((i) => [i.task_id, i.task_title, i.name, i.task_state, i.off_theme]),
+    [
+      ['108201', '扮演AR新玩法共创赛', '跟着小猫做动作', 'unfinished', true],
+      ['108201', '扮演AR新玩法共创赛', '我和codex三天', 'done', false],
+      ['108400', '热梗语录', '资产稳定在A2', 'pending', false],
+      ['108400', '热梗语录', '把手握紧什么都没有', 'done', false],
+    ],
+  );
+  assert.deepEqual(out.items[0], {
+    task_id: '108201',
+    task_title: '扮演AR新玩法共创赛',
+    effect_id: '92218559',
+    name: '跟着小猫做动作',
+    type: '特效',
+    status: '已上线',
+    status_code: 103,
+    task_state: 'unfinished',
+    off_theme: true,
+    track: null,
+    shoots: '3',
+    views: '12',
+    publish_peak: '1',
+    award_amount: null,
+    icon_url: null,
+  });
+  assert.equal(out.items[1].icon_url, 'https://cdn/c.png');
+});
+
+test('the creator data tools go to the lowest-pid window and check their arguments', async () => {
+  const seen = [];
+  const client = await connect({
+    listInstances: () => [{ pid: 300 }, { pid: 200 }],
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), method === 'my_effect_stats' ? { icon_url: 'https://cdn/s16.png' } : { method }),
+  });
+  const call = (name, args) => client.callTool({ name, arguments: args });
+  assert.deepEqual(JSON.parse((await call('my_effect_stats', { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' })).content[0].text), { icon_ref: 'img:1' });
+  await call('my_overview', { month: '202610' });
+  await call('messages_list', { group: 'official', cursor: '414978447', count: 50 });
+  await call('my_task_status', {});
+  assert.deepEqual(seen, [
+    { method: 'my_effect_stats', params: { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' }, opts: { pid: 200 } },
+    { method: 'my_overview', params: { month: '202610' }, opts: { pid: 200 } },
+    { method: 'messages_list', params: { group: 'official', cursor: '414978447', count: 50 }, opts: { pid: 200 } },
+    { method: 'my_task_status', params: {}, opts: { pid: 200 } },
+  ]);
+  for (const [name, args] of [
+    ['my_effect_stats', { effect_id: '92012413' }],
+    ['my_effect_stats', { effect_id: '92012413', app_effect_id: 'x' }],
+    ['my_effect_stats', { effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }],
+    ['my_overview', { month: '2026-10' }],
+    ['messages_list', { group: 'system' }],
+    ['messages_list', { count: 51 }],
+    ['messages_list', { cursor: 'abc' }],
+  ]) {
+    assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
+  }
+  assert.equal(seen.length, 4);
 });
