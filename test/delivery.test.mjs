@@ -360,15 +360,18 @@ test('submitChecks exports with the submit flow options', async () => {
   assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } });
 });
 
-test('music lists a category or a search and applies a track with a clip range', async () => {
+test('music lists a category, searches, and applies a track with a clip range', async () => {
   const { lib, calls } = setup();
   assert.deepEqual(await lib.musicCategories(), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
   const cat = await lib.musicList({ category_code: 'ugc_recommend' });
   assert.deepEqual(cat.items[0], { music_id: '7', title: 'ugc_recommend曲', author: 'A', duration_sec: 30, cover_url: 'https://c', preview_url: 'https://f', has_copyright: true });
-  const found = await lib.musicList({ query: ' 晴天 ' });
+  const found = await lib.musicSearch({ query: ' 晴天 ' });
   assert.equal(found.query, '晴天');
   assert.deepEqual(found.items.map((m) => m.music_id), ['8']);
   await assert.rejects(lib.musicList({}), /INVALID_CATEGORY/);
+  await assert.rejects(lib.musicList({ query: '晴天' }), /INVALID_CATEGORY/);
+  await assert.rejects(lib.musicSearch({ query: '  ' }), /INVALID_QUERY/);
+  await assert.rejects(lib.musicSearch({}), /INVALID_QUERY/);
   const out = await lib.musicApply({ item: cat.raw[0], category_code: 'ugc_recommend' });
   assert.deepEqual(out, { music_id: '7', title: 'ugc_recommend曲', start_sec: 0, end_sec: 30 });
   assert.deepEqual([calls.applied[0][0].startTime, calls.applied[0][0].endTime, calls.applied[0][1]], [0, 30, 'ugc_recommend']);
@@ -604,26 +607,39 @@ test('task_bind needs a received task from tasks_list and reopens the project wi
   assert.deepEqual(launch[1], { operation: 'openLocal', path: proj, activity: { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } });
 });
 
-test('music_list lists categories without arguments, takes at most one of query and category, and music_apply sends the raw track with its category', async () => {
+test('music_categories, music_list and music_search each do one thing, and music_apply sends the raw track with its category', async () => {
   const seen = [];
   const client = await connect({
     callPlugin: async (method, params) => {
       seen.push([method, params]);
       if (method === 'music_list') return { category_code: params.category_code, items: [{ music_id: '7', title: 't' }], raw: [{ id: 7, duration: 30 }] };
+      if (method === 'music_search') return { query: params.query, items: [{ music_id: '8', title: 's' }], raw: [{ id: 8, duration: 20 }] };
       if (method === 'music_categories') return { categories: [{ code: 'ugc_recommend', name: '推荐' }] };
       return { ok: true };
     },
   });
-  const both = await client.callTool({ name: 'music_list', arguments: { query: 'a', category_code: 'b' } });
-  assert.match(both.content[0].text, /pass query or category_code, not both/);
+  for (const [name, args] of [
+    ['music_list', {}],
+    ['music_list', { query: 'a', category_code: 'b' }],
+    ['music_search', {}],
+    ['music_search', { query: 'a', category_code: 'b' }],
+    ['music_categories', { query: 'a' }],
+  ]) {
+    assert.equal((await client.callTool({ name, arguments: args })).isError, true, `${name} ${JSON.stringify(args)}`);
+  }
   assert.equal(seen.length, 0);
-  const none = await client.callTool({ name: 'music_list', arguments: {} });
+  const none = await client.callTool({ name: 'music_categories', arguments: {} });
   assert.deepEqual(json(none), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
   assert.deepEqual(seen.at(-1), ['music_categories', {}]);
   const unseen = await client.callTool({ name: 'music_apply', arguments: { music_id: '7' } });
   assert.match(unseen.content[0].text, /UNKNOWN_MUSIC: 7/);
   const list = json(await client.callTool({ name: 'music_list', arguments: { category_code: 'ugc_recommend' } }));
   assert.equal(list.raw, undefined);
+  assert.deepEqual(seen.at(-1), ['music_list', { category_code: 'ugc_recommend' }]);
   await client.callTool({ name: 'music_apply', arguments: { music_id: '7', start_sec: 2 } });
   assert.deepEqual(seen.at(-1), ['music_apply', { item: { id: 7, duration: 30 }, category_code: 'ugc_recommend', start_sec: 2 }]);
+  await client.callTool({ name: 'music_search', arguments: { query: '晴天' } });
+  assert.deepEqual(seen.at(-1), ['music_search', { query: '晴天' }]);
+  await client.callTool({ name: 'music_apply', arguments: { music_id: '8' } });
+  assert.deepEqual(seen.at(-1), ['music_apply', { item: { id: 8, duration: 20 } }]);
 });

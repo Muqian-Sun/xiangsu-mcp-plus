@@ -41,25 +41,29 @@ const methods = {
     return { categories: (cats || []).map((c) => ({ code: c.codeCategory, name: c.name })) };
   },
 
-  async musicList({ category_code, query }) {
+  async musicList({ category_code } = {}) {
     this.ensureCompatible('music');
+    if (typeof category_code !== 'string' || !category_code) throw Error('INVALID_CATEGORY: pass category_code from music_categories');
     const categories = new (this.mod(M.musicCategory).MusicCategoryModel)();
     const list = new (this.mod(M.musicList).MusicListModel)(categories);
     list.requestTimestamp = String(Date.now());
-    if (query !== undefined) {
-      if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
-      return { query: query.trim(), ...page(await withTimeout(list.getNextSearchMusicListForDouyin(query.trim()), 'search')) };
-    }
-    if (typeof category_code !== 'string' || !category_code) throw Error('INVALID_CATEGORY: pass category_code from music_list called without arguments, or query');
     categories.setSelectedCategory({ codeCategory: category_code });
     return { category_code, ...page(await withTimeout(list.getNextMusicListForDouyin(), 'list')) };
   },
 
-  // `item` is a raw track from music_list. The library only applies a track with a clip range set;
+  async musicSearch({ query } = {}) {
+    this.ensureCompatible('music');
+    if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
+    const list = new (this.mod(M.musicList).MusicListModel)(new (this.mod(M.musicCategory).MusicCategoryModel)());
+    list.requestTimestamp = String(Date.now());
+    return { query: query.trim(), ...page(await withTimeout(list.getNextSearchMusicListForDouyin(query.trim()), 'search')) };
+  },
+
+  // `item` is a raw track from music_list or music_search. The library only applies a track with a clip range set;
   // start/end default to the whole track.
   async musicApply({ item, category_code, start_sec, end_sec }) {
     this.ensureCompatible('music');
-    if (!item || !item.id) throw Error('INVALID_MUSIC: pass the raw track returned by music_list');
+    if (!item || !item.id) throw Error('INVALID_MUSIC: pass the raw track returned by music_list or music_search');
     const EF = this.mod(M.ef);
     if (!EF.ProjectManager.getInstance().hasActiveProject()) throw Error('NO_ACTIVE_PROJECT');
     const start = start_sec ?? 0;
@@ -71,6 +75,6 @@ const methods = {
   },
 };
 
-const METHODS = { music_categories: 'musicCategories', music_list: 'musicList', music_apply: 'musicApply' };
+const METHODS = { music_categories: 'musicCategories', music_list: 'musicList', music_search: 'musicSearch', music_apply: 'musicApply' };
 
 module.exports = { methods, METHODS, slimMusic };

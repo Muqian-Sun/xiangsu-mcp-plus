@@ -36,6 +36,9 @@ const OWN = [
   'face_warp_list',
   'face_warp_set_intensity',
   'growth_route',
+  'growth_task_detail',
+  'growth_tasks_list',
+  'hotspot_inspirations',
   'icon_open',
   'icon_set',
   'image_view',
@@ -58,7 +61,9 @@ const OWN = [
   'messages_list',
   'mobile_preview',
   'music_apply',
+  'music_categories',
   'music_list',
+  'music_search',
   'my_effect_data',
   'my_effect_revenue',
   'my_effect_reviews',
@@ -72,10 +77,13 @@ const OWN = [
   'project_close',
   'project_new',
   'project_open',
+  'rank_creators',
   'rank_hotspots',
   'rank_innovation',
   'rank_list',
+  'rank_subject_detail',
   'rank_subjects',
+  'rank_subjects_search',
   'resource_delete_unused',
   'scene_tree',
   'submit_prepare',
@@ -329,12 +337,12 @@ test('own answers over the spill limit come back as a file and an outline, after
     listInstances: () => [{ pid: 1 }],
     callPlugin: async (method, params) => (params.query === '冬天' ? { query: '冬天', items: items.slice(0, 1), raw: items.slice(0, 1) } : { query: '夏天', items, raw: items }),
   });
-  const res = await client.callTool({ name: 'music_list', arguments: { query: '夏天' } });
+  const res = await client.callTool({ name: 'music_search', arguments: { query: '夏天' } });
   const summary = JSON.parse(res.content[0].text);
   assert.deepEqual(summary.outline.items, { items: 300, item_keys: ['music_id', 'title', 'cover_ref', 'preview_ref', 'note'] });
   const full = JSON.parse(fs.readFileSync(summary.spilled_to, 'utf8'));
   assert.deepEqual(full.items[1], { music_id: '1', title: '歌1', cover_ref: 'img:3', preview_ref: 'audio:4', note: items[1].note });
-  const small = JSON.parse((await client.callTool({ name: 'music_list', arguments: { query: '冬天' } })).content[0].text);
+  const small = JSON.parse((await client.callTool({ name: 'music_search', arguments: { query: '冬天' } })).content[0].text);
   assert.equal(small.spilled_to, undefined);
   assert.equal(small.items[0].cover_ref, 'img:1');
 });

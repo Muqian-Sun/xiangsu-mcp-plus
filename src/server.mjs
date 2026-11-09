@@ -211,8 +211,8 @@ class Seen {
     this.map = new Map();
   }
 
-  keep({ raw, ...page }, extra = {}) {
-    page.items.forEach((slim, i) => this.map.set(String(slim[this.key]), { slim, raw: raw[i], ...extra }));
+  keep({ raw = [], ...page }, extra = {}) {
+    page.items.forEach((slim, i) => this.map.set(String(slim[this.key]), { slim, raw: raw[i] ?? null, ...extra }));
     return page;
   }
 
@@ -276,7 +276,8 @@ export function createServer(deps = {}) {
   const seenLib = new Seen('UNKNOWN_TEMPLATE', 'library_list or library_search');
   const seenWorks = new Seen('UNKNOWN_WORK', 'works_list, works_search or works_by_effect');
   const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
-  const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
+  const seenGrowth = new Seen('UNKNOWN_GROWTH_TASK', 'growth_tasks_list', 'task_id');
+  const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list or music_search', 'music_id');
   // 实时热点 entries carry t and v that their detail and video requests must send back.
   const seenHots = new Seen('UNKNOWN_HOT', 'douyin_hot_list', 'hot_id');
   // Subjects found by ai3d_gs_segment, kept here so ai3d_gs_submit only needs the segment task id.
@@ -414,6 +415,16 @@ export function createServer(deps = {}) {
     effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。'),
     app_effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的同一个特效的 app_effect_id（抖音上的特效 ID）。'),
   };
+  // Lists read whole from the plugin and paged here.
+  const pageOf = ({ items, ...rest }, offset, count) => {
+    const next = offset + count;
+    return { ...rest, total: items.length, items: items.slice(offset, next), next_offset: next, has_more: next < items.length };
+  };
+  const pageShape = {
+    offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
+  };
+  const subjectKind = z.enum(['effect', 'template']).optional().describe('effect 特效专题榜（默认），template 模板专题榜。');
   const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。');
   const workPage = {
     category_id: z.string().optional().describe('works_list 返回的 categories 里的分类 ID；省略时用第一个分类（推荐）。'),
@@ -767,41 +778,47 @@ export function createServer(deps = {}) {
       name: 'tasks_list',
       refs: true,
       description:
-        '按 offset / count 分页列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数；kind=growth 为活动中心里的成长任务：奖励金额、参考工程（特效师等级、每级目标和进度在 growth_route）。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
-      shape: {
-        ...target,
-        kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。'),
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, offset = 0, count = 20, ...params } = a;
-        const { items, ...rest } = seenTasks.keep(await d.callPlugin('tasks_list', params, await homeWindow({ project_path, instance_id })));
-        const next = offset + count;
-        return text({ ...rest, total: items.length, items: items.slice(offset, next), next_offset: next, has_more: next < items.length });
-      },
+        '按 offset / count 分页列出首页活动中心的活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。成长任务用 growth_tasks_list。',
+      shape: { ...target, ...pageShape },
+      run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenTasks.keep(await d.callPlugin('tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
+    },
+    {
+      name: 'growth_tasks_list',
+      refs: true,
+      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度在 growth_route。',
+      shape: { ...target, ...pageShape },
+      run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenGrowth.keep(await d.callPlugin('growth_tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
     },
     {
       name: 'task_detail',
       refs: true,
       description:
-        '一个任务的详情。征集任务返回状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。成长任务返回奖励、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
+        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务，和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 须来自本会话的 tasks_list；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
         const t = seenTasks.get(task_id);
-        if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect and growth tasks have details`);
-        const id = t.raw.kind === 'task' ? t.raw.item_id : t.slim.task_id;
-        const { raw, ...out } = await d.callPlugin('task_detail', { kind: t.raw.kind, id }, await homeWindow({ project_path, instance_id }));
+        if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect tasks have details`);
+        const { raw, ...out } = await d.callPlugin('task_detail', { id: t.raw.item_id }, await homeWindow({ project_path, instance_id }));
         if (save_to === undefined) return text({ task_id, ...out });
         const file = saveFile(save_to, `task_detail-${task_id}.json`, JSON.stringify(raw ?? out, null, 2));
         return text({ task_id, ...out, raw_saved_to: file });
       },
     },
     {
+      name: 'growth_task_detail',
+      refs: true,
+      description: '一个成长任务的详情：标题、奖励、标签、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 growth_tasks_list。',
+      shape: { ...target, task_id: z.string().min(1).describe('growth_tasks_list 返回的 task_id。') },
+      run: async ({ project_path, instance_id, task_id }) => {
+        seenGrowth.get(task_id);
+        return text({ task_id, ...(await d.callPlugin('growth_task_detail', { id: task_id }, await homeWindow({ project_path, instance_id }))) });
+      },
+    },
+    {
       name: 'task_receive',
       description: '领取一个征集任务（写入当前登录账号，与活动中心的「领取」按钮相同，领取后不能撤销）。只有状态为 WAIT_RECEIVE 的任务能领，其它状态直接拒绝。返回 designer_task_id 和新状态；领取后重新 tasks_list，该任务即可 task_bind。',
-      shape: { ...target, task_id: z.string().min(1).describe('tasks_list（kind=effect）返回的任务 task_id。') },
+      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的任务 task_id。') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
         const t = seenTasks.get(task_id);
@@ -819,7 +836,6 @@ export function createServer(deps = {}) {
       },
       run: async ({ path: projectDir, task_id }) => {
         const t = seenTasks.get(task_id);
-        if (t.raw.kind === 'growth') throw Error(`TASK_NOT_BINDABLE: ${task_id} is a growth task`);
         if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it with task_receive first`);
         const open = (await projects.windows()).some((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
         if (open) await projects.close({ project_path: projectDir });
@@ -829,7 +845,7 @@ export function createServer(deps = {}) {
     {
       name: 'growth_route',
       description:
-        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。活动中心里一个个带参考工程和教程的成长任务用 tasks_list 的 kind=growth。',
+        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。活动中心里一个个带参考工程和教程的成长任务用 growth_tasks_list。',
       shape: { ...target },
       run: community('growth_route'),
     },
@@ -856,14 +872,16 @@ export function createServer(deps = {}) {
     {
       name: 'rank_hotspots',
       refs: true,
-      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_ref，交给 image_view 看）。抖音全站的实时热点榜见 douyin_hot_list。',
-      shape: {
-        ...target,
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
-        topic_id: z.string().min(1).optional().describe('只看这个热点下的灵感（rank_hotspots 返回的 topic_id）。'),
-      },
+      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。抖音全站的实时热点榜见 douyin_hot_list。',
+      shape: { ...target, ...pageShape },
       run: community('rank_hotspots'),
+    },
+    {
+      name: 'hotspot_inspirations',
+      refs: true,
+      description: '一个热点下的灵感，按热点页的页签分组：每条的 inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）。详情用 inspiration_detail。',
+      shape: { ...target, topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。') },
+      run: community('hotspot_inspirations'),
     },
     {
       name: 'douyin_hot_list',
@@ -918,12 +936,10 @@ export function createServer(deps = {}) {
     {
       name: 'rank_subjects',
       refs: true,
-      description: '像塑移动版「专题合集」里按主题的榜单，最新的在前：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。keyword 按榜名搜索全部期；传 subject_id 时返回该榜的全部特效（最多 20 个）。',
+      description: '像塑移动版「专题合集」里按主题的榜单，最新的在前，按 cursor 翻页：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。按榜名搜用 rank_subjects_search，一个榜的全部特效用 rank_subject_detail。',
       shape: {
         ...target,
-        subject_id: z.string().min(1).optional().describe('只看这个榜（rank_subjects 返回的 subject_id）。'),
-        kind: z.enum(['effect', 'template']).optional().describe('effect 特效专题榜（默认），template 模板专题榜。'),
-        keyword: z.string().min(1).optional().describe('按榜名搜索，如「美妆」「测一测」「IP」；给定时返回全部匹配的期，不分页。'),
+        kind: subjectKind,
         cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
         // The server answers code 1 above 20 (measured).
         count: z.number().int().min(1).max(20).optional().describe('每页数量，默认 20（最大 20）。'),
@@ -931,16 +947,36 @@ export function createServer(deps = {}) {
       run: community('rank_subjects'),
     },
     {
+      name: 'rank_subjects_search',
+      refs: true,
+      description: '按榜名在「专题合集」的全部期里搜索（服务端没有搜索，逐页读完再过滤），返回全部匹配的榜，不分页；每个榜带前几个特效、浏览量。',
+      shape: { ...target, kind: subjectKind, keyword: z.string().min(1).describe('榜名里的词，如「美妆」「测一测」「IP」「热梗」。') },
+      run: community('rank_subjects_search'),
+    },
+    {
+      name: 'rank_subject_detail',
+      refs: true,
+      description: '「专题合集」里一个榜的全部特效（最多 20 个）：特效名、effect_id、app_effect_id、图标、说明。',
+      shape: { ...target, subject_id: z.string().min(1).describe('rank_subjects 或 rank_subjects_search 返回的 subject_id。') },
+      run: community('rank_subject_detail'),
+    },
+    {
       name: 'rank_innovation',
       refs: true,
-      description: '创新计划的榜单。kind=template / effect 为官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面；kind=creators 为创作者月榜：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金（元）。',
+      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面。创作者月榜用 rank_creators。',
       shape: {
         ...target,
-        kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效，creators 创作者月榜。'),
+        kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效。'),
         offset: z.number().int().min(0).optional().describe('翻页偏移，取上一页的 next_offset。'),
         count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20；精选由服务端过滤，实际条数可能略少。'),
       },
       run: community('rank_innovation'),
+    },
+    {
+      name: 'rank_creators',
+      description: '创新计划的创作者月榜，按 offset / count 分页：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金（元）。',
+      shape: { ...target, ...pageShape },
+      run: community('rank_creators'),
     },
     {
       name: 'my_effects',
@@ -1021,29 +1057,32 @@ export function createServer(deps = {}) {
       run: community('my_task_status'),
     },
     {
+      name: 'music_categories',
+      description: '抖音音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称，交给 music_list 看分类里的歌。',
+      shape: { ...target },
+      run: community('music_categories'),
+    },
+    {
       name: 'music_list',
       refs: true,
-      description: '列出抖音音乐：两个参数都不传时返回音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称；传 query 按关键词搜索，或传 category_code 看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
-      shape: {
-        ...target,
-        query: z.string().min(1).optional().describe('搜索关键词。'),
-        category_code: z.string().min(1).optional().describe('分类 code（不带参数调用时返回）；与 query 二选一。'),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, query, category_code } = a;
-        if (query !== undefined && category_code !== undefined) throw Error('INVALID_ARGUMENTS(music_list): pass query or category_code, not both');
-        if (query === undefined && category_code === undefined) return text(await d.callPlugin('music_categories', {}, await homeWindow({ project_path, instance_id })));
-        const res = await d.callPlugin('music_list', query !== undefined ? { query } : { category_code }, await homeWindow({ project_path, instance_id }));
-        return text(seenMusic.keep(res, { category_code: category_code ?? null }));
-      },
+      description: '抖音音乐库一个分类的第一页（35 首）：music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。分类 code 从 music_categories 取；按关键词找歌用 music_search。',
+      shape: { ...target, category_code: z.string().min(1).describe('music_categories 返回的分类 code。') },
+      run: async ({ project_path, instance_id, category_code }) => text(seenMusic.keep(await d.callPlugin('music_list', { category_code }, await homeWindow({ project_path, instance_id })), { category_code })),
+    },
+    {
+      name: 'music_search',
+      refs: true,
+      description: '按关键词搜抖音音乐：每首的 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（false 或 null 的不要用于要发布的特效）。',
+      shape: { ...target, query: z.string().min(1).describe('搜索关键词。') },
+      run: async ({ project_path, instance_id, query }) => text(seenMusic.keep(await d.callPlugin('music_search', { query }, await homeWindow({ project_path, instance_id })), { category_code: null })),
     },
     {
       name: 'music_apply',
       description:
-        '把一首抖音音乐设为特效的音乐，和音乐库里点「使用」相同：下载音频进工程、写入音乐信息，并在场景里加入抖音音乐对象（再次使用会替换上一首）。start_sec / end_sec 截取片段，默认整首。music_id 须来自本会话的 music_list。之后 capture_preview 验收、save_project 落盘。',
+        '把一首抖音音乐设为特效的音乐，和音乐库里点「使用」相同：下载音频进工程、写入音乐信息，并在场景里加入抖音音乐对象（再次使用会替换上一首）。start_sec / end_sec 截取片段，默认整首。music_id 须来自本会话的 music_list 或 music_search。之后 capture_preview 验收、save_project 落盘。',
       shape: {
         ...target,
-        music_id: z.string().min(1).describe('music_list 返回的 music_id。'),
+        music_id: z.string().min(1).describe('music_list 或 music_search 返回的 music_id。'),
         start_sec: z.number().min(0).optional().describe('片段开始（秒），默认 0。'),
         end_sec: z.number().positive().optional().describe('片段结束（秒），默认整首时长。'),
       },

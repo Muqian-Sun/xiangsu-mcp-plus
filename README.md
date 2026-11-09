@@ -60,20 +60,25 @@
 | `inspiration_list` / `inspiration_detail` | 灵感分页列表（每页带上全部分类，每条带关联热点）、详情（说明、图片、奖励、关联热点的热度和标签、同灵感特效、示例视频的播放地址和封面、贴纸、是否已收藏） |
 | `inspiration_collect` | 收藏或取消收藏灵感（写账号），之后重新查询确认生效 |
 | `inspiration_bind` | 把灵感绑定到当前工程，提交时带上 |
-| `tasks_list` / `task_detail` | 活动与特效征集任务（`kind=effect`）、成长任务（`kind=growth`）的列表（按 `offset` / `count` 分页）与详情（状态和状态说明、奖励、整理过的任务说明：每个内容块的条目、参考图和视频引用、奖项金额和名额、链接，`save_to` 另存原始返回；征集任务详情还有自己提交到这个任务的特效 `my_effects`：审核状态、拍摄 / 播放 / 投稿峰值、获奖金额、任务评定 `task_state`（`pending` / `unfinished` / `done`）和是否被标「主题不符合」`off_theme`） |
+| `tasks_list` / `task_detail` | 活动中心的活动和特效征集任务的列表（按 `offset` / `count` 分页）与征集任务详情（状态和状态说明、奖励、整理过的任务说明：每个内容块的条目、参考图和视频引用、奖项金额和名额、链接，`save_to` 另存原始返回；征集任务详情还有自己提交到这个任务的特效 `my_effects`：审核状态、拍摄 / 播放 / 投稿峰值、获奖金额、任务评定 `task_state`（`pending` / `unfinished` / `done`）和是否被标「主题不符合」`off_theme`） |
+| `growth_tasks_list` / `growth_task_detail` | 活动中心的成长任务列表（奖励、参考工程，分页）与详情（参考工程、相关灵感、教程） |
 | `growth_route` | 移动版「成长之路」：当前特效师等级，每一级的奖励、状态和目标进度（如「绑定灵感上线 0/3 个作品 ¥10」），最高级的权益 |
 | `task_receive` | 领取一个待领取（`WAIT_RECEIVE`）的征集任务（写账号，不能撤销），其它状态直接拒绝 |
 | `task_bind` | 已领取的任务按任务详情页「去创作」的方式重开工程绑定 |
 | `rank_list` | 分页读移动版排行榜（榜单和筛选项写在参数说明里），可按日期、每级一个分类、特效等级、面板、偏好、来自工具、年轻喜爱度过滤；每页带上该榜当天的两级分类（大类如人像美化、细类如美妆） |
-| `rank_hotspots` | 热点榜（按 `offset` / `count` 分页）；带 `topic_id` 时返回该热点下的灵感 |
+| `rank_hotspots` | 热点榜（按 `offset` / `count` 分页） |
+| `hotspot_inspirations` | 一个热点下的灵感，按热点页的页签分组 |
 | `douyin_hot_list` | 抖音实时热点榜（约 5 分钟一版）前 20 条：名次、名称、分类（娱乐、站内玩法、话题互动、二次元等）、热度 |
 | `douyin_hot_detail` | 一个抖音实时热点的上榜时间、近 7 天每天和今天每小时的热度、站内已有的特效数（「上线特效0个」说明还没人做） |
 | `douyin_hot_videos` | 一个抖音实时热点下的热门视频：播放地址、封面、点赞、作者 |
 | `baidu_hot_list` | 百度热搜榜：置顶条和 50 条热搜，每条有摘要、热度、配图、链接（不用登录、不用开像塑） |
 | `bilibili_popular` | B 站「热门」视频：标题、链接、封面、分区、UP 主、播放 / 点赞 / 评论 / 弹幕、上热门的理由，分页（不用登录、不用开像塑） |
 | `bilibili_hot_search` | B 站热搜词和热度（不用登录、不用开像塑） |
-| `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），分页或按 `keyword` 搜榜名；带 `subject_id` 时返回该榜全部特效 |
-| `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）和创作者月榜（`kind=creators`） |
+| `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），按 `cursor` 分页 |
+| `rank_subjects_search` | 按榜名在专题合集全部期里搜索 |
+| `rank_subject_detail` | 一个专题榜的全部特效 |
+| `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`） |
+| `rank_creators` | 创新计划创作者月榜 |
 | `my_effects` | 自己提交过的特效，最新的在前：审核状态、绑定的任务和灵感、能否编辑 / 申诉；审核未通过、测试未通过、申诉审核未通过的带上最近一条审核记录（去掉标记的原因正文、分条原因、链接） |
 | `my_effect_reviews` | 一个自己的特效的完整审核记录：「上线审核」和「精选审核」两条时间线 |
 | `my_effect_data` | 一个自己已上线特效的「作品详情」数据卡片（要 `effect_id` 和 `app_effect_id`，都在 `my_effects` 里）：各 App 的上线状态和投稿、用到的功能、累计曝光 / 投稿 / 播放 / 跟拍、平台判定的特效类型、等级、年轻喜爱度、流量状态、播放数、绑定的任务和灵感 |
@@ -83,7 +88,9 @@
 | `my_revenue` | 钱包收益：累计和某个月的总额、按来源、按天 |
 | `messages_list` | 移动版「消息」页的站内信（全部 / 服务 / 官方），每条的标题、正文、时间、是否已读、审核状态和对应的 `effect_id`、链接，按 `cursor` 翻页 |
 | `my_task_status` | 一次列出所有已领取任务里自己的作品和任务评定（`task_state`、`off_theme`），并按评定计数 |
-| `music_list` / `music_apply` | 抖音音乐分类（不带参数时）、按分类列出或搜索（带版权标记），按音乐库「使用」套用，可截取片段 |
+| `music_categories` | 抖音音乐库的分类 |
+| `music_list` / `music_search` | 一个分类的歌、按关键词搜歌（带版权标记） |
+| `music_apply` | 按音乐库「使用」套用一首歌，可截取片段 |
 | `scene_tree` | 场景结构的缩进文本：渲染组、对象 guid、名称、是否隐藏、组件类型；可只看子树、控制层数。传 `project_dir` 时不开窗口，直接读工程的 `Assets/main.scene`（如 `works_download` 下载的作品），对象写成 `#序号` |
 | `inspect_many` | 一次查看多个对象的组件参数，可按组件类型、属性名片段过滤，`{type, data}` 包装直接展开，绑定的资源和对象换成名称；`preset="key"` 只留关键参数（变换、显隐、强度/不透明度/颜色类、文字内容、绑定、脚本参数）。同样支持 `project_dir` |
 | `makeup_layers` | 读工程目录里的全部美妆层（妆容层和美瞳），逐层给出区域、部位、混合模式、平均色、着色、男女强度和实际生效的不透明度（强度 × 整套 AI 脸下发的外部强度）、表面质地（水润、珠光等）、只作用于哪几张脸、是否生效；部位先看层名，看不出时按贴图像素和混合模式判断（滤色等只会提亮的层归为高光）。`sets` 列出整套妆（AI 实时变脸）各管哪些层，这些层带 `in_set`：删掉或关掉其中一个整套都会消失，只能把强度调成 0。`groups` 按底妆、眉、眼妆、美瞳、颊、轮廓、唇汇总，`absent` 列出整套妆没有的部位 |
@@ -116,7 +123,7 @@
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，在窗口里点「提交审核」。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
 - 找热梗：`douyin_hot_list` 看抖音正在火什么（分类「站内玩法」多是梗和跟拍玩法）→ `douyin_hot_detail` 看热度是在涨还是在落、站内有没有人做过特效 → `douyin_hot_videos` 看实际怎么拍；站外话题用 `baidu_hot_list`、`bilibili_popular`、`bilibili_hot_search`；梗的出处和用法用联网搜索查。
-- 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
+- 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 - 查审核结果：`my_effects` 看哪些没过、`review.text` 是原因 → 要看整条时间线用 `my_effect_reviews`；`can_edit=true` 的在编辑器「拍摄特效管理」里点「编辑」改完重新提交。
 - 看作品表现：`my_effects` 拿 `effect_id` 和 `app_effect_id` → `my_effect_data` 看曝光和数据卡片、`my_effect_trend` 看按天趋势和离下一级还差多少、`my_effect_revenue` 看收益；账号用 `my_profile`，收入用 `my_revenue`；上线、精选、获奖等通知用 `messages_list`；交了哪些任务、评定如何用 `my_task_status`。
@@ -128,13 +135,13 @@
 - 做 AR 视频贴片：官方 `generate_image`（主体正面全身、纯色背景）→ `ar_video_submit`（`mode=motion`、`prompt`）→ `ar_video_tasks`（`task_id` + `wait_s`）→ `image_view` 看 `preview_image_file` → 满意再 `ar_video_import` → `capture_preview` → `save_project`。
 - 做 AI 组合效果：`ai_combine_new` → 官方 `get_workflow_capabilities`（选生图基模）→ `apply_workflow_patch`（加生图节点、写 prompt、连「输入图 → 生图 → 效果组合」）→ 要看效果时官方 `generate_workflow`（扣额度）→ `ai_combine_apply` → `save_project`。别人的作品怎么搭的，用 `works_download` 下载「AI玩法」分类里的工程，看 `Assets/AI 组合效果/*.oAICombineTextureJSA` 里的 `workflow` 和 `Graph/graph.json` 里的 AI Graph。
 
-相近工具的分工（每个工具只做一件事，这些也写进了工具说明；和官方工具重叠的，在官方工具的说明末尾补了一句指向这里）：
+相近工具的分工（每个工具只做一件事，这些也写进了工具说明；和官方工具重叠的，在官方工具的说明末尾补了一句指向这里）。判据：一个参数会让工具换成另一种查询或操作（列表和详情、榜单和搜索、两张不同的页面卡片），就拆成两个工具；只是缩小范围的筛选（分类、分页、排序）留作参数。
 
 - 看场景：`scene_tree` 先摸清结构（紧凑文本，也能读下载的工程目录）→ `inspect_many` 一次看多个对象的参数；要完整 JSON 才用官方 `get_scene` / `inspect`。
 - 删对象：只删对象用官方 `edit_by_dsl`；要知道删完哪些资源没人用了、连带清理，用 `object_remove`（→ `resource_delete_unused`）。
 - 绑灵感：`inspiration_bind` 按 ID 写进工程，提交窗口自动带出；只在提交时选，给 `submit_prepare` 传 `inspiration`（在收藏的灵感和热点里按名称选）。
 - 绑任务：`task_bind` 重开窗口把任务写进工程；只在提交时选，给 `submit_prepare` 传 `task`，不用重开窗口。
-- 成长：`tasks_list` 的 `kind=growth` 是活动中心里一个个成长任务（参考工程、教程）；特效师等级和每级目标进度看 `growth_route`。
+- 成长：`growth_tasks_list` 是活动中心里一个个成长任务（参考工程、教程），详情用 `growth_task_detail`；特效师等级和每级目标进度看 `growth_route`。
 - 素材库：知道要找什么用 `library_search`；按面板和子分类浏览用 `library_list`。
 
 几点约定：
