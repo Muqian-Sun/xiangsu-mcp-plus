@@ -178,8 +178,47 @@ test('makeup_compare shoots the baseline and each variant on the playing preview
   assert.equal(r.warning, undefined);
   assert.deepEqual(r.box_px, [0, 100, 240, 20]);
   const strip = PNG.sync.read(fs.readFileSync(r.image));
-  assert.deepEqual([strip.width, strip.height], [3 * 240 * 3 + 2 * 2, 20 * 3]);
+  // Each cheek tile is 720×60; three of them wrap to one column under the 1024 px strip limit.
+  assert.deepEqual([strip.width, strip.height], [720, 3 * 60 + 2 * 2]);
   assert.deepEqual(res.content.slice(1).map((c) => c.type), ['text', 'image']);
+});
+
+test('makeup_compare measures each state against a reference crop and appends it to the strip', async () => {
+  const projectDir = project();
+  const win = fakeWindow({ projectDir });
+  const client = await connect({ official: fakeOfficial(projectDir), callPlugin: win.callPlugin });
+  const refDir = tmpdir('xs-ref-');
+  const ref = new PNG({ width: 100, height: 40 });
+  for (let i = 0; i < ref.width * ref.height; i++) ref.data.set([200, 100, 80, 255], i * 4);
+  const refPath = path.join(refDir, 'ref.png');
+  fs.writeFileSync(refPath, PNG.sync.write(ref));
+  const res = await client.callTool({
+    name: 'makeup_compare',
+    arguments: {
+      instance_id: '2',
+      variants: [{ label: '关腮红', changes: [{ object_path: '腮红', female: 0 }] }],
+      regions: [{ ...CHEEK, ref: { x: 0, y: 0, width: 1, height: 1 } }],
+      reference: refPath,
+    },
+  });
+  assert.equal(res.isError, undefined, res.content[0].text);
+  const r = JSON.parse(res.content[0].text).runs[0].regions[0];
+  assert.deepEqual(r.reference.rgb, [200, 100, 80]);
+  assert.deepEqual(r.states[0].to_reference.rgb, [-40, 20, 30]);
+  const strip = PNG.sync.read(fs.readFileSync(r.image));
+  // Baseline, variant, second baseline are omitted — strip is baseline | 关腮红 | 参考, wrapped to one column.
+  assert.deepEqual([strip.width, strip.height], [720, 3 * 60 + 2 * 2]);
+  assert.match(res.content[1].text, /参考/);
+  const missing = await client.callTool({
+    name: 'makeup_compare',
+    arguments: { instance_id: '2', variants: [{ label: 'x', changes: [{ object_path: '腮红', female: 0 }] }], regions: [{ ...CHEEK, ref: { x: 0, y: 0, width: 1, height: 1 } }] },
+  });
+  assert.match(missing.content[0].text, /REFERENCE_MISSING/);
+  const unused = await client.callTool({
+    name: 'makeup_compare',
+    arguments: { instance_id: '2', variants: [{ label: 'x', changes: [{ object_path: '腮红', female: 0 }] }], regions: [CHEEK], reference: refPath },
+  });
+  assert.match(unused.content[0].text, /REFERENCE_UNUSED/);
 });
 
 test('makeup_compare puts the change back when a capture fails', async () => {

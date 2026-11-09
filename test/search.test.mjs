@@ -169,6 +169,10 @@ test('library_search forwards queries and keeps the results for preview and appl
   const callPlugin = async (method, params) => {
     seen.push([method, params]);
     if (method === 'library_search') return { queries: params.queries, items: [{ template_id: 'm3', title: '欧美妆', cover_url: null }], raw: [{ templateId: 'm3', title: '欧美妆' }], total: 1 };
+    if (method === 'menu_list') {
+      if (params.query === '脸蛋天才') return { total: 1, items: [{ menu_id: 'FaceGenius', name: '脸蛋天才', path: '美妆/脸蛋天才', kind: 'builtin' }] };
+      return { total: 0, items: [] };
+    }
     if (method === 'library_apply') return { applied: params.item.templateId };
     throw Error(`unexpected ${method}`);
   };
@@ -180,6 +184,14 @@ test('library_search forwards queries and keeps the results for preview and appl
   const res = await client.callTool({ name: 'library_search', arguments: { project_path: '/p', queries: ['欧美', '猫眼'] } });
   assert.equal(res.isError, undefined);
   assert.deepEqual(seen[0], ['library_search', { queries: ['欧美', '猫眼'] }]);
+  assert.deepEqual(seen.slice(1, 3), [
+    ['menu_list', { query: '欧美' }],
+    ['menu_list', { query: '猫眼' }],
+  ]);
+  assert.equal(JSON.parse(res.content[0].text).menu_items, undefined);
+  const menu = JSON.parse((await client.callTool({ name: 'library_search', arguments: { project_path: '/p', query: '脸蛋天才' } })).content[0].text);
+  assert.deepEqual(menu.menu_items, [{ menu_id: 'FaceGenius', name: '脸蛋天才', path: '美妆/脸蛋天才', kind: 'builtin' }]);
+  assert.match(menu.menu_note, /menu_add/);
   const applied = await client.callTool({ name: 'library_apply', arguments: { project_path: '/p', template_id: 'm3' } });
   assert.deepEqual(JSON.parse(applied.content[0].text), { applied: 'm3' });
   const tooMany = await client.callTool({ name: 'library_search', arguments: { queries: Array(9).fill('a') } });

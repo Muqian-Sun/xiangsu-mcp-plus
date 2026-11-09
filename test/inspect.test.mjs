@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createRequire } from 'node:module';
 import { createServer } from '../src/server.mjs';
-import { formatObjects, formatTree, pickInspect, resolveObject, resolveRefs, sceneObjects, unwrap } from '../src/inspect.mjs';
+import { dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects, unwrap } from '../src/inspect.mjs';
 import { loadScene } from '../src/scenefile.mjs';
 import { cropImage, framesDir, FRAMES_TTL_MS } from '../src/frames.mjs';
 
@@ -163,6 +163,77 @@ test('pickInspect names a makeup layer\'s blend modes next to their numbers', ()
   assert.deepEqual(out.components[1].properties, { blendMode: 99, blendMode_name: '未知（99）' });
   assert.deepEqual(out.components[2].properties, { blendMode: 1 }, 'other components keep their own numbering');
   assert.deepEqual(pickInspect(res, { fields: ['intensity'] }).components[0].properties, { intensity: 0.7 }, 'a name only comes with its number');
+});
+
+test('pickInspect preset "key" keeps Transparency and the GAN Channel name', () => {
+  const res = {
+    guid: 's1',
+    name: '清透伪素颜',
+    components: [
+      { type: 'JSScriptComponent', guid: 'c1', properties: { Transparency: 0.45, Channel: 'Texture', other: 1 } },
+    ],
+  };
+  assert.deepEqual(pickInspect(res, { preset: 'key' }).components[0].properties, { Transparency: 0.45, Channel: 'Texture' });
+});
+
+test('dropUnset removes empty texture slots and transparent black colours under the preset', () => {
+  const ERROR = '00000000-0000-0000-0000-00000000001e';
+  const res = {
+    guid: '#1',
+    name: '唇',
+    components: [
+      {
+        type: 'FaceMask',
+        guid: '#1.1',
+        properties: {
+          intensity: 0.7,
+          lutTexture: { builtin: ERROR },
+          makeupTexture: { resource: 'lip.png', type: 'Texture', file: 'tex/lip.png' },
+          pearlColor1: { r: 0, g: 0, b: 0, a: 0 },
+          color: { r: 1, g: 0.2, b: 0.3, a: 1 },
+        },
+      },
+    ],
+  };
+  const dropped = dropUnset(pickInspect(res, { preset: 'key' }), { preset: 'key' });
+  assert.deepEqual(dropped.components[0].properties, {
+    intensity: 0.7,
+    makeupTexture: { resource: 'lip.png', type: 'Texture', file: 'tex/lip.png' },
+    color: { r: 1, g: 0.2, b: 0.3, a: 1 },
+  });
+  // fields asked for stay even when unset.
+  const kept = dropUnset(pickInspect(res, { preset: 'key', fields: ['lut'] }), { preset: 'key', fields: ['lut'] });
+  assert.equal(kept.components[0].properties.lutTexture.builtin, ERROR);
+  assert.deepEqual(dropUnset(res, {}), res, 'without the preset nothing is dropped');
+});
+
+test('resolveComponentRefs rewrites object+$ref component_type to the component guid, and leaves batch aliases alone', async () => {
+  const objects = async () => [
+    { guid: 's10', path: ['面部面具', '眼线'] },
+    { guid: 's11', path: ['面部面具', '美瞳'] },
+  ];
+  const inspect = async (guid) => {
+    if (guid === 's10') return { components: [{ type: 'FaceMask', guid: 'c-mask' }, { type: 'Transform', guid: 'c-t' }] };
+    if (guid === 's11') return { components: [{ type: 'EyeColorV2', guid: 'c-eye' }] };
+    throw Error(`unexpected ${guid}`);
+  };
+  const commands = [
+    { command_type: 'set_component', params: { guid: { $ref: 's10', component_type: 'FaceMask' }, properties: { intensity: 0.5 } } },
+    { command_type: 'add_component', alias: 'newEye', params: { parent: 's11', type: 'EyeColorV2' } },
+    { command_type: 'set_component', params: { guid: { $ref: 'newEye', component_type: 'EyeColorV2' }, properties: { intensity: 1 } } },
+    { command_type: 'set_component', params: { guid: { $ref: '美瞳', component_type: 'EyeColorV2' }, properties: { intensity: 0.2 } } },
+  ];
+  const out = await resolveComponentRefs(commands, { objects, inspect });
+  assert.deepEqual(out[0].params.guid, { $ref: 'c-mask' });
+  assert.deepEqual(out[2].params.guid, { $ref: 'newEye', component_type: 'EyeColorV2' }, 'a same-batch alias stays for the official tool');
+  assert.deepEqual(out[3].params.guid, { $ref: 'c-eye' });
+  await assert.rejects(
+    resolveComponentRefs([{ command_type: 'set_component', params: { guid: { $ref: 's10', component_type: 'EyeColorV2' }, properties: {} } }], { objects, inspect }),
+    /COMPONENT_NOT_FOUND: s10 \(s10\) has 0 EyeColorV2 components/,
+  );
+  // An unknown object is left alone for the official tool to report.
+  const unknown = await resolveComponentRefs([{ command_type: 'set_component', params: { guid: { $ref: 's99', component_type: 'FaceMask' }, properties: {} } }], { objects, inspect });
+  assert.deepEqual(unknown[0].params.guid, { $ref: 's99', component_type: 'FaceMask' });
 });
 
 test('resolveRefs replaces handles with the resource or object they name, once per handle', async () => {

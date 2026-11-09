@@ -289,18 +289,26 @@ export function makeupLayers(projectDir) {
       // The editor sets the shader's opacity to the slider times the external intensity
       // (FaceMaskComponentEditor's femaleIntensity setter); the runtime component keeps the product.
       const external = eye || dy ? null : { female: p.externalFemaleIntensity ?? 1, male: p.externalMaleIntensity ?? 1 };
-      const opacity = external ? { female: round3(female * external.female), male: round3(male * external.male) } : { female, male };
-      if (external && typeof p.femaleOpacity === 'number' && (Math.abs(p.femaleOpacity - opacity.female) > 0.01 || Math.abs(p.maleOpacity - opacity.male) > 0.01)) {
-        notes.push(`${n.guid} ${n.name}：场景里运行时的不透明度（女 ${p.femaleOpacity} / 男 ${p.maleOpacity}）和强度 × 外部强度（女 ${opacity.female} / 男 ${opacity.male}）对不上，编辑器里可能有没保存的改动`);
+      const slid = external ? { female: round3(female * external.female), male: round3(male * external.male) } : null;
+      if (slid && typeof p.femaleOpacity === 'number' && (Math.abs(p.femaleOpacity - slid.female) > 0.01 || Math.abs(p.maleOpacity - slid.male) > 0.01)) {
+        notes.push(`${n.guid} ${n.name}：场景里运行时的不透明度（女 ${p.femaleOpacity} / 男 ${p.maleOpacity}）和强度 × 外部强度（女 ${slid.female} / 男 ${slid.male}）对不上，编辑器里可能有没保存的改动`);
       }
+      // Every FaceMask material draws at clamp(_Intensity × _Opacity), _Intensity being the panel's
+      // 不透明度 (FaceMask@1.0.6 .omtl; 太阳花睫毛 at 0.55 and 1 drew visibly apart). A packaged look's GAN
+      // takes its layers over: 清透伪素颜's 腮红 at 0.78 and 0.2 drew the same once the GAN was on (2026-11-09).
+      const set = setOf.get(n.guid);
+      const panel = slid && !set && typeof p.intensity === 'number' ? p.intensity : 1;
+      const opacity = slid ? { female: round3(slid.female * panel), male: round3(slid.male * panel) } : { female, male };
       const off = !visible
         ? '隐藏'
         : p.enabled === false
           ? '组件停用'
           : !opacity.female && !opacity.male
-            ? female || male
-              ? '整套强度为 0'
-              : '强度为 0'
+            ? !female && !male
+              ? '强度为 0'
+              : panel === 0
+                ? '不透明度为 0'
+                : '整套强度为 0'
             : null;
       let blend = BLEND_MODES[p.blendMode] ?? null;
       if (p.blendMode === undefined) notes.push(`${n.guid} ${n.name}：场景里没有混合模式`);
@@ -311,7 +319,6 @@ export function makeupLayers(projectDir) {
       const layer = { object: n.guid, name: n.name, path: objectPath, ...(dy ? { component: 'FaceMaskDY' } : {}), active: !off, ...(off ? { off } : {}), region, part: null, part_from: null, blend, female, male };
       if (external && (external.female !== 1 || external.male !== 1)) layer.external = external;
       layer.opacity = opacity;
-      const set = setOf.get(n.guid);
       if (set) {
         layer.in_set = { object: set.object, name: set.name };
         set.layers.push(`${n.guid} ${n.name}`);

@@ -175,6 +175,7 @@ test('own tools route to the plugin window by project_path or official instance_
     callPlugin: async (method, params, opts) => {
       seen.push({ method, params, opts });
       if (method === 'library_search') return { query: 'x', items: [{ template_id: '111', title: '芒果脸' }], raw: [{ templateId: '111', title: '芒果脸' }] };
+      if (method === 'menu_list') return { total: 0, items: [] };
       return { ok: method };
     },
   });
@@ -184,14 +185,17 @@ test('own tools route to the plugin window by project_path or official instance_
   assert.equal(found.raw, undefined);
   const a = await client.callTool({ name: 'library_apply', arguments: { project_path: '/proj/B', template_id: '111' } });
   assert.deepEqual(JSON.parse(a.content[0].text), { ok: 'library_apply' });
-  assert.deepEqual(seen[1], { method: 'library_apply', params: { item: { templateId: '111', title: '芒果脸' } }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
+  // library_search also asks menu_list for add-object hits (脸蛋天才 and the like).
+  assert.deepEqual(seen[0].method, 'library_search');
+  assert.deepEqual(seen[1], { method: 'menu_list', params: { query: 'x' }, opts: { projectPath: '/proj/C' } });
+  assert.deepEqual(seen[2], { method: 'library_apply', params: { item: { templateId: '111', title: '芒果脸' } }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
   await client.callTool({ name: 'face_warp_set_intensity', arguments: { instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
-  assert.deepEqual(seen[2], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
+  assert.deepEqual(seen[3], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
   await client.callTool({ name: 'ai_combine_apply', arguments: { instance_id: '1', graph_id: 'g-1' } });
-  assert.deepEqual(seen[3], { method: 'ai_combine_apply', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/A', timeoutMs: 180000 } });
+  assert.deepEqual(seen[4], { method: 'ai_combine_apply', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/A', timeoutMs: 180000 } });
   const unknown = await client.callTool({ name: 'menu_list', arguments: { instance_id: '7' } });
   assert.match(unknown.content[0].text, /UNKNOWN_INSTANCE: 7/);
-  assert.equal(seen.length, 4);
+  assert.equal(seen.length, 5);
 });
 
 test('invalid arguments are rejected before reaching the plugin', async () => {
@@ -337,6 +341,7 @@ test('the asset library and the add-object menu go to the lowest-pid window when
       ['library_list', { pid: 200 }],
       ['library_search', { pid: 200 }],
       ['menu_list', { pid: 200 }],
+      ['menu_list', { pid: 200 }],
     ],
   );
   await client.callTool({ name: 'menu_list', arguments: { project_path: '/proj/A' } });
@@ -460,6 +465,7 @@ test('official tools that overlap ours are listed with a note naming ours; the r
   assert.match(desc('get_scene'), /^官方get_scene\n\n（xiangsu-mcp-plus）.*scene_tree.*inspect_many/);
   assert.match(desc('inspect'), /（xiangsu-mcp-plus）.*inspect_many/);
   assert.match(desc('edit_by_dsl'), /（xiangsu-mcp-plus）.*object_remove/);
+  assert.match(desc('edit_by_dsl'), /\$ref.*component_type.*换成该对象上 T 组件的 guid/);
   assert.equal(desc('list_resources'), '官方list_resources');
 });
 

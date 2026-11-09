@@ -93,9 +93,10 @@ const NESTED_KEY_FIELDS = ['intensity', 'strength', 'opacity', 'alpha', 'amount'
 // preset "key": the parameters that usually decide how an effect looks. Picked, not measured, from
 // the effects made so far (makeup, face warps, stickers, text); anything else is still reachable with
 // fields or component_types.
-const KEY_FIELDS = ['position', 'scale', 'rotation', 'orientation', 'euler', 'visible', 'enabled', 'intensity', 'strength', 'opacity', 'alpha', 'amount', 'weight', 'color'];
-// Matched whole: a Text's content and a 2D object's size; as fragments they would match far more.
-const KEY_NAMES = ['str', 'sizeDelta'];
+const KEY_FIELDS = ['position', 'scale', 'rotation', 'orientation', 'euler', 'visible', 'enabled', 'intensity', 'strength', 'opacity', 'alpha', 'amount', 'weight', 'color', 'transparency'];
+// Matched whole: a Text's content, a 2D object's size, and which half of an AI face GAN a component is
+// (Texture: skin, Distortion: face shape); as fragments they would match far more.
+const KEY_NAMES = ['str', 'sizeDelta', 'Channel'];
 // A bound resource or scene object, after resolveRefs (online) or as the scene file reader gives it.
 const isBinding = (v) =>
   v && typeof v === 'object' && !Array.isArray(v) && v.guid !== 'null' && ['resource', 'builtin', 'object', 'path', 'guid'].some((k) => k in v) && Object.keys(v).length <= 3;
@@ -123,6 +124,72 @@ export function pickInspect(res, { component_types, fields, preset } = {}) {
     })
     .filter((c) => !filtered || Object.keys(c.properties).length);
   return { guid: res.guid, name: res.name, component_types: res.componentTypes || components.map((c) => c.type), components };
+}
+
+// The editor's 「缺失纹理」: what a texture slot nobody filled points at (a FaceMask's lutTexture, a GAN's
+// vfxRT_target). Online it resolves to …/BuiltInAssets/<this>/defaultErrorTex.png, in a scene file to
+// { builtin: <this> }.
+const ERROR_TEXTURE = '00000000-0000-0000-0000-00000000001e';
+const unset = (v) =>
+  !!v &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
+  (v.builtin === ERROR_TEXTURE ||
+    (typeof v.file === 'string' && v.file.includes(ERROR_TEXTURE)) ||
+    (Object.keys(v).length > 0 && Object.entries(v).every(([k, x]) => ['r', 'g', 'b', 'a'].includes(k) && x === 0)));
+
+// Under the preset, drops what is there but does nothing: empty texture slots and fully transparent
+// black colours (a FaceMask's unused pearlColor1–3, surfaceLightColor). Run after resolveRefs, when
+// bindings name their files; properties asked for by fields stay.
+export function dropUnset(res, { fields, preset } = {}) {
+  if (preset !== 'key' || !res.components) return res;
+  const components = res.components
+    .map((c) => ({ ...c, properties: Object.fromEntries(Object.entries(c.properties).filter(([k, v]) => !unset(v) || (fields && matches(k, fields)))) }))
+    .filter((c) => Object.keys(c.properties).length);
+  return { ...res, components };
+}
+
+// The official edit_by_dsl resolves { $ref, component_type } only for aliases made earlier in the same
+// batch: with an existing object's guid it answers `has no "FaceMask" component` (FaceMask, EyeColorV2,
+// DynamicComponent all tried on objects that have them, 2026-11-09). Each such ref whose $ref is not an
+// alias is turned into { $ref: <component guid> } here; the object may be given by guid, name or path,
+// as for inspect_many. Refs to nothing in the scene are left for the official tool to report.
+export async function resolveComponentRefs(commands, { objects, inspect }) {
+  const aliases = new Set();
+  const found = [];
+  const walk = (v) => {
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (!v || typeof v !== 'object') return;
+    const keys = Object.keys(v);
+    if (keys.length === 2 && typeof v.$ref === 'string' && typeof v.component_type === 'string' && !aliases.has(v.$ref)) found.push(v);
+    else Object.values(v).forEach(walk);
+  };
+  for (const c of commands) {
+    walk(c.params);
+    if (typeof c.alias === 'string') aliases.add(c.alias);
+  }
+  if (!found.length) return commands;
+  const list = await objects();
+  const componentsOf = new Map();
+  const resolved = new Map();
+  for (const ref of found) {
+    const obj = resolveObject(list, ref.$ref);
+    if (!obj) continue;
+    if (!componentsOf.has(obj.guid)) componentsOf.set(obj.guid, (await inspect(obj.guid)).components || []);
+    const all = componentsOf.get(obj.guid);
+    const hits = all.filter((c) => c.type === ref.component_type);
+    if (hits.length !== 1) {
+      throw Error(`${hits.length ? 'AMBIGUOUS_COMPONENT' : 'COMPONENT_NOT_FOUND'}: ${ref.$ref} (${obj.guid}) has ${hits.length} ${ref.component_type} components; its components are ${all.map((c) => c.type).join(', ')}`);
+    }
+    resolved.set(ref, hits[0].guid);
+  }
+  const rewrite = (v) => {
+    if (Array.isArray(v)) return v.map(rewrite);
+    if (!v || typeof v !== 'object') return v;
+    if (resolved.has(v)) return { $ref: resolved.get(v) };
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rewrite(x)]));
+  };
+  return commands.map((c) => ({ ...c, params: rewrite(c.params) }));
 }
 
 const isHandle = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && typeof v.guid === 'string';

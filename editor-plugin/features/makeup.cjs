@@ -6,7 +6,7 @@ const { M, editingScene, sceneObjectPath, resolveByPath } = require('./common.cj
 const KINDS = { FaceMaskComponentEditor: 'face_mask', EyeColorComponentEditor: 'eye_color', FilterComponentEditor: 'filter' };
 // What each kind lets a change set; makeup_set refuses anything else.
 const SETTABLE = {
-  face_mask: ['female', 'male', 'blend', 'texture'],
+  face_mask: ['female', 'male', 'intensity', 'blend', 'texture'],
   eye_color: ['intensity'],
   filter: ['intensity'],
 };
@@ -46,6 +46,8 @@ function describe(project, { comp, path, kind }) {
       blend: comp.blendMode,
       female: comp.femaleIntensity,
       male: comp.maleIntensity,
+      // The panel's 不透明度: the shader draws at clamp(intensity × female × external).
+      intensity: comp.intensity,
       external: [comp.externalFemaleIntensity, comp.externalMaleIntensity],
       texture: texturePath(project, comp.makeupTexture),
     };
@@ -110,6 +112,7 @@ const methods = {
           if (ch.texture !== undefined) set(t.comp, 'makeupTexture', textures.get(ch.texture).mainObject);
           if (ch.female !== undefined) set(t.comp, 'femaleIntensity', ch.female);
           if (ch.male !== undefined) set(t.comp, 'maleIntensity', ch.male);
+          if (ch.intensity !== undefined) set(t.comp, 'intensity', ch.intensity);
         } else set(t.comp, 'intensity', ch.intensity);
       }
     } finally {

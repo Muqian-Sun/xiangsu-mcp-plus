@@ -28,11 +28,21 @@ test('frameDiff reports the mean and largest luma change in a box; sideBySide re
   const b = frame(10, 10, (x, y) => (x === 9 && y === 9 ? [150, 150, 150] : [100, 100, 100]));
   assert.deepEqual(frameDiff(a, b, ALL), { mean: 0.5, max: 50 });
   assert.deepEqual(frameDiff(a, b, { x: 0, y: 0, width: 0.5, height: 0.5 }), { mean: 0, max: 0 });
-  const strip = PNG.sync.read(sideBySide([a, b], { x: 0.8, y: 0.8, width: 0.2, height: 0.2 }, 4));
+  const box = { x: 0.8, y: 0.8, width: 0.2, height: 0.2 };
+  const strip = PNG.sync.read(sideBySide([{ img: a, box }, { img: b, box }], 4));
   assert.deepEqual([strip.width, strip.height], [2 * 8 + 2, 8]);
   // The changed pixel (9, 9) of b fills a 4×4 block at the bottom right of the second tile, untouched by its neighbours.
   const at = (x, y) => strip.data[(y * strip.width + x) * 4];
   assert.deepEqual([at(10 + 4, 4), at(10 + 7, 7), at(10 + 3, 4), at(9, 0)], [150, 150, 100, 255]);
+});
+
+test('sideBySide wraps tiles so a strip stays within 1024 px wide', () => {
+  const img = frame(100, 20, () => [10, 20, 30]);
+  const box = { x: 0, y: 0, width: 1, height: 1 };
+  // Three 400-wide tiles at zoom 4 would be 1208 px in one row; they wrap to two rows of one and two.
+  const tiles = Array.from({ length: 3 }, () => ({ img, box }));
+  const strip = PNG.sync.read(sideBySide(tiles, 4));
+  assert.deepEqual([strip.width, strip.height], [2 * 400 + 2, 2 * 80 + 2]);
 });
 
 test('decodeUv refuses frames where the calibration texture does not show or shows one eye only', () => {

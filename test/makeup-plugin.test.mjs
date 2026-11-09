@@ -11,7 +11,7 @@ class FaceMaskComponentEditor {
   constructor(so, props) {
     this.sceneObject = so;
     this.enabled = true;
-    Object.assign(this, { externalFemaleIntensity: 1, externalMaleIntensity: 1, ...props });
+    Object.assign(this, { externalFemaleIntensity: 1, externalMaleIntensity: 1, intensity: 1, ...props });
   }
   setProperty(k, v) {
     if (this.ignore) return undefined;
@@ -82,27 +82,27 @@ function setup() {
 test('makeup_list describes the makeup layers, eye colour and filters with their strengths and textures', () => {
   const { lib } = setup();
   assert.deepEqual(lib.makeupList().layers, [
-    { object_path: '面部面具/清冷_美妆/眼线', kind: 'face_mask', enabled: true, region: 1, blend: 1, female: 0.7, male: 0, external: [1, 1], texture: '/p/Assets/liner.png' },
-    { object_path: '面部面具/清冷_美妆/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 1, female: 0.4, male: 0.05, external: [0.5, 1], texture: '/p/Assets/blush.png' },
-    { object_path: '面部面具/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 0, female: 1, male: 0, external: [1, 1], texture: null },
+    { object_path: '面部面具/清冷_美妆/眼线', kind: 'face_mask', enabled: true, region: 1, blend: 1, female: 0.7, male: 0, intensity: 1, external: [1, 1], texture: '/p/Assets/liner.png' },
+    { object_path: '面部面具/清冷_美妆/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 1, female: 0.4, male: 0.05, intensity: 1, external: [0.5, 1], texture: '/p/Assets/blush.png' },
+    { object_path: '面部面具/腮红', kind: 'face_mask', enabled: true, region: 0, blend: 0, female: 1, male: 0, intensity: 1, external: [1, 1], texture: null },
     { object_path: '面部面具/清冷_美妆/美瞳', kind: 'eye_color', enabled: true, intensity: 0.8 },
     { object_path: '滤镜/冷白皮', kind: 'filter', enabled: true, intensity: 1 },
   ]);
 });
 
-test('makeup_set changes strengths, blend and texture in one undo step and returns the layers before and after', async () => {
+test('makeup_set changes strengths, blend, panel opacity and texture in one undo step and returns the layers before and after', async () => {
   const { lib, calls, editors } = setup();
   const out = await lib.makeupSet({
     label: 'try',
     changes: [
-      { object_path: '眼线', female: 0.2, blend: 0, texture: '/p/Assets/new.png', texture_size: 1024 },
+      { object_path: '眼线', female: 0.2, intensity: 0.55, blend: 0, texture: '/p/Assets/new.png', texture_size: 1024 },
       { object_path: '美瞳', intensity: 0 },
       { object_path: '滤镜/冷白皮', intensity: 0.3 },
     ],
   });
   assert.deepEqual(calls.undo, ['start:try', 'end']);
   assert.deepEqual(calls.imports, [['/p/Assets/new.png', 'undo:makeup_set:/p/Assets/new.png']]);
-  assert.deepEqual([out.before[0].female, out.before[0].texture, out.after[0].female, out.after[0].blend, out.after[0].texture], [0.7, '/p/Assets/liner.png', 0.2, 0, '/p/Assets/new.png']);
+  assert.deepEqual([out.before[0].female, out.before[0].texture, out.after[0].female, out.after[0].blend, out.after[0].texture, out.after[0].intensity], [0.7, '/p/Assets/liner.png', 0.2, 0, '/p/Assets/new.png', 0.55]);
   assert.deepEqual([out.after[1].intensity, out.after[2].intensity], [0, 0.3]);
   assert.equal(editors[0].maleIntensity, 0);
 });
@@ -118,7 +118,7 @@ test('makeup_set imports a texture outside Assets into the project, sets its siz
 test('makeup_set refuses ambiguous paths, keys a layer does not take, and writes that did not land', async () => {
   const { lib, editors } = setup();
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '腮红', female: 0 }] }), /AMBIGUOUS_OBJECT_PATH: 腮红 matches/);
-  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', intensity: 0 }] }), /NOT_SETTABLE: 面部面具\/清冷_美妆\/眼线 is a face_mask; it takes female, male, blend, texture, not intensity/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', region: 0 }] }), /NOT_SETTABLE: 面部面具\/清冷_美妆\/眼线 is a face_mask; it takes female, male, intensity, blend, texture, not region/);
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '冷白皮', female: 0 }] }), /NOT_SETTABLE: .* is a filter/);
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线' }] }), /NOTHING_TO_SET/);
   await assert.rejects(lib.makeupSet({ changes: [] }), /INVALID_CHANGES/);

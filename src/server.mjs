@@ -14,11 +14,11 @@ import { PNG } from 'pngjs';
 import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
-import { fetchImage, readImageFile } from './images.mjs';
+import { fetchImage, readImageFile, sniffImage } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
-import { formatObjects, formatTree, pickInspect, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
+import { dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
 import { BLENDS, CURVES, LAYOUTS, LIMITS as PAINT_LIMITS, paint, previewPng, writeTexture } from './paint.mjs';
@@ -48,6 +48,10 @@ const target = {
 };
 
 const saveTo = z.string().min(1).optional().describe('另存到这个目录（绝对路径，不存在会创建），长期保留。');
+const refBox = z
+  .strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) })
+  .optional()
+  .describe('同一部位在参考图上的框（按参考图宽高的比例），和 reference 一起用。');
 
 // makeup_texture's shapes. Nested objects are strict too: a misspelt key would otherwise be dropped
 // and the shape drawn with defaults.
@@ -145,9 +149,10 @@ const HOLD_AT_MS = 3000;
 // Picked, not measured: as many states and regions as fit a readable answer.
 const MAX_COMPARE_VARIANTS = 6;
 const MAX_COMPARE_REGIONS = 6;
-// Picked: a held frame that changes by more than this (max luma step in a region) between the first and
-// the last baseline was not held (an effect that animates by itself), and the comparison is reported as such.
-const DRIFT_MAX = 8;
+// Derived: two frames of the same still photo differ by 0.5–0.8 mean luma around the eyes (13–18 at
+// the single worst pixel, so the max says nothing; measured); a region whose first and last baseline
+// differ by more than 2.5 times that was not held still (a moving video, an effect that animates by itself).
+const DRIFT_MEAN = 2;
 // Where the eye layout's lid is read: every 15 texture px across the left eye's coded window (lid.py's
 // columns, 135–330), and the same columns mirrored for the right eye.
 const LID_COLUMNS = Array.from({ length: 14 }, (_, i) => 135 + 15 * i);
@@ -186,7 +191,8 @@ const OFFICIAL_NOTES = {
     '窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。',
   get_scene: '先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。',
   inspect: '一次看多个对象、按组件类型或属性名过滤、只留关键参数时用 inspect_many（逐个调用本工具并整理结果）。',
-  edit_by_dsl: '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。',
+  edit_by_dsl:
+    '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。{"$ref": X, "component_type": T} 里的 X 不是本批前面命令的 alias 时，可以写已有对象的 guid（sNN）、名称或层级路径（同 inspect_many），转发前换成该对象上 T 组件的 guid；官方自己只认本批的 alias，已有对象的 sNN 配 component_type 会报 has no component。T 写 inspect 里的组件类型名（FaceMask、EyeColorV2、GanComponent、PostProcess 等）。',
 };
 
 function saveDir(dir) {
@@ -298,6 +304,39 @@ export function createServer(deps = {}) {
     return decodePng(img.mimeType === 'image/png' ? buf : await d.jpegToPng(buf));
   };
   const makeupSet = (projectPath, changes, label) => d.callPlugin('makeup_set', { changes, label }, { projectPath, timeoutMs: 60000 });
+  const restoreOf = ({ object_path, kind, female, male, intensity }) => (kind === 'face_mask' ? { object_path, female, male, intensity } : { object_path, intensity });
+  // Sets [{ guid, property, value }] with the official set_component and returns what puts them back.
+  // A batch stops at its first failing command; the ones before it are put back before the error.
+  const setComponents = async (instance_id, list, label) => {
+    if (!list.length) return [];
+    const commands = list.map(({ guid, property, value }) => ({ command_type: 'set_component', params: { guid, properties: { [property]: value } } }));
+    const res = await d.official.callTool('edit_by_dsl', { instance_id, commands, intention: label });
+    const body = (res.content || []).find((c) => c.type === 'text')?.text;
+    let out;
+    try {
+      out = JSON.parse(body);
+    } catch (_) {
+      throw Error(`COMPONENT_SET_FAILED: ${String(body).slice(0, 300)}`);
+    }
+    const undo = [];
+    for (const [i, c] of list.entries()) {
+      const r = out.results?.[i];
+      const was = r?.status === 'success' ? r.result?.changes?.find((x) => x.property === c.property) : null;
+      if (was) undo.push({ ...c, value: was.oldValue });
+    }
+    if (undo.length < list.length) {
+      if (undo.length) await setComponents(instance_id, undo, `${label}: put back`);
+      throw Error(`COMPONENT_SET_FAILED: ${JSON.stringify((out.results || []).filter((r) => r.status !== 'success'))}`);
+    }
+    return undo;
+  };
+  const loadImage = async (file) => {
+    const buf = fs.readFileSync(file);
+    const type = sniffImage(buf);
+    if (type === 'image/png') return decodePng(buf);
+    if (type === 'image/jpeg') return decodePng(await d.jpegToPng(buf));
+    throw Error(`NOT_PNG_OR_JPEG: ${file}`);
+  };
   const freshFrames = (projectPath) => d.callPlugin('preview_fresh', {}, { projectPath, timeoutMs: 15000 });
   // A compare region from a calibration's eye boxes for this preview video, in frame fractions.
   const eyeRegion = ({ eye, calibration, pad = 0.3 }, video, frame) => {
@@ -525,7 +564,7 @@ export function createServer(deps = {}) {
       name: 'library_search',
       refs: true,
       description:
-        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_ref，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
+        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_ref，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。第一页（没传 panel_key / offset）还会附带「添加对象」菜单里名字匹配的项到 menu_items（如「脸蛋天才」「磨皮」「发光」——它们不在素材库里，要用 menu_add 加），并写 menu_note。',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词，如「芒果脸」「腮红」「复古滤镜」。与 queries 二选一。'),
@@ -534,7 +573,22 @@ export function createServer(deps = {}) {
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
         count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 20。'),
       },
-      run: library('library_search'),
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        const page = seenLib.keep(await d.callPlugin('library_search', params, win));
+        if (params.panel_key || params.offset) return text(page);
+        // 脸蛋天才、磨皮、发光 and the like are add-object menu items, not library assets.
+        const terms = params.queries ?? [params.query];
+        const menu = new Map();
+        for (const term of terms) {
+          const q = term.toLowerCase();
+          for (const m of (await d.callPlugin('menu_list', { query: term }, win)).items) {
+            if (`${m.name}/${m.menu_id}`.toLowerCase().includes(q)) menu.set(m.menu_id, { menu_id: m.menu_id, name: m.name, path: m.path, kind: m.kind });
+          }
+        }
+        return text(menu.size ? { ...page, menu_items: [...menu.values()], menu_note: 'menu_items 是「添加对象」菜单里同名的功能，不在素材库里，用 menu_add 加' } : page);
+      },
     },
     {
       name: 'library_images',
@@ -1221,7 +1275,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。fields 也会留下内部某一层属性名包含这些片段的整块参数（如后处理的 bloom 块里的 pBloomThreshold）。妆容层（FaceMask / FaceMaskDY）的混合模式编号旁边加上 blendMode_name / surfaceBlendMode_name（如「正片叠底」）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、内部含强度类参数的整块参数（如后处理的发光、调色）、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。fields 也会留下内部某一层属性名包含这些片段的整块参数（如后处理的 bloom 块里的 pBloomThreshold）。妆容层（FaceMask / FaceMaskDY）的混合模式编号旁边加上 blendMode_name / surfaceBlendMode_name（如「正片叠底」）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/Transparency/权重/颜色类属性、AI 脸的 Channel（Texture 皮肤路 / Distortion 形变路）、内部含强度类参数的整块参数（如后处理的发光、调色）、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数；空的贴图槽（编辑器的「缺失纹理」）和完全透明的黑色（妆容层没用到的珠光色等）会丢掉（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用；fields 点名的属性即使空着也留下）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
@@ -1241,7 +1295,7 @@ export function createServer(deps = {}) {
           warn = unreadableNote(scene);
           for (const guid of guids) {
             try {
-              out.push(pickInspect(scene.inspect(guid), pick));
+              out.push(dropUnset(pickInspect(scene.inspect(guid), pick), pick));
             } catch (e) {
               out.push({ guid, error: String(e.message ?? e) });
             }
@@ -1256,7 +1310,7 @@ export function createServer(deps = {}) {
             try {
               // Not an object of the tree: a component or resource guid, passed on as given.
               const guid = resolveObject(objects, ref)?.guid ?? ref;
-              out.push(await resolveRefs(pickInspect(await inspect(guid), pick), inspect, { root, cache }));
+              out.push(dropUnset(await resolveRefs(pickInspect(await inspect(guid), pick), inspect, { root, cache }), pick));
             } catch (e) {
               out.push({ guid: ref, error: String(e.message ?? e) });
             }
@@ -1271,7 +1325,7 @@ export function createServer(deps = {}) {
     {
       name: 'makeup_layers',
       description:
-        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：官方素材包（package_id 是这个包在素材库里的 template_id）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
+        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：官方素材包（package_id 是这个包在素材库里的 template_id）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMask 的 intensity 是面板上的「不透明度」：单独加的层实际画出的浓度 opacity = intensity × 男女强度 × 外部强度；挂在整套美妆（AI 实时变脸）下的子项由 GAN 接管，改 intensity 不起作用，opacity 只按男女强度 × 外部强度算。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
       shape: {
         project_dir: z.string().min(1).describe('工程目录的绝对路径（含 Assets/main.scene），如 works_download 返回的 project_path 或自己的工程。'),
         save_to: saveTo,
@@ -1441,7 +1495,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'makeup_compare',
-      description: `在同一张脸上比较几种妆容状态：重置预览、播放 at_ms 后截基线（当前状态），再依次把每个 variant 的改动临时套上、等预览画出来、截一帧、改回去，最后再截一次基线。要用静态照片做的预览视频（如「模特D清秀||女」这些模特视频，每一帧都是同一张照片）：会动的视频每次截到的是不同的帧，两次基线对不上时返回 drift 和提示。预览暂停后不再重绘，所以不能靠暂停停住画面。改动只能是强度：妆容层的 female / male、美瞳和滤镜的 intensity（用来「关掉这层看看」「强度 0.3 和 0.6 比一比」，实时生效；换贴图、换混合模式要重载预览）。整套妆的子项也可以这样调，强度改回原值，不会删层。regions 是按画面比例（0–1）给的区域，如眼下、脸颊、唇：每个区域返回每种状态的平均色 RGB / HSL、亮度 luma（Rec.601）、皮肤细节 detail（亮度减去 σ ${DETAIL_SIGMA} px 高斯模糊后的平均绝对差，越高纹理越多），以及相对基线的差值；再给一张并排放大图（基线在最左，之后按 variants 顺序，像素直接放大不插值）。同一张静态照片上前后两帧在眼部的噪声约 0.5–0.8（平均，最大 13–18），差值比这个小的看不出区别。videos 依次在几个预览视频上各比一次，完了切回原视频。跑完所有改动都已改回；切换过视频或改过参数后工程会显示「已修改」。`,
+      description: `在同一张脸上比较几种妆容状态：重置预览、播放 at_ms 后截基线（当前状态），再依次把每个 variant 的改动临时套上、等预览画出来、截一帧、改回去，最后再截一次基线。要用静态照片做的预览视频（如「模特D清秀||女」这些模特视频，每一帧都是同一张照片）：会动的视频每次截到的是不同的帧，两次基线的平均亮度差超过 ${DRIFT_MEAN} 时返回提示。预览暂停后不再重绘，所以不能靠暂停停住画面。改动有两种，都实时生效、跑完改回原值：一是妆容层的 female / male（男女强度）和 intensity（面板上的「不透明度」，单独加的层实际画出的浓度是它 × 男女强度；整套美妆的子项由 AI 脸接管，改它不起作用）、美瞳和滤镜的 intensity；二是任意组件的一个数值属性：object_path + component（inspect 里的组件类型名，如 GanComponent、PostProcess）+ property（如 Transparency、bloom.pBloomIntensity）+ value，经官方 set_component 设置，用来比 AI 脸皮肤路强度、发光强度这类参数。换贴图、换混合模式要重载预览，不在这里比。整套妆的子项也可以这样调，强度改回原值，不会删层。regions 是按画面比例（0–1）给的区域，如眼下、脸颊、唇：每个区域返回每种状态的平均色 RGB / HSL、亮度 luma（Rec.601）、皮肤细节 detail（亮度减去 σ ${DETAIL_SIGMA} px 高斯模糊后的平均绝对差，越高纹理越多），以及相对基线的差值；再给一张并排放大图（基线在最前，之后按 variants 顺序，像素直接放大不插值，一行放不下时换行）。给了 reference（参考图）时，区域的 ref 是同一部位在参考图上的框（按参考图的比例），每种状态另给 to_reference（相对参考图的差值），并排图最后一格是参考图的这一块（缩放到同样大小）。同一张静态照片上前后两帧在眼部的噪声约 0.5–0.8（平均，最大 13–18），差值比这个小的看不出区别。videos 依次在几个预览视频上各比一次，完了切回原视频。跑完所有改动都已改回；切换过视频或改过参数后工程会显示「已修改」。`,
       shape: {
         ...target,
         variants: z
@@ -1450,12 +1504,20 @@ export function createServer(deps = {}) {
               label: z.string().min(1).max(20),
               changes: z
                 .array(
-                  z.strictObject({
-                    object_path: z.string().min(1).describe('妆容层、美瞳或滤镜对象的层级路径（或能唯一定位的末尾几段）。'),
-                    female: z.number().min(0).max(1).optional(),
-                    male: z.number().min(0).max(1).optional(),
-                    intensity: z.number().min(0).max(1).optional().describe('美瞳、滤镜的强度。'),
-                  }),
+                  z.union([
+                    z.strictObject({
+                      object_path: z.string().min(1).describe('妆容层、美瞳或滤镜对象的层级路径（或能唯一定位的末尾几段）。'),
+                      female: z.number().min(0).max(1).optional(),
+                      male: z.number().min(0).max(1).optional(),
+                      intensity: z.number().min(0).max(1).optional().describe('妆容层：面板上的不透明度；美瞳、滤镜：强度。'),
+                    }),
+                    z.strictObject({
+                      object_path: z.string().min(1).describe('对象的 guid、名称或层级路径（同 inspect_many）。'),
+                      component: z.string().min(1).describe('组件类型名，如 GanComponent、PostProcess。'),
+                      property: z.string().min(1).describe('属性名，嵌套的用点路径，如 Transparency、bloom.pBloomIntensity。'),
+                      value: z.union([z.number(), z.boolean()]),
+                    }),
+                  ]),
                 )
                 .min(1)
                 .max(40),
@@ -1466,18 +1528,20 @@ export function createServer(deps = {}) {
         regions: z
           .array(
             z.union([
-              z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }),
+              z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1), ref: refBox }),
               z.strictObject({
                 label: z.string().min(1).max(20),
                 eye: z.enum(['left', 'right', 'both']).describe('取标定量出的眼睛范围：画面左眼、右眼或双眼。'),
                 calibration: z.string().min(1).describe('makeup_calibrate（layout=eye）存下的 calibration-eye.json 的绝对路径，里面要有这次用到的每个预览视频。'),
                 pad: z.number().min(0).max(2).optional().describe('在眼睛范围外再留多少（占范围宽高的比例），默认 0.3。'),
+                ref: refBox,
               }),
             ]),
           )
           .min(1)
           .max(MAX_COMPARE_REGIONS)
           .describe('区域：按画面比例给框，或用 eye + calibration 按每位模特自己的眼睛位置取（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏）。'),
+        reference: z.string().min(1).optional().describe('参考图（PNG / JPEG）的绝对路径；和区域的 ref 一起用。'),
         videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（list_preview_videos 返回的 video_name）；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
         at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再截基线（毫秒），默认 ${HOLD_AT_MS}（AI 变脸要过一会儿才完全生效）。`),
@@ -1485,20 +1549,43 @@ export function createServer(deps = {}) {
         save_to: saveTo,
       },
       run: async (a) => {
-        const { variants, regions, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, zoom = 3, save_to } = a;
+        const { variants, regions, reference, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, zoom = 3, save_to } = a;
+        if (!reference !== !regions.some((r) => r.ref)) throw Error(reference ? 'REFERENCE_UNUSED: give ref boxes on the regions to compare with the reference' : 'REFERENCE_MISSING: regions give ref boxes but no reference image');
+        const ref = reference ? await loadImage(reference) : null;
         const instance_id = await officialInstance(a);
         const projectPath = await projects.resolveProjectPath({ instance_id });
         const dir = save_to ? saveDir(save_to) : d.framesDir();
+        // Component changes are resolved to component guids before the preview is touched.
+        const isComponent = (c) => 'component' in c;
+        const guids = new Map();
+        if (variants.some((v) => v.changes.some(isComponent))) {
+          const objects = sceneObjects(await namesTree(instance_id));
+          for (const c of variants.flatMap((v) => v.changes).filter(isComponent)) {
+            const key = `${c.object_path}|${c.component}`;
+            if (guids.has(key)) continue;
+            const obj = resolveObject(objects, c.object_path);
+            if (!obj) throw Error(`OBJECT_NOT_FOUND: ${c.object_path}`);
+            const all = (await d.official.callJson('inspect', { instance_id, guid: obj.guid, intention: '找要临时改的组件' })).components || [];
+            const hits = all.filter((x) => x.type === c.component);
+            if (hits.length !== 1) throw Error(`${hits.length ? 'AMBIGUOUS_COMPONENT' : 'COMPONENT_NOT_FOUND'}: ${c.object_path} has ${hits.length} ${c.component} components; its components are ${all.map((x) => x.type).join(', ')}`);
+            guids.set(key, hits[0].guid);
+          }
+        }
         const runs = await eachVideo(instance_id, videos, tracking_type, (video) =>
           onPlayingPreview(projectPath, at_ms, async () => {
             const frames = [await pngFrame(projectPath)];
             for (const v of variants) {
-              const { before } = await makeupSet(projectPath, v.changes, `makeup_compare: ${v.label}`);
+              const masks = v.changes.filter((c) => !isComponent(c));
+              const comps = v.changes.filter(isComponent).map((c) => ({ guid: guids.get(`${c.object_path}|${c.component}`), property: c.property, value: c.value }));
+              const { before } = masks.length ? await makeupSet(projectPath, masks, `makeup_compare: ${v.label}`) : { before: [] };
+              let undo = [];
               try {
+                undo = await setComponents(instance_id, comps, `makeup_compare: ${v.label}`);
                 await freshFrames(projectPath);
                 frames.push(await pngFrame(projectPath));
               } finally {
-                await makeupSet(projectPath, before.map(({ object_path, kind, female, male, intensity }) => (kind === 'face_mask' ? { object_path, female, male } : { object_path, intensity })), 'makeup_compare: restore');
+                if (undo.length) await setComponents(instance_id, undo, 'makeup_compare: restore');
+                if (before.length) await makeupSet(projectPath, before.map(restoreOf), 'makeup_compare: restore');
               }
             }
             await freshFrames(projectPath);
@@ -1518,15 +1605,27 @@ export function createServer(deps = {}) {
             for (const s of states.slice(1)) {
               s.delta = { rgb: s.rgb.map((v, c) => Number((v - base.rgb[c]).toFixed(1))), luma: Number((s.luma - base.luma).toFixed(1)), detail: Number((s.detail - base.detail).toFixed(2)) };
             }
+            const target = given.ref ? regionStats(ref, given.ref) : null;
+            if (target) {
+              for (const s of states) s.to_reference = { rgb: s.rgb.map((v, c) => Number((v - target.rgb[c]).toFixed(1))), luma: Number((s.luma - target.luma).toFixed(1)), detail: Number((s.detail - target.detail).toFixed(2)) };
+            }
             const drift = frameDiff(frames[0], again, r);
             const file = path.join(dir, `${prefix}compare-${j + 1}.png`);
-            fs.writeFileSync(file, sideBySide(frames, r, zoom));
+            fs.writeFileSync(file, sideBySide([...frames.map((img) => ({ img, box: r })), ...(target ? [{ img: ref, box: given.ref }] : [])], zoom));
             const box = pixelBox(frames[0], r);
-            return { label: given.label, box_px: [box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0], states, drift, ...(drift.max > DRIFT_MAX ? { warning: '前后两次基线不一样，这期间画面自己在变（会动的视频或自带动画的特效），各状态之间的差别不全是改动造成的' } : {}), image: file };
+            return {
+              label: given.label,
+              box_px: [box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0],
+              states,
+              ...(target ? { reference: target } : {}),
+              drift,
+              ...(drift.mean > DRIFT_MEAN ? { warning: '前后两次基线不一样，这期间画面自己在变（会动的视频或自带动画的特效），各状态之间的差别不全是改动造成的' } : {}),
+              image: file,
+            };
           });
           out.push({ video, regions: regionsOut });
-          for (const r of regionsOut) {
-            content.push({ type: 'text', text: `${video ? `${video} ` : ''}${r.label}：${labels.join(' | ')}` });
+          for (const [j, r] of regionsOut.entries()) {
+            content.push({ type: 'text', text: `${video ? `${video} ` : ''}${r.label}：${[...labels, ...(regions[j].ref ? ['参考'] : [])].join(' | ')}` });
             content.push({ type: 'image', ...(await d.readImageFile(r.image)) });
           }
         }
@@ -1577,7 +1676,7 @@ export function createServer(deps = {}) {
             }),
           );
         } finally {
-          if (restore) await makeupSet(projectPath, restore.map(({ object_path, kind, female, male, intensity }) => (kind === 'face_mask' ? { object_path, female, male } : { object_path, intensity })), 'makeup_calibrate: restore');
+          if (restore) await makeupSet(projectPath, restore.map(restoreOf), 'makeup_calibrate: restore');
           if (temp) {
             const removed = await d.callPlugin('object_remove', { object_path: temp, delete_unused_resources: true }, { projectPath, timeoutMs: 60000 });
             cleanup.push(...removed.resources_deleted);
@@ -1967,6 +2066,16 @@ export function createServer(deps = {}) {
     return { tools: [...mine, ...official] };
   });
 
+  // Official tools whose arguments are rewritten here before they are forwarded.
+  const rewritten = {
+    edit_by_dsl: async (args) => {
+      if (!Array.isArray(args.commands)) return args;
+      const instance_id = String(args.instance_id);
+      const inspect = (guid) => d.official.callJson('inspect', { instance_id, guid, intention: '把 $ref 的对象换成组件 guid' });
+      return { ...args, commands: await resolveComponentRefs(args.commands, { objects: async () => sceneObjects(await namesTree(instance_id)), inspect }) };
+    },
+  };
+
   const callTool = async (name, args) => {
     const t = own.get(name);
     if (t) {
@@ -1987,8 +2096,16 @@ export function createServer(deps = {}) {
         return failure(e);
       }
     }
+    let forward = args;
+    if (Object.prototype.hasOwnProperty.call(rewritten, name)) {
+      try {
+        forward = await rewritten[name](args);
+      } catch (e) {
+        return failure(e);
+      }
+    }
     try {
-      return await d.official.callTool(name, args);
+      return await d.official.callTool(name, forward);
     } catch (e) {
       if (e instanceof McpError) return failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`);
       if (e instanceof OfficialUnreachable) return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);

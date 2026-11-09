@@ -94,23 +94,33 @@ export function frameDiff(a, b, box) {
   return { mean: Number((sum / ((x1 - x0) * (y1 - y0))).toFixed(2)), max: Math.round(max) };
 }
 
-// The same box cut from each frame, scaled up `zoom` times by pixel replication (no interpolation, so
-// nothing is invented), side by side with a 2 px white gap.
-export function sideBySide(frames, box, zoom) {
-  const { x0, y0, x1, y1 } = pixelBox(frames[0], box);
-  const cw = (x1 - x0) * zoom;
-  const ch = (y1 - y0) * zoom;
+// Measured: a 7-state strip 2.2k px wide came back to the chat scaled to 1024 px, too small to make out
+// lashes; rows are kept within this width instead.
+const STRIP_WIDTH = 1024;
+
+// Crops [{ img, box }] of the same part, each scaled to the first crop's size × zoom by pixel
+// replication (nearest, so nothing is invented), in rows no wider than STRIP_WIDTH with a 2 px white gap.
+export function sideBySide(tiles, zoom) {
+  const first = pixelBox(tiles[0].img, tiles[0].box);
+  const cw = (first.x1 - first.x0) * zoom;
+  const ch = (first.y1 - first.y0) * zoom;
   const GAP = 2;
-  const out = new PNG({ width: frames.length * cw + (frames.length - 1) * GAP, height: ch });
+  const cols = Math.max(1, Math.min(tiles.length, Math.floor((STRIP_WIDTH + GAP) / (cw + GAP))));
+  const rows = Math.ceil(tiles.length / cols);
+  const out = new PNG({ width: cols * cw + (cols - 1) * GAP, height: rows * ch + (rows - 1) * GAP });
   out.data.fill(255);
-  frames.forEach((f, k) => {
+  tiles.forEach(({ img, box }, k) => {
+    const { x0, y0, x1, y1 } = pixelBox(img, box);
+    const [ox, oy] = [(k % cols) * (cw + GAP), Math.floor(k / cols) * (ch + GAP)];
     for (let y = 0; y < ch; y++) {
+      const sy = y0 + Math.min(y1 - y0 - 1, Math.floor((y * (y1 - y0)) / ch));
       for (let x = 0; x < cw; x++) {
-        const si = ((y0 + Math.floor(y / zoom)) * f.width + x0 + Math.floor(x / zoom)) * 4;
-        const di = (y * out.width + k * (cw + GAP) + x) * 4;
-        out.data[di] = f.data[si];
-        out.data[di + 1] = f.data[si + 1];
-        out.data[di + 2] = f.data[si + 2];
+        const sx = x0 + Math.min(x1 - x0 - 1, Math.floor((x * (x1 - x0)) / cw));
+        const si = (sy * img.width + sx) * 4;
+        const di = ((oy + y) * out.width + ox + x) * 4;
+        out.data[di] = img.data[si];
+        out.data[di + 1] = img.data[si + 1];
+        out.data[di + 2] = img.data[si + 2];
         out.data[di + 3] = 255;
       }
     }
