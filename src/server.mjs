@@ -406,6 +406,10 @@ export function createServer(deps = {}) {
     const { project_path, instance_id, ...params } = args;
     return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
   };
+  const effectKeys = {
+    effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。'),
+    app_effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的同一个特效的 app_effect_id（抖音上的特效 ID）。'),
+  };
   const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。');
   const workPage = {
     category_id: z.string().optional().describe('works_list 返回的 categories 里的分类 ID；省略时用第一个分类（推荐）。'),
@@ -888,7 +892,7 @@ export function createServer(deps = {}) {
       name: 'my_effects',
       refs: true,
       description:
-        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews；曝光、投稿趋势、等级和收益把 effect_id 和 app_effect_id 交给 my_effect_stats。',
+        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews；把 effect_id 和 app_effect_id 交给 my_effect_data（数据卡片）、my_effect_trend（按天趋势和投稿等级）、my_effect_revenue（收益）。',
       shape: {
         ...target,
         cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
@@ -905,24 +909,42 @@ export function createServer(deps = {}) {
       run: community('my_effect_reviews'),
     },
     {
-      name: 'my_effect_stats',
+      name: 'my_effect_data',
       refs: true,
       description:
-        '一个自己已上线特效的数据，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；投稿等级 level（当前等级代码 code、当前投稿 publish、下一级代码 next_code、升到下一级还差的投稿 publish_to_next）；数据趋势 trend（按天的曝光 exposure 和投稿 publish，是逐日累计值，数据隔天才更新，当天为空；另有累计曝光、试拍 trial_total、跟拍、视频播放）；流量状态 traffic（如「流量正常」）；播放数 views（与任务页的播放数同源）；收益明细 revenue（总收益、基础等级奖、年轻奖、跟拍奖、精选奖，各带说明如「暂未达到最低等级」「不符合精选标准」）；绑定的任务和灵感 related。等级代码和字母等级的对应没有接口给出，投稿门槛见激励规则（像塑 App「激励规则」页）。',
-      shape: {
-        ...target,
-        effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。'),
-        app_effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的同一个特效的 app_effect_id（抖音上的特效 ID）。'),
-        trend: z.enum(Object.keys(TREND_CYCLES)).optional().describe('数据趋势的范围：recent 近 7 日（默认），since_online 上线后。'),
-      },
-      run: community('my_effect_stats'),
+        '一个自己已上线特效的数据卡片，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；流量状态 traffic（如「流量正常」）；播放数 views（与任务页的播放数同源）；绑定的任务和灵感 related。按天的趋势和投稿等级用 my_effect_trend，收益用 my_effect_revenue。',
+      shape: { ...target, ...effectKeys },
+      run: community('my_effect_data'),
     },
     {
-      name: 'my_overview',
+      name: 'my_effect_trend',
       description:
-        '当前账号的总览，与像塑移动版「我的」页和钱包同一组接口：昵称、粉丝数、是否实名、特效作者 / 模板作者各自的等级 identities；数据卡片 figures（开拍总计、播放总计、本月提交、本月上线、本月收入、累计收入，页面原样的名称、值和文字）；本月数据 month（本月上线数、本月收入、前一天收入、累计收入，其余字段含义未核实，原样放在 unread）；收益 revenue（累计和当月总额、按来源的占比和金额、当月每天的收入）。month 参数选看哪个月的收益。',
-      shape: { ...target, month: z.string().regex(/^\d{6}$/).optional().describe('收益月份 YYYYMM，默认本月。') },
-      run: community('my_overview'),
+        '一个自己已上线特效的「数据趋势」和投稿等级（像塑移动版「作品详情」页同一接口）：按天的曝光 exposure 和投稿 publish（逐日累计值，数据隔天才更新，当天为空），累计曝光、试拍 trial_total、跟拍、视频播放；投稿等级 level（当前等级代码 code、当前投稿 publish、下一级代码 next_code、升到下一级还差的投稿 publish_to_next）。等级代码和字母等级的对应没有接口给出，投稿门槛见像塑 App「激励规则」页。',
+      shape: {
+        ...target,
+        ...effectKeys,
+        trend: z.enum(Object.keys(TREND_CYCLES)).optional().describe('范围：recent 近 7 日（默认），since_online 上线后。'),
+      },
+      run: community('my_effect_trend'),
+    },
+    {
+      name: 'my_effect_revenue',
+      description: '一个自己已上线特效的收益明细（像塑移动版「作品详情」页同一接口）：总收益、基础等级奖、年轻奖、跟拍奖、精选奖，每项的金额 amount（页面原样）、说明 note（如「暂未达到最低等级」「不符合精选标准」）和是否已解锁。',
+      shape: { ...target, ...effectKeys },
+      run: community('my_effect_revenue'),
+    },
+    {
+      name: 'my_profile',
+      description:
+        '当前账号的资料和数字，与像塑移动版「我的」页同一组接口：昵称、粉丝数、是否实名、特效作者 / 模板作者各自的等级 identities；数据卡片 figures（开拍总计、播放总计、本月提交、本月上线、本月收入、累计收入，页面原样的名称、值和文字）；本月数据 month（本月上线数、本月收入、前一天收入、累计收入，其余字段含义未核实，原样放在 unread）。收益明细用 my_revenue。',
+      shape: { ...target },
+      run: community('my_profile'),
+    },
+    {
+      name: 'my_revenue',
+      description: '当前账号的收益，与像塑移动版「钱包」同一接口：累计和某个月的总额、按来源（投稿收益等）的占比和金额、那个月每天的收入。',
+      shape: { ...target, month: z.string().regex(/^\d{6}$/).optional().describe('月份 YYYYMM，默认本月。') },
+      run: community('my_revenue'),
     },
     {
       name: 'messages_list',

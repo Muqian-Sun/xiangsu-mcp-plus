@@ -1187,7 +1187,7 @@ test('server kind and rank filter enums match the plugin tables', async () => {
   assert.deepEqual(props('rank_innovation').kind.enum, INNOVATION_KINDS);
   for (const key of Object.keys(RANK_FILTERS)) assert.deepEqual(props('rank_list')[key].items.enum, Object.keys(RANK_FILTERS[key].options), key);
   assert.deepEqual(props('rank_subjects').kind.enum, Object.keys(SUBJECT_KINDS));
-  assert.deepEqual(props('my_effect_stats').trend.enum, Object.keys(TREND_CYCLES));
+  assert.deepEqual(props('my_effect_trend').trend.enum, Object.keys(TREND_CYCLES));
   assert.deepEqual(props('messages_list').group.enum, Object.keys(MESSAGE_GROUPS));
   assert.equal(props('messages_list').count.maximum, MESSAGE_MAX);
 });
@@ -1279,9 +1279,9 @@ const EFFECT_ROUTES = {
   'GET /cam_api/effect/v1/scarce_category': noData,
 };
 
-test('my_effect_stats reads every 作品详情 card with the 抖音 app id and the trend window', async () => {
+test('my_effect_data reads the 作品详情 data cards with the 抖音 app id', async () => {
   const { lib, to } = setup(EFFECT_ROUTES);
-  assert.deepEqual(await lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787' }), {
+  assert.deepEqual(await lib.myEffectData({ effect_id: '92012413', app_effect_id: '285940787' }), {
     effect_id: '92012413',
     app_effect_id: '285940787',
     name: 'S16冠军',
@@ -1299,87 +1299,107 @@ test('my_effect_stats reads every 作品详情 card with the 抖音 app id and t
       { name: '特效类型', value: 5167, text: '玩法测试' },
       { name: '年轻喜爱度', value: 10, text: '10分' },
     ],
-    level: { code: 0, publish: '3', next_code: 29, publish_to_next: '297', is_new: true, overtime: false },
-    trend: {
-      window: 'recent',
-      days: [
-        { date: '2026-11-05', exposure: null, publish: 1 },
-        { date: '2026-11-06', exposure: 40, publish: 3 },
-        { date: '2026-11-07', exposure: 64, publish: 3 },
-        { date: '2026-11-08', exposure: 77, publish: null },
-      ],
-      exposure_total: '77',
-      trial_total: '5',
-      follow_shoot: '0',
-      video_plays: '23',
-    },
     traffic: { status: 2, tags: ['流量正常'] },
     views: '43',
-    revenue: [
-      { name: '总收益', amount: '0', note: null, unlocked: true },
-      { name: '精选奖', amount: '0', note: '不符合精选标准', unlocked: false },
-    ],
     related: [{ type: '绑定任务', id: '107846', name: '扮演AR新玩法共创赛', status: 2 }],
   });
   const keyed = { effect_id: '92012413', app_effect_id: '285940787', app_id: '184' };
-  for (const p of ['/cam_api/effect/v1/base', '/cam_api/effect/v1/online_data', '/cam_api/effect/v1/revenue', '/cam_api/effect/v1/related_info', '/cam_api/effect/v1/tips', '/cam_api/effect/v1/scarce_category']) {
+  for (const p of ['/cam_api/effect/v1/base', '/cam_api/effect/v1/online_data', '/cam_api/effect/v1/related_info', '/cam_api/effect/v1/tips', '/cam_api/effect/v1/scarce_category']) {
     assert.deepEqual(to(p)[0].query, keyed, p);
   }
-  assert.deepEqual(to('/effectcam/v1/effect_pub_stat')[0].query, { ...keyed, cycle: '1' });
   assert.deepEqual(to('/cam_api/effect/v1/effect_traffic')[0].query, { effect_id: '92012413', app_effect_id: '285940787' });
   assert.deepEqual(to('/effectcam/v1/effect_vv')[0].query, { app_effect_id: '285940787', app_id: '184' });
-
-  await lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' });
-  assert.equal(to('/effectcam/v1/effect_pub_stat')[1].query.cycle, '2');
+  for (const p of ['/effectcam/v1/effect_pub_stat', '/cam_api/effect/v1/revenue']) assert.equal(to(p).length, 0, p);
 
   // Cards that answer without data leave their fields empty; tips and scarce_category with data stay unread.
-  const bare = setup({
-    ...EFFECT_ROUTES,
-    'GET /cam_api/effect/v1/online_data': noData,
-    'GET /effectcam/v1/effect_pub_stat': noData,
-    'GET /cam_api/effect/v1/scarce_category': ok({ category: '萌宠' }),
-  });
-  const thin = await bare.lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787' });
+  const bare = setup({ ...EFFECT_ROUTES, 'GET /cam_api/effect/v1/online_data': noData, 'GET /cam_api/effect/v1/scarce_category': ok({ category: '萌宠' }) });
+  const thin = await bare.lib.myEffectData({ effect_id: '92012413', app_effect_id: '285940787' });
   assert.deepEqual(thin.figures, []);
-  assert.deepEqual(thin.level, { code: null, publish: null, next_code: null, publish_to_next: null, is_new: null, overtime: null });
-  assert.deepEqual(thin.trend.days, []);
   assert.deepEqual(thin.unread, { scarce_category: { category: '萌宠' } });
 
   const wrong = setup({ ...EFFECT_ROUTES, 'GET /effectcam/v1/effect_vv': JSON.stringify({ code: 1004, message: '无法查询' }) });
-  await assert.rejects(wrong.lib.myEffectStats({ effect_id: '92012413', app_effect_id: '1' }), /GET_EFFECT_VV_FAILED: code=1004 message=无法查询/);
-  await assert.rejects(lib.myEffectStats({ effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }), /INVALID_TREND: 7d; valid: recent, since_online/);
-  await assert.rejects(lib.myEffectStats({ effect_id: '92012413' }), /INVALID_APP_EFFECT_ID/);
-  await assert.rejects(lib.myEffectStats({ app_effect_id: '285940787' }), /INVALID_EFFECT_ID/);
+  await assert.rejects(wrong.lib.myEffectData({ effect_id: '92012413', app_effect_id: '1' }), /GET_EFFECT_VV_FAILED: code=1004 message=无法查询/);
+  await assert.rejects(lib.myEffectData({ effect_id: '92012413' }), /INVALID_APP_EFFECT_ID/);
+  await assert.rejects(lib.myEffectData({ app_effect_id: '285940787' }), /INVALID_EFFECT_ID/);
 });
 
-test('my_overview reads the 我的 page figures, the month data it can name and the wallet revenue', async () => {
-  const routes = {
-    'GET /cam_api/designer/v1/base': ok({
-      designer: { uid: 1805811249320653, username: '沐谦', gender: 1, is_real_name: false, fans_num: 207 },
-      identity_list: [
-        { name: '特效作者', identity_type: 1, lv: 2, lv_name: '新手特效师' },
-        { name: '模板作者', identity_type: 2, lv: 2, lv_name: '新手模板师' },
-      ],
-    }),
-    'GET /cam_api/designer/v1/data': ok({
-      display_list: [
-        { type: 4, display_type: '本月上线', val: 16, display_val: '16' },
-        { type: 5, display_type: '本月收入', val: 5100, display_val: '51.00' },
-      ],
-    }),
-    'GET /effectcam/v1/month_data': ok({ date: '20261109', revenue: '51.00', pd_revenue: '10.00', on_amount: '16', panel_amount: '14', all_pub: '4', all_rev: '51.00' }),
-    'GET /effectcam/v1/account_revenue': ok({
-      partner_play_incentive: '0.00',
-      a_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', i: { uri: 'x' }, re: '51.00' }] },
-      m_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', re: '51.00' }], re_m: '202611' },
-      m_d_res: [
-        { d: '20261108', w_day: 7, re: '10.00' },
-        { d: '20261106', w_day: 5, re: '41.00' },
-      ],
-    }),
-  };
-  const { lib, to } = setup(routes);
-  assert.deepEqual(await lib.myOverview(), {
+test('my_effect_trend reads 数据趋势 by day and the submission level for either window', async () => {
+  const { lib, to } = setup(EFFECT_ROUTES);
+  assert.deepEqual(await lib.myEffectTrend({ effect_id: '92012413', app_effect_id: '285940787' }), {
+    effect_id: '92012413',
+    app_effect_id: '285940787',
+    window: 'recent',
+    level: { code: 0, publish: '3', next_code: 29, publish_to_next: '297', is_new: true, overtime: false },
+    days: [
+      { date: '2026-11-05', exposure: null, publish: 1 },
+      { date: '2026-11-06', exposure: 40, publish: 3 },
+      { date: '2026-11-07', exposure: 64, publish: 3 },
+      { date: '2026-11-08', exposure: 77, publish: null },
+    ],
+    exposure_total: '77',
+    trial_total: '5',
+    follow_shoot: '0',
+    video_plays: '23',
+  });
+  assert.deepEqual(to('/effectcam/v1/effect_pub_stat')[0].query, { effect_id: '92012413', app_effect_id: '285940787', app_id: '184', cycle: '1' });
+  assert.equal(to('/cam_api/effect/v1/base').length, 0);
+  await lib.myEffectTrend({ effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' });
+  assert.equal(to('/effectcam/v1/effect_pub_stat')[1].query.cycle, '2');
+
+  const bare = setup({ ...EFFECT_ROUTES, 'GET /effectcam/v1/effect_pub_stat': noData });
+  const thin = await bare.lib.myEffectTrend({ effect_id: '92012413', app_effect_id: '285940787' });
+  assert.deepEqual(thin.level, { code: null, publish: null, next_code: null, publish_to_next: null, is_new: null, overtime: null });
+  assert.deepEqual(thin.days, []);
+  await assert.rejects(lib.myEffectTrend({ effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }), /INVALID_TREND: 7d; valid: recent, since_online/);
+  await assert.rejects(lib.myEffectTrend({ effect_id: '92012413' }), /INVALID_APP_EFFECT_ID/);
+});
+
+test('my_effect_revenue reads the 作品详情 收益 card', async () => {
+  const { lib, to } = setup(EFFECT_ROUTES);
+  assert.deepEqual(await lib.myEffectRevenue({ effect_id: '92012413', app_effect_id: '285940787' }), {
+    effect_id: '92012413',
+    app_effect_id: '285940787',
+    items: [
+      { name: '总收益', amount: '0', note: null, unlocked: true },
+      { name: '精选奖', amount: '0', note: '不符合精选标准', unlocked: false },
+    ],
+  });
+  assert.deepEqual(to('/cam_api/effect/v1/revenue')[0].query, { effect_id: '92012413', app_effect_id: '285940787', app_id: '184' });
+  assert.equal(to('/cam_api/effect/v1/base').length, 0);
+  const bare = setup({ ...EFFECT_ROUTES, 'GET /cam_api/effect/v1/revenue': noData });
+  assert.deepEqual((await bare.lib.myEffectRevenue({ effect_id: '92012413', app_effect_id: '285940787' })).items, []);
+  await assert.rejects(lib.myEffectRevenue({ app_effect_id: '285940787' }), /INVALID_EFFECT_ID/);
+});
+
+const DESIGNER_ROUTES = {
+  'GET /cam_api/designer/v1/base': ok({
+    designer: { uid: 1805811249320653, username: '沐谦', gender: 1, is_real_name: false, fans_num: 207 },
+    identity_list: [
+      { name: '特效作者', identity_type: 1, lv: 2, lv_name: '新手特效师' },
+      { name: '模板作者', identity_type: 2, lv: 2, lv_name: '新手模板师' },
+    ],
+  }),
+  'GET /cam_api/designer/v1/data': ok({
+    display_list: [
+      { type: 4, display_type: '本月上线', val: 16, display_val: '16' },
+      { type: 5, display_type: '本月收入', val: 5100, display_val: '51.00' },
+    ],
+  }),
+  'GET /effectcam/v1/month_data': ok({ date: '20261109', revenue: '51.00', pd_revenue: '10.00', on_amount: '16', panel_amount: '14', all_pub: '4', all_rev: '51.00' }),
+  'GET /effectcam/v1/account_revenue': ok({
+    partner_play_incentive: '0.00',
+    a_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', i: { uri: 'x' }, re: '51.00' }] },
+    m_re: { t_re: '51.00', ro_list: [{ t: 1, n: '投稿收益', ro: '100%', re: '51.00' }], re_m: '202611' },
+    m_d_res: [
+      { d: '20261108', w_day: 7, re: '10.00' },
+      { d: '20261106', w_day: 5, re: '41.00' },
+    ],
+  }),
+};
+
+test('my_profile reads the 我的 page: the designer, their levels, the figures and the month data it can name', async () => {
+  const { lib, to } = setup(DESIGNER_ROUTES);
+  assert.deepEqual(await lib.myProfile(), {
     uid: '1805811249320653',
     nickname: '沐谦',
     fans: 207,
@@ -1393,23 +1413,29 @@ test('my_overview reads the 我的 page figures, the month data it can name and 
       { name: '本月收入', value: 5100, text: '51.00' },
     ],
     month: { date: '2026-11-09', online_count: '16', revenue_yuan: 51, previous_day_revenue_yuan: 10, revenue_total_yuan: 51, unread: { panel_amount: '14', all_pub: '4' } },
-    revenue: {
-      total_yuan: 51,
-      sources_total: [{ name: '投稿收益', share: '100%', yuan: 51 }],
-      month: '202611',
-      month_yuan: 51,
-      sources_month: [{ name: '投稿收益', share: '100%', yuan: 51 }],
-      days: [
-        { date: '2026-11-08', yuan: 10 },
-        { date: '2026-11-06', yuan: 41 },
-      ],
-      partner_play_incentive_yuan: 0,
-    },
+  });
+  assert.equal(to('/effectcam/v1/account_revenue').length, 0);
+});
+
+test('my_revenue reads the 钱包 revenue of a month', async () => {
+  const { lib, to } = setup(DESIGNER_ROUTES);
+  assert.deepEqual(await lib.myRevenue(), {
+    total_yuan: 51,
+    sources_total: [{ name: '投稿收益', share: '100%', yuan: 51 }],
+    month: '202611',
+    month_yuan: 51,
+    sources_month: [{ name: '投稿收益', share: '100%', yuan: 51 }],
+    days: [
+      { date: '2026-11-08', yuan: 10 },
+      { date: '2026-11-06', yuan: 41 },
+    ],
+    partner_play_incentive_yuan: 0,
   });
   assert.deepEqual(to('/effectcam/v1/account_revenue')[0].query, {});
-  await lib.myOverview({ month: '202610' });
+  assert.equal(to('/cam_api/designer/v1/base').length, 0);
+  await lib.myRevenue({ month: '202610' });
   assert.deepEqual(to('/effectcam/v1/account_revenue')[1].query, { d_m: '202610' });
-  await assert.rejects(lib.myOverview({ month: '2026-10' }), /INVALID_MONTH: 2026-10; expected YYYYMM/);
+  await assert.rejects(lib.myRevenue({ month: '2026-10' }), /INVALID_MONTH: 2026-10; expected YYYYMM/);
 });
 
 test('messages_list pages the 消息 page by the last message id and names each message group and effect', async () => {
@@ -1509,29 +1535,38 @@ test('the creator data tools go to the lowest-pid window and check their argumen
   const seen = [];
   const client = await connect({
     listInstances: () => [{ pid: 300 }, { pid: 200 }],
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), method === 'my_effect_stats' ? { icon_url: 'https://cdn/s16.png' } : { method }),
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), method === 'my_effect_data' ? { icon_url: 'https://cdn/s16.png' } : { method }),
   });
   const call = (name, args) => client.callTool({ name, arguments: args });
-  assert.deepEqual(JSON.parse((await call('my_effect_stats', { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' })).content[0].text), { icon_ref: 'img:1' });
-  await call('my_overview', { month: '202610' });
+  assert.deepEqual(JSON.parse((await call('my_effect_data', { effect_id: '92012413', app_effect_id: '285940787' })).content[0].text), { icon_ref: 'img:1' });
+  await call('my_effect_trend', { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' });
+  await call('my_effect_revenue', { effect_id: '92012413', app_effect_id: '285940787' });
+  await call('my_profile', {});
+  await call('my_revenue', { month: '202610' });
   await call('messages_list', { group: 'official', cursor: '414978447', count: 50 });
   await call('my_task_status', {});
   assert.deepEqual(seen, [
-    { method: 'my_effect_stats', params: { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' }, opts: { pid: 200 } },
-    { method: 'my_overview', params: { month: '202610' }, opts: { pid: 200 } },
+    { method: 'my_effect_data', params: { effect_id: '92012413', app_effect_id: '285940787' }, opts: { pid: 200 } },
+    { method: 'my_effect_trend', params: { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' }, opts: { pid: 200 } },
+    { method: 'my_effect_revenue', params: { effect_id: '92012413', app_effect_id: '285940787' }, opts: { pid: 200 } },
+    { method: 'my_profile', params: {}, opts: { pid: 200 } },
+    { method: 'my_revenue', params: { month: '202610' }, opts: { pid: 200 } },
     { method: 'messages_list', params: { group: 'official', cursor: '414978447', count: 50 }, opts: { pid: 200 } },
     { method: 'my_task_status', params: {}, opts: { pid: 200 } },
   ]);
   for (const [name, args] of [
-    ['my_effect_stats', { effect_id: '92012413' }],
-    ['my_effect_stats', { effect_id: '92012413', app_effect_id: 'x' }],
-    ['my_effect_stats', { effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }],
-    ['my_overview', { month: '2026-10' }],
+    ['my_effect_data', { effect_id: '92012413' }],
+    ['my_effect_data', { effect_id: '92012413', app_effect_id: 'x' }],
+    ['my_effect_data', { effect_id: '92012413', app_effect_id: '285940787', trend: 'recent' }],
+    ['my_effect_trend', { effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }],
+    ['my_effect_revenue', { app_effect_id: '285940787' }],
+    ['my_profile', { month: '202610' }],
+    ['my_revenue', { month: '2026-10' }],
     ['messages_list', { group: 'system' }],
     ['messages_list', { count: 51 }],
     ['messages_list', { cursor: 'abc' }],
   ]) {
     assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
   }
-  assert.equal(seen.length, 4);
+  assert.equal(seen.length, 7);
 });

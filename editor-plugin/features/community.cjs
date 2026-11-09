@@ -868,30 +868,30 @@ const methods = {
     };
   },
 
-  // The mobile app's 作品详情 page: one request per card, keyed like the page keys them.
-  async myEffectStats({ effect_id, app_effect_id, trend = 'recent' } = {}) {
-    const id = requireId(effect_id, 'INVALID_EFFECT_ID');
-    const appId = requireId(app_effect_id, 'INVALID_APP_EFFECT_ID');
-    if (!hasOwn(TREND_CYCLES, trend)) throw Error(`INVALID_TREND: ${trend}; valid: ${Object.keys(TREND_CYCLES).join(', ')}`);
-    const query = { effect_id: id, app_effect_id: appId, app_id: DOUYIN_APP_ID };
+  // The 作品详情 page's cards are keyed by the effect, its 抖音 id and 抖音's app id.
+  effectQuery({ effect_id, app_effect_id } = {}) {
+    return { effect_id: requireId(effect_id, 'INVALID_EFFECT_ID'), app_effect_id: requireId(app_effect_id, 'INVALID_APP_EFFECT_ID'), app_id: DOUYIN_APP_ID };
+  },
+
+  // 作品详情 page, data cards: where the effect is online, what it uses, its figures and traffic.
+  async myEffectData(params = {}) {
+    const query = this.effectQuery(params);
     const cards = await Promise.all([
       request(this, 'GET_EFFECT_BASE', '/cam_api/effect/v1/base', { query }),
       request(this, 'GET_EFFECT_ONLINE_DATA', '/cam_api/effect/v1/online_data', { query }),
-      request(this, 'GET_EFFECT_PUB_STAT', '/effectcam/v1/effect_pub_stat', { query: { ...query, cycle: TREND_CYCLES[trend] } }),
-      request(this, 'GET_EFFECT_REVENUE', '/cam_api/effect/v1/revenue', { query }),
-      request(this, 'GET_EFFECT_TRAFFIC', '/cam_api/effect/v1/effect_traffic', { query: { effect_id: id, app_effect_id: appId } }),
-      request(this, 'GET_EFFECT_VV', '/effectcam/v1/effect_vv', { query: { app_effect_id: appId, app_id: DOUYIN_APP_ID } }),
+      request(this, 'GET_EFFECT_TRAFFIC', '/cam_api/effect/v1/effect_traffic', { query: { effect_id: query.effect_id, app_effect_id: query.app_effect_id } }),
+      request(this, 'GET_EFFECT_VV', '/effectcam/v1/effect_vv', { query: { app_effect_id: query.app_effect_id, app_id: DOUYIN_APP_ID } }),
       request(this, 'GET_EFFECT_RELATED', '/cam_api/effect/v1/related_info', { query }),
       request(this, 'GET_EFFECT_TIPS', '/cam_api/effect/v1/tips', { query }),
       request(this, 'GET_SCARCE_CATEGORY', '/cam_api/effect/v1/scarce_category', { query }),
     ]);
     // tips and scarce_category answer code 0 without data; the other cards might too.
-    const [base, online, stat, revenue, traffic, vv, related] = cards.slice(0, 7).map((c) => c || {});
-    const [tips, scarce] = cards.slice(7);
+    const [base, online, traffic, vv, related] = cards.slice(0, 5).map((c) => c || {});
+    const [tips, scarce] = cards.slice(5);
     const e = base.effect || {};
     const out = {
-      effect_id: id,
-      app_effect_id: appId,
+      effect_id: query.effect_id,
+      app_effect_id: query.app_effect_id,
       name: e.name ?? null,
       type: e.artwork_type_desc || null,
       submitted_at: iso(e.submit_at),
@@ -899,27 +899,10 @@ const methods = {
       apps: [base.dy_app_effect, ...(base.other_app_effects || [])].filter(Boolean).map(slimAppEffect),
       functions: ((base.project && base.project.fn_types) || []).map((f) => f.name),
       tags: (base.tags || []).map((t) => t.text),
-      figures: slimFigures(online && online.display_list),
-      level: {
-        code: stat.cur_lv ?? null,
-        publish: stat.cur_pub ?? null,
-        next_code: stat.next_lv ?? null,
-        publish_to_next: stat.next_lv_need_pub ?? null,
-        is_new: stat.is_new_inc ?? null,
-        overtime: stat.is_overtime ?? null,
-      },
-      trend: {
-        window: trend,
-        days: trendDays(stat),
-        exposure_total: stat.total_show ?? null,
-        trial_total: stat.total_trial ?? null,
-        follow_shoot: stat.follow_shoot_pub ?? null,
-        video_plays: stat.video_plays ?? null,
-      },
+      figures: slimFigures(online.display_list),
       traffic: { status: traffic.traffic_status ?? null, tags: (traffic.details || []).map((x) => x.tag && x.tag.name).filter(Boolean) },
       views: vv.vv_num ?? null,
-      revenue: ((revenue && revenue.revenue_details) || []).map((r) => ({ name: r.display_type, amount: r.amount ?? null, note: r.detail_text || null, unlocked: r.unlocked ?? null })),
-      related: ((related && related.details) || []).map((r) => ({ type: r.type_desc || null, id: str(r.id), name: r.name || '', status: r.related_status ?? null })),
+      related: (related.details || []).map((r) => ({ type: r.type_desc || null, id: str(r.id), name: r.name || '', status: r.related_status ?? null })),
     };
     // Both cards answered no data for every effect tried (2026-11-09); what they carry is not known yet.
     const unread = {};
@@ -929,28 +912,59 @@ const methods = {
     return out;
   },
 
-  // The mobile app's 我的 page figures and 钱包 revenue; `month` (YYYYMM) picks the revenue month.
-  async myOverview({ month } = {}) {
-    if (month !== undefined && !/^\d{6}$/.test(month)) throw Error(`INVALID_MONTH: ${month}; expected YYYYMM`);
-    const [base, figures, monthData, revenue] = await Promise.all([
+  // 作品详情 page, 数据趋势 card: exposure and submissions by day, and the submission level.
+  async myEffectTrend({ trend = 'recent', ...params } = {}) {
+    const query = this.effectQuery(params);
+    if (!hasOwn(TREND_CYCLES, trend)) throw Error(`INVALID_TREND: ${trend}; valid: ${Object.keys(TREND_CYCLES).join(', ')}`);
+    const stat = (await request(this, 'GET_EFFECT_PUB_STAT', '/effectcam/v1/effect_pub_stat', { query: { ...query, cycle: TREND_CYCLES[trend] } })) || {};
+    return {
+      effect_id: query.effect_id,
+      app_effect_id: query.app_effect_id,
+      window: trend,
+      level: {
+        code: stat.cur_lv ?? null,
+        publish: stat.cur_pub ?? null,
+        next_code: stat.next_lv ?? null,
+        publish_to_next: stat.next_lv_need_pub ?? null,
+        is_new: stat.is_new_inc ?? null,
+        overtime: stat.is_overtime ?? null,
+      },
+      days: trendDays(stat),
+      exposure_total: stat.total_show ?? null,
+      trial_total: stat.total_trial ?? null,
+      follow_shoot: stat.follow_shoot_pub ?? null,
+      video_plays: stat.video_plays ?? null,
+    };
+  },
+
+  // 作品详情 page, 收益 card.
+  async myEffectRevenue(params = {}) {
+    const query = this.effectQuery(params);
+    const d = (await request(this, 'GET_EFFECT_REVENUE', '/cam_api/effect/v1/revenue', { query })) || {};
+    return {
+      effect_id: query.effect_id,
+      app_effect_id: query.app_effect_id,
+      items: (d.revenue_details || []).map((r) => ({ name: r.display_type, amount: r.amount ?? null, note: r.detail_text || null, unlocked: r.unlocked ?? null })),
+    };
+  },
+
+  // The mobile app's 我的 page: the designer, their levels, the figure cards and this month's numbers.
+  async myProfile() {
+    const [base, figures, monthData] = await Promise.all([
       request(this, 'GET_DESIGNER_BASE', '/cam_api/designer/v1/base'),
       request(this, 'GET_DESIGNER_DATA', '/cam_api/designer/v1/data'),
       request(this, 'GET_MONTH_DATA', '/effectcam/v1/month_data'),
-      request(this, 'GET_ACCOUNT_REVENUE', '/effectcam/v1/account_revenue', { query: { d_m: month } }),
     ]);
-    const designer = base.designer || {};
+    const designer = (base && base.designer) || {};
     // Read off one answer against the figures and the daily revenue (2026-11-09): on_amount matched 本月上线,
     // revenue 本月收入, all_rev 累计收入, pd_revenue the day before's revenue. The rest stay unread.
     const { date, revenue: monthRevenue, pd_revenue, on_amount, all_rev, ...unread } = monthData || {};
-    const sources = (r) => ((r && r.ro_list) || []).map((s) => ({ name: s.n, share: s.ro || null, yuan: yuan(s.re) }));
-    const total = revenue.a_re || {};
-    const inMonth = revenue.m_re || {};
     return {
       uid: str(designer.uid),
       nickname: designer.username || null,
       fans: designer.fans_num ?? null,
       real_name: designer.is_real_name ?? null,
-      identities: (base.identity_list || []).map((i) => ({ name: i.name, level: i.lv ?? null, level_name: i.lv_name || null })),
+      identities: ((base && base.identity_list) || []).map((i) => ({ name: i.name, level: i.lv ?? null, level_name: i.lv_name || null })),
       figures: slimFigures(figures && figures.display_list),
       month: {
         date: day(date),
@@ -960,15 +974,24 @@ const methods = {
         revenue_total_yuan: yuan(all_rev),
         unread,
       },
-      revenue: {
-        total_yuan: yuan(total.t_re),
-        sources_total: sources(total),
-        month: inMonth.re_m ?? null,
-        month_yuan: yuan(inMonth.t_re),
-        sources_month: sources(inMonth),
-        days: (revenue.m_d_res || []).map((x) => ({ date: day(x.d), yuan: yuan(x.re) })),
-        partner_play_incentive_yuan: yuan(revenue.partner_play_incentive),
-      },
+    };
+  },
+
+  // The mobile app's 钱包 revenue page; `month` (YYYYMM) picks the month, default this one.
+  async myRevenue({ month } = {}) {
+    if (month !== undefined && !/^\d{6}$/.test(month)) throw Error(`INVALID_MONTH: ${month}; expected YYYYMM`);
+    const revenue = (await request(this, 'GET_ACCOUNT_REVENUE', '/effectcam/v1/account_revenue', { query: { d_m: month } })) || {};
+    const sources = (r) => ((r && r.ro_list) || []).map((s) => ({ name: s.n, share: s.ro || null, yuan: yuan(s.re) }));
+    const total = revenue.a_re || {};
+    const inMonth = revenue.m_re || {};
+    return {
+      total_yuan: yuan(total.t_re),
+      sources_total: sources(total),
+      month: inMonth.re_m ?? null,
+      month_yuan: yuan(inMonth.t_re),
+      sources_month: sources(inMonth),
+      days: (revenue.m_d_res || []).map((x) => ({ date: day(x.d), yuan: yuan(x.re) })),
+      partner_play_incentive_yuan: yuan(revenue.partner_play_incentive),
     };
   },
 
@@ -1011,8 +1034,11 @@ const METHODS = {
   rank_innovation: 'rankInnovation',
   my_effects: 'myEffects',
   my_effect_reviews: 'myEffectReviews',
-  my_effect_stats: 'myEffectStats',
-  my_overview: 'myOverview',
+  my_effect_data: 'myEffectData',
+  my_effect_trend: 'myEffectTrend',
+  my_effect_revenue: 'myEffectRevenue',
+  my_profile: 'myProfile',
+  my_revenue: 'myRevenue',
   messages_list: 'messagesList',
   my_task_status: 'myTaskStatus',
 };
