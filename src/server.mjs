@@ -1178,7 +1178,7 @@ export function createServer(deps = {}) {
     {
       name: 'my_effect_reviews',
       description:
-        '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空）。',
+        '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空；实测正在精选审核中的特效这里也是空的，有没有进精选审核、是否入选用 my_innovation_status）。',
       shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。') },
       run: community('my_effect_reviews'),
     },
@@ -1203,7 +1203,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'my_effect_revenue',
-      description: '一个自己已上线特效的收益明细（像塑移动版「作品详情」页同一接口）：总收益、基础等级奖、年轻奖、跟拍奖、精选奖，每项的金额 amount（页面原样）、说明 note（如「暂未达到最低等级」「不符合精选标准」）和是否已解锁。',
+      description: '一个自己已上线特效的收益明细（像塑移动版「作品详情」页同一接口）：总收益、基础等级奖、年轻奖、跟拍奖、精选奖，每项的金额 amount（页面原样）、说明 note（如「暂未达到最低等级」「不符合精选标准」）和是否已解锁。精选奖的「不符合精选标准」实测对每个特效都一样（包括正在精选审核中的），看不出精选状态，用 my_innovation_status。',
       shape: { ...target, ...effectKeys },
       run: community('my_effect_revenue'),
     },
@@ -1223,7 +1223,7 @@ export function createServer(deps = {}) {
     {
       name: 'messages_list',
       description:
-        '像塑移动版「消息」页的站内信，最新的在前：标题、正文、时间、是否已读、分组（服务 / 官方）、审核类消息的状态和对应的 effect_id、点开的链接 link。包括发布成功、进入测试、上线（「拍摄特效视频可获得更多冷启流量」）、审核未通过、精选审核中、任务完成、获奖公布、成长之路奖金到账等。按 cursor 翻页。',
+        '像塑移动版「消息」页的站内信，最新的在前：标题、正文、时间、是否已读、分组（服务 / 官方）、审核类消息的状态、对应特效的 effect_id（审核、上线、精选审核等关于某个特效的消息才有）、点开的链接 link。包括发布成功、进入测试、上线（「拍摄特效视频可获得更多冷启流量」）、审核未通过、精选审核中、任务完成、获奖公布、成长之路奖金到账等。按 cursor 翻页。',
       shape: {
         ...target,
         group: z.enum(Object.keys(MESSAGE_GROUPS)).optional().describe('all 全部（默认），service 服务（任务完成、获奖公布、精选审核等），official 官方（发布、审核、上线等）。'),
@@ -1239,6 +1239,13 @@ export function createServer(deps = {}) {
         '一次列出提交到所有已领取任务里的作品和它们的任务评定（逐个任务读任务详情页的「我的作品」，与 task_detail 的 my_effects 相同）：每条带任务 task_id 和标题、作品名、effect_id、审核状态、拍摄 / 播放 / 投稿峰值、任务评定 task_state（pending 待评定、unfinished 任务未完成、done 任务已完成）和 off_theme（任务页标了「主题不符合」）；summary 按评定计数并统计主题不符合的条数。没交过作品的任务不出现在列表里；每个已领取任务一次请求，按顺序发。',
       shape: { ...target },
       run: community('my_task_status'),
+    },
+    {
+      name: 'my_innovation_status',
+      description:
+        '当前账号每个特效的精选情况和精选率。精选不用单独提交：平台在审核时评估，挑中的特效会收到站内信「你的特效正在精选审核中，预估7个工作日完成」（实测多数在上线后半分钟内，也有几小时后的）；只有 LV3+ 特效师能在提交页勾「精选提报」。逐个给出 state：picked 已入选（像塑移动版「作品」页「官方精选」筛选列出的）、in_review 精选审核中、notified 最近一条精选相关站内信不是「审核中」（多半是结果通知，原文在 notices 里）、none 没收到过精选相关的站内信；review_since 是收到「精选审核中」的时间，notices 是这个特效全部提到精选的站内信（新的在前）。summary 统计已上线（status 103）的特效里各状态的个数和精选率 pick_rate。每次读全部作品（两遍，一遍只取精选）和全部站内信，每 50 条一次请求，作品和站内信越多请求越多（18 个作品、103 条站内信时 5 次）。',
+      shape: { ...target },
+      run: community('my_innovation_status'),
     },
     {
       name: 'effect_detail',

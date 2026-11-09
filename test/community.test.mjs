@@ -1721,7 +1721,14 @@ test('messages_list pages the 消息 page by the last message id and names each 
         msg('414978447', '1', '获奖公布｜开学季热爆答题测试征集赛', 'https://effect.douyin.com/content/46hw70th/41y6q3nf?'),
       ],
     },
-    414978447: { has_more: false, messages: [msg('414970000', '9', '新分组', '')] },
+    414978447: {
+      has_more: false,
+      messages: [
+        msg('414970000', '9', '新分组', ''),
+        msg('414960000', '2', '小猫陪你跳', 'effectcam://flutter?page=/effect-detail&appEffectIdStr=286917268&appEffectId=286917268&effectId=92275961&source=1&appId=184&from=profile'),
+        msg('414950000', '1', '任务完成', 'effectcam://flutter?page=/task-detail&itemid=108200&type=1&detid=555&newTask=0'),
+      ],
+    },
   };
   const { lib, to } = setup({ 'GET /cam_api/message/v1/list': (call) => ok(pages[call.query.cursor]) });
   const first = await lib.messagesList({ count: 2 });
@@ -1739,9 +1746,69 @@ test('messages_list pages the 消息 page by the last message id and names each 
   assert.deepEqual(to('/cam_api/message/v1/list')[1].query, { group: '1', cursor: '414978447', count: '20' });
   assert.equal(last.items[0].group, '9');
   assert.equal(last.items[0].link, null);
+  // 上线 and 精选审核 notices open the app's 作品详情 page, which carries the effect; task pages do not.
+  assert.deepEqual(last.items.map((m) => m.effect_id), [null, '92275961', null]);
   assert.equal(last.next_cursor, null);
   assert.equal(last.has_more, false);
   await assert.rejects(lib.messagesList({ group: 'system' }), /INVALID_GROUP: system; valid: all, service, official/);
+});
+
+test('my_innovation_status tells picked, in-review and notified effects from the 官方精选 filter and the 精选 messages', async () => {
+  const art = (id, name, status = 103, online = 1794191538000) => ({ id, name, effect_status: status, effect_status_desc: status === 103 ? '已上线' : '审核中', first_online_at: String(status === 103 ? online : 0) });
+  // A full first page of offline effects, so the list is read on with the sort key it hands back.
+  const filler = Array.from({ length: 50 }, (_, i) => art(String(80000000 + i), `旧${i}`, 104));
+  const all = [art('1', '已入选'), art('2', '审核中的'), art('3', '有结果的'), art('4', '没进的'), art('5', '还没上线', 100)];
+  const detail = (id) => `effectcam://flutter?page=/effect-detail&appEffectId=9&effectId=${id}&source=1&appId=184`;
+  const msg = (id, title, content, page, time) => ({ id, group: '2', title, content, is_ack: true, time, page });
+  const pages = {
+    '': {
+      has_more: true,
+      messages: [
+        msg('900', '有结果的', '精选审核结果：未入选', detail('3'), 1794300000000),
+        msg('899', '票选精选遗珠', '快来投票', 'https://effect.douyin.com/m/vote', 1794290000000),
+        msg('898', '审核中的', '特效已上线抖音，拍摄特效视频可获得更多冷启流量', detail('2'), 1794280000000),
+      ],
+    },
+    898: {
+      has_more: false,
+      messages: [
+        msg('897', '审核中的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('2'), 1794270000000),
+        msg('896', '有结果的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('3'), 1794260000000),
+        msg('895', '已入选', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('1'), 1794250000000),
+        msg('894', '审核中的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('2'), 1794240000000),
+      ],
+    },
+  };
+  const { lib, to } = setup({
+    'GET /effectcam/v1/artworks': (call) => {
+      if (call.query.rating === '1') return ok({ effects: [all[0]], sort: 'c1', total: 1 });
+      return ok(call.query.sort === 's1' ? { effects: all, sort: 's2' } : { effects: filler, sort: 's1' });
+    },
+    'GET /cam_api/message/v1/list': (call) => ok(pages[call.query.cursor]),
+  });
+  const out = await lib.myInnovationStatus();
+  assert.deepEqual(out.summary, { online: 4, picked: 1, in_review: 1, notified: 1, pick_rate: 0.25 });
+  assert.equal(out.items.length, 55);
+  const byId = Object.fromEntries(out.items.map((i) => [i.effect_id, i]));
+  assert.deepEqual(byId['1'], {
+    effect_id: '1',
+    name: '已入选',
+    status: 103,
+    status_text: '已上线',
+    online_at: new Date(1794191538000).toISOString(),
+    state: 'picked',
+    review_since: new Date(1794250000000).toISOString(),
+    notices: [{ at: new Date(1794250000000).toISOString(), content: '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。' }],
+  });
+  // review_since is the first 精选审核中 notice.
+  assert.deepEqual([byId['2'].state, byId['2'].review_since, byId['2'].notices.length], ['in_review', new Date(1794240000000).toISOString(), 2]);
+  assert.deepEqual([byId['3'].state, byId['3'].review_since, byId['3'].notices.map((n) => n.content)], ['notified', new Date(1794260000000).toISOString(), ['精选审核结果：未入选', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。']]);
+  assert.deepEqual([byId['4'].state, byId['4'].notices, byId['5'].state, byId['5'].online_at], ['none', [], 'none', null]);
+  assert.deepEqual(
+    to('/effectcam/v1/artworks').map((c) => c.query),
+    [{ count: '50' }, { count: '50', rating: '1' }, { count: '50', sort: 's1' }],
+  );
+  assert.deepEqual(to('/cam_api/message/v1/list').map((c) => c.query), [{ group: '0', cursor: '', count: '50' }, { group: '0', cursor: '898', count: '50' }]);
 });
 
 test('my_task_status reads 我的作品 of every received task, in order, and counts the 评定', async () => {
@@ -1818,6 +1885,7 @@ test('the creator data tools go to the lowest-pid window and check their argumen
   await call('my_revenue', { month: '202610' });
   await call('messages_list', { group: 'official', cursor: '414978447', count: 50 });
   await call('my_task_status', {});
+  await call('my_innovation_status', {});
   assert.deepEqual(seen, [
     { method: 'my_effect_data', params: { effect_id: '92012413', app_effect_id: '285940787' }, opts: { pid: 200 } },
     { method: 'my_effect_trend', params: { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' }, opts: { pid: 200 } },
@@ -1826,6 +1894,7 @@ test('the creator data tools go to the lowest-pid window and check their argumen
     { method: 'my_revenue', params: { month: '202610' }, opts: { pid: 200 } },
     { method: 'messages_list', params: { group: 'official', cursor: '414978447', count: 50 }, opts: { pid: 200 } },
     { method: 'my_task_status', params: {}, opts: { pid: 200 } },
+    { method: 'my_innovation_status', params: {}, opts: { pid: 200 } },
   ]);
   for (const [name, args] of [
     ['my_effect_data', { effect_id: '92012413' }],
@@ -1838,10 +1907,11 @@ test('the creator data tools go to the lowest-pid window and check their argumen
     ['messages_list', { group: 'system' }],
     ['messages_list', { count: 51 }],
     ['messages_list', { cursor: 'abc' }],
+    ['my_innovation_status', { effect_id: '92012413' }],
   ]) {
     assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
   }
-  assert.equal(seen.length, 7);
+  assert.equal(seen.length, 8);
 });
 
 // Trimmed from the 实时热点 and 热点详情 answers (2026-11-09).
