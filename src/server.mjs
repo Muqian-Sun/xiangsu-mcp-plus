@@ -22,9 +22,7 @@ import { prepareIcon } from './icons.mjs';
 import { dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
-import { BLENDS, LAYOUTS } from './paint.mjs';
 import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
-import { LID_SEARCH, WINDOWS, decodeUv, encodeRamp, encodeUv, overlay, textureGrid, toneCurve, undoTone, upperLid } from './calib.mjs';
 import { FRAMES_TTL_MS, cropImage, framesDir, jpegToPng, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
@@ -75,9 +73,6 @@ const MAX_COMPARE_REGIONS = 6;
 // the single worst pixel, so the max says nothing; measured); a region whose first and last baseline
 // differ by more than 2.5 times that was not held still (a moving video, an effect that animates by itself).
 const DRIFT_MEAN = 2;
-// Where the eye layout's lid is read: every 15 texture px across the left eye's coded window (lid.py's
-// columns, 135–330), and the same columns mirrored for the right eye.
-const LID_COLUMNS = Array.from({ length: 14 }, (_, i) => 135 + 15 * i);
 // The official screenshot's size: it scales the preview down to 320×569.
 const OFFICIAL_SHOT_SIDE = 569;
 // Measured: the preview service answers ttl 604800 (a week); used when an answer carries no ttl.
@@ -298,23 +293,6 @@ export function createServer(deps = {}) {
     throw Error(`NOT_PNG_OR_JPEG: ${file}`);
   };
   const freshFrames = (projectPath) => d.callPlugin('preview_fresh', {}, { projectPath, timeoutMs: 15000 });
-  // A compare region from a calibration's eye boxes for this preview video, in frame fractions.
-  const eyeRegion = ({ eye, calibration, pad = 0.3 }, video, frame) => {
-    const cal = JSON.parse(fs.readFileSync(calibration, 'utf8'));
-    if (cal.layout !== 'eye') throw Error(`CALIBRATION_NOT_EYE: ${calibration} is a ${cal.layout} calibration`);
-    const run = cal.runs.find((r) => r.video === video);
-    if (!run) throw Error(`VIDEO_NOT_CALIBRATED: ${video ?? '(current video)'} is not in ${calibration}; it has ${cal.runs.map((r) => r.video ?? '(current video)').join(', ')}`);
-    const boxes = run.parts.filter((p) => eye === 'both' || p.eye === eye).map((p) => p.box_px);
-    const x0 = Math.min(...boxes.map((b) => b[0]));
-    const y0 = Math.min(...boxes.map((b) => b[1]));
-    const x1 = Math.max(...boxes.map((b) => b[0] + b[2]));
-    const y1 = Math.max(...boxes.map((b) => b[1] + b[3]));
-    const [pw, ph] = [(x1 - x0) * pad, (y1 - y0) * pad];
-    const fx = (v) => Math.max(0, Math.min(1, v / frame.width));
-    const fy = (v) => Math.max(0, Math.min(1, v / frame.height));
-    const box = { x: fx(x0 - pw), y: fy(y0 - ph) };
-    return { ...box, width: fx(x1 + pw) - box.x, height: fy(y1 + ph) - box.y };
-  };
   // Runs fn(video) once per preview video (or once on the current one), switching back afterwards.
   const eachVideo = async (instance_id, videos, tracking_type, fn) => {
     if (!videos) return [await fn(null)];
@@ -1440,21 +1418,10 @@ export function createServer(deps = {}) {
           .min(1)
           .max(MAX_COMPARE_VARIANTS),
         regions: z
-          .array(
-            z.union([
-              z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1), ref: refBox }),
-              z.strictObject({
-                label: z.string().min(1).max(20),
-                eye: z.enum(['left', 'right', 'both']).describe('取标定量出的眼睛范围：画面左眼、右眼或双眼。'),
-                calibration: z.string().min(1).describe('makeup_calibrate（layout=eye）存下的 calibration-eye.json 的绝对路径，里面要有这次用到的每个预览视频。'),
-                pad: z.number().min(0).max(2).optional().describe('在眼睛范围外再留多少（占范围宽高的比例），默认 0.3。'),
-                ref: refBox,
-              }),
-            ]),
-          )
+          .array(z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1), ref: refBox }))
           .min(1)
           .max(MAX_COMPARE_REGIONS)
-          .describe('区域：按画面比例给框，或用 eye + calibration 按每位模特自己的眼睛位置取（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏）。'),
+          .describe('区域：按画面比例给框（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏，换模特时按截图重新给框）。'),
         reference: z.string().min(1).optional().describe('参考图（PNG / JPEG）的绝对路径；和区域的 ref 一起用。'),
         videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
@@ -1513,7 +1480,7 @@ export function createServer(deps = {}) {
         for (const [k, { video, frames, again }] of runs.entries()) {
           const prefix = videos ? `v${k + 1}-` : '';
           const regionsOut = regions.map((given, j) => {
-            const r = 'eye' in given ? eyeRegion(given, video, frames[0]) : given;
+            const r = given;
             const states = frames.map((f, i) => ({ label: labels[i], ...regionStats(f, r) }));
             const base = states[0];
             for (const s of states.slice(1)) {
@@ -1551,120 +1518,8 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'makeup_calibrate',
-      description: `量出妆容贴图在当前预览模特脸上落在哪里。临时加一个 layout 区域的妆容层（面板不透明度设成 1：新建层默认 0.5，会让标定颜色和皮肤混色、坐标整体偏大），贴上「颜色就是贴图坐标」的标定贴图（R=x、G=y），截图期间把其它妆容层、美瞳、滤镜的强度临时调成 0（整套妆的子项也只是调强度，不删不关），在 at_ms 之后截一张带标定层的、一张不带的（要用静态照片做的模特视频，两张才是同一张脸）（即这张脸只有 AI 脸、美型时的样子），再截一张贴着灰阶条纹的：预览可能给画出来的颜色再套一条色调曲线（不透明度 1 时实测接近直线：0→7、255→254），从条纹量出每个通道的曲线 tone_curve（各灰阶在画面上的值），先把曲线反算回去再逐像素解码出每个画面像素对应的贴图坐标；条纹某一级在画面上看不到、或量出的曲线不单调时报错，不猜；截完改回所有强度，删掉临时层和标定贴图。返回每个预览视频（eye 布局下每只眼）的：画面上的范围 box_px、每画面像素对应多少贴图像素、标注图（不带妆的脸放大 4 倍，红线 / 青线是贴图 y 每 ${5} 像素的等高线，红线标了数值；黄色刻度是贴图 x 每 30 像素），以及 textures_grid（贴图上每 10 像素的格点落在画面哪个像素，写进 calibration.json）。eye 布局另返回上眼皮：每一列贴图 x 上，眼皮皮肤结束处 edge（亮度下降最快处）和上眼缘最暗处 rim 的贴图 y（右眼的 x 已换算成贴图右半边的坐标），画内眼线时线的上沿放在 rim 上方几像素、下沿到 rim。预览截图是 JPEG，每只眼的映射用二维多项式拟合（避开素帧里亮度变化剧烈的边缘），fit_rms 是拟合残差（实测 D、E、G、I 约 1–3 贴图像素）；眼皮边、上眼缘读不准的列给 null，不猜。滤镜以外还有会改颜色的后处理（自写的 .omtl 等）时解码会失败并说明，先把它们关掉再标定。`,
-      shape: {
-        ...target,
-        layout: z.enum(Object.keys(LAYOUTS)).describe('要标定的贴图布局：face 整脸、eye 眼部、lips 唇部。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次在这些预览视频上标定（preview_videos 列出的 video_name），如几位模特的正脸视频；不给就用当前视频。'),
-        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
-        at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再截图（毫秒），默认 ${HOLD_AT_MS}。`),
-        save_to: saveTo,
-      },
-      run: async (a) => {
-        const { layout, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, save_to } = a;
-        const instance_id = await officialInstance(a);
-        const projectPath = await projects.resolveProjectPath({ instance_id });
-        const dir = save_to ? saveDir(save_to) : d.framesDir();
-        const stamp = Date.now();
-        const uvFile = path.join(projectPath, 'Assets', `xs-calibration-${layout}-${stamp}.png`);
-        const rampFile = path.join(projectPath, 'Assets', `xs-calibration-ramp-${layout}-${stamp}.png`);
-        fs.writeFileSync(uvFile, encodeUv(layout));
-        fs.writeFileSync(rampFile, encodeRamp(layout));
-        let temp = null;
-        const imported = new Set();
-        let restore = null;
-        const cleanup = [];
-        let runs;
-        try {
-          const { layers } = await d.callPlugin('makeup_list', {}, { projectPath, timeoutMs: 15000 });
-          temp = (await d.callPlugin('makeup_add_layer', { region: layout }, { projectPath, timeoutMs: 180000 })).object_path;
-          const mute = layers.map((l) => (l.kind === 'face_mask' ? { object_path: l.object_path, female: 0, male: 0 } : { object_path: l.object_path, intensity: 0 }));
-          imported.add(uvFile);
-          // A new layer's panel opacity is 0.5, which mixes the code half and half with the skin (the
-          // shader draws at intensity × female × external).
-          await makeupSet(projectPath, [{ object_path: temp, texture: uvFile, blend: BLENDS.normal, female: 1, male: 1, intensity: 1 }], 'makeup_calibrate: calibration layer');
-          if (mute.length) restore = (await makeupSet(projectPath, mute, 'makeup_calibrate: mute makeup')).before;
-          runs = await eachVideo(instance_id, videos, tracking_type, (video) =>
-            onPlayingPreview(projectPath, at_ms, async () => {
-              const coded = await pngFrame(projectPath);
-              await makeupSet(projectPath, [{ object_path: temp, female: 0, male: 0 }], 'makeup_calibrate: bare');
-              let bare;
-              try {
-                await freshFrames(projectPath);
-                bare = await pngFrame(projectPath);
-              } finally {
-                await makeupSet(projectPath, [{ object_path: temp, female: 1, male: 1 }], 'makeup_calibrate: calibration layer');
-              }
-              imported.add(rampFile);
-              await makeupSet(projectPath, [{ object_path: temp, texture: rampFile }], 'makeup_calibrate: tone ramp');
-              try {
-                await freshFrames(projectPath);
-                return { video, coded, bare, ramp: await pngFrame(projectPath) };
-              } finally {
-                await makeupSet(projectPath, [{ object_path: temp, texture: uvFile }], 'makeup_calibrate: calibration layer');
-              }
-            }),
-          );
-        } finally {
-          if (restore) await makeupSet(projectPath, restore.map(restoreOf), 'makeup_calibrate: restore');
-          if (temp) {
-            const removed = await d.callPlugin('object_remove', { object_path: temp, delete_unused_resources: true }, { projectPath, timeoutMs: 60000 });
-            cleanup.push(...removed.resources_deleted);
-          }
-          // Never handed to the editor: a plain file. Handed over but still there (the import or the
-          // layer change failed, or removing the layer kept it): a resource, or a plain file if the
-          // import never registered it.
-          for (const file of [uvFile, rampFile]) {
-            const rel = path.relative(projectPath, file);
-            if (!imported.has(file)) fs.rmSync(file, { force: true });
-            else if (fs.existsSync(file)) {
-              try {
-                cleanup.push(...(await d.callPlugin('resource_delete_unused', { paths: [rel] }, { projectPath, timeoutMs: 30000 })).deleted);
-              } catch (e) {
-                if (!/RESOURCE_NOT_FOUND/.test(e.message)) throw e;
-                fs.rmSync(file, { force: true });
-                cleanup.push(rel);
-              }
-            }
-          }
-        }
-        const leftover = [uvFile, rampFile].filter((f) => fs.existsSync(f)).map((f) => path.relative(projectPath, f));
-        const win = WINDOWS[layout];
-        const out = [];
-        const content = [];
-        for (const [k, { video, coded, bare, ramp }] of runs.entries()) {
-          const prefix = videos ? `v${k + 1}-` : '';
-          const bareFile = path.join(dir, `${prefix}bare.png`);
-          fs.writeFileSync(bareFile, PNG.sync.write(bare));
-          fs.writeFileSync(path.join(dir, `${prefix}coded.png`), PNG.sync.write(coded));
-          fs.writeFileSync(path.join(dir, `${prefix}ramp.png`), PNG.sync.write(ramp));
-          const tone = toneCurve(ramp, bare);
-          const parts = decodeUv(layout, undoTone(coded, tone), undoTone(bare, tone));
-          const partsOut = parts.map((p) => {
-            const file = path.join(dir, `${prefix}calibration${p.eye ? `-${p.eye}` : ''}.png`);
-            fs.writeFileSync(file, overlay(p, bare));
-            const res = { ...(p.eye ? { eye: p.eye } : {}), box_px: [p.box.x0, p.box.y0, p.box.x1 - p.box.x0 + 1, p.box.y1 - p.box.y0 + 1], pixels: p.pixels, texture_px_per_frame_px: p.texture_px_per_frame_px, fit_rms: p.fit_rms, overlay: file };
-            if (layout === 'eye') res.upper_lid = upperLid(p, bare, p.eye === 'right' ? LID_COLUMNS.map((x) => LAYOUTS.eye.width - 1 - x) : LID_COLUMNS);
-            res.texture_grid = textureGrid(p, bare.width, 10);
-            return res;
-          });
-          out.push({ video, bare: bareFile, tone_curve: tone, parts: partsOut });
-          for (const p of partsOut) {
-            content.push({ type: 'text', text: `${video ? `${video} ` : ''}${p.eye ? `${p.eye === 'left' ? '左' : '右'}眼` : ''}标注图` });
-            content.push({ type: 'image', ...(await d.readImageFile(p.overlay)) });
-          }
-        }
-        const json = path.join(dir, `calibration-${layout}.json`);
-        fs.writeFileSync(json, JSON.stringify({ layout, window: win, lid_search: LID_SEARCH, runs: out }, null, 2));
-        const brief = out.map((r) => ({ video: r.video, tone_curve: { levels: r.tone_curve.levels, r: r.tone_curve.r, g: r.tone_curve.g, b: r.tone_curve.b }, parts: r.parts.map(({ texture_grid, ...p }) => p) }));
-        const summary = { layout, runs: brief, calibration_json: json, cleaned_up: cleanup, ...(leftover.length ? { leftover, warning: '标定贴图没删掉，请用 resource_delete_unused 删除' } : {}), note: '所有强度都已改回，临时层已删除；工程会显示「已修改」，不需要的话不用保存' };
-        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
-      },
-    },
-    {
       name: 'preview_videos',
-      description: '可用的预览视频名，按 tracking_type 分组（face、two_person、body、hand、pet、environment），外加当前视频 current：只给名字，用来挑 preview_frames、makeup_compare、makeup_calibrate 的 videos 和官方 set_preview_video 的 video_name。要地址、有没有本地文件等全部字段用官方 list_preview_videos（约 70 KB）。',
+      description: '可用的预览视频名，按 tracking_type 分组（face、two_person、body、hand、pet、environment），外加当前视频 current：只给名字，用来挑 preview_frames、makeup_compare 的 videos 和官方 set_preview_video 的 video_name。要地址、有没有本地文件等全部字段用官方 list_preview_videos（约 70 KB）。',
       shape: { ...target, tracking_type: z.string().min(1).optional().describe('只列这一类，如 face；不给就全列。') },
       run: async (a) => {
         const instance_id = await officialInstance(a);

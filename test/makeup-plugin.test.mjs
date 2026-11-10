@@ -90,55 +90,32 @@ test('makeup_list describes the makeup layers, eye colour and filters with their
   ]);
 });
 
-test('makeup_set changes strengths, blend, panel opacity and texture in one undo step and returns the layers before and after', async () => {
+test('makeup_set changes strengths and panel opacity in one undo step and returns the layers before and after', async () => {
   const { lib, calls, editors } = setup();
   const out = await lib.makeupSet({
     label: 'try',
     changes: [
-      { object_path: '眼线', female: 0.2, intensity: 0.55, blend: 0, texture: '/p/Assets/new.png', texture_size: 1024 },
+      { object_path: '眼线', female: 0.2, intensity: 0.55 },
       { object_path: '美瞳', intensity: 0 },
       { object_path: '滤镜/冷白皮', intensity: 0.3 },
     ],
   });
   assert.deepEqual(calls.undo, ['start:try', 'end']);
-  assert.deepEqual(calls.imports, [['/p/Assets/new.png', 'undo:makeup_set:/p/Assets/new.png']]);
-  assert.deepEqual([out.before[0].female, out.before[0].texture, out.after[0].female, out.after[0].blend, out.after[0].texture, out.after[0].intensity], [0.7, '/p/Assets/liner.png', 0.2, 0, '/p/Assets/new.png', 0.55]);
+  assert.deepEqual([out.before[0].female, out.after[0].female, out.after[0].blend, out.after[0].texture, out.after[0].intensity], [0.7, 0.2, 1, '/p/Assets/liner.png', 0.55]);
   assert.deepEqual([out.after[1].intensity, out.after[2].intensity], [0, 0.3]);
   assert.equal(editors[0].maleIntensity, 0);
-});
-
-test('makeup_set imports a texture outside Assets into the project, sets its size once, and reuses it for several layers', async () => {
-  const { lib, calls, items } = setup();
-  const out = await lib.makeupSet({ changes: [{ object_path: '清冷_美妆/腮红', texture: '/tmp/x.png', texture_size: 1024 }, { object_path: '面部面具/腮红', texture: '/tmp/x.png' }] });
-  assert.equal(calls.imports.length, 1);
-  assert.deepEqual(out.after.map((a) => a.texture), ['/p/Assets/Textures/x.png', '/p/Assets/Textures/x.png']);
-  assert.equal(items.find((i) => i.assetPath === '/p/Assets/Textures/x.png').compressMaxResolution, 1024);
 });
 
 test('makeup_set refuses ambiguous paths, keys a layer does not take, and writes that did not land', async () => {
   const { lib, editors } = setup();
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '腮红', female: 0 }] }), /AMBIGUOUS_OBJECT_PATH: 腮红 matches/);
-  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', region: 0 }] }), /NOT_SETTABLE: 面部面具\/清冷_美妆\/眼线 is a face_mask; it takes female, male, intensity, blend, texture, not region/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', texture: '/p/Assets/new.png' }] }), /NOT_SETTABLE: .* is a face_mask; it takes female, male, intensity, not texture/);
+  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', region: 0 }] }), /NOT_SETTABLE: 面部面具\/清冷_美妆\/眼线 is a face_mask; it takes female, male, intensity, not region/);
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '冷白皮', female: 0 }] }), /NOT_SETTABLE: .* is a filter/);
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线' }] }), /NOTHING_TO_SET/);
   await assert.rejects(lib.makeupSet({ changes: [] }), /INVALID_CHANGES/);
   editors[0].ignore = true;
   await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', female: 0.1 }] }), /WRITE_NOT_APPLIED: 面部面具\/清冷_美妆\/眼线: female=0.7/);
-});
-
-test('makeup_add_layer adds the region menu item and returns the FaceMask it created', async () => {
-  const { lib, editors } = setup();
-  const added = [];
-  lib.menuAdd = async ({ menu_id }) => {
-    added.push(menu_id);
-    editors.push(new FaceMaskComponentEditor({ name: '眼部妆容', parent: { name: '面部面具', parent: null } }, { regionType: 1, blendMode: 1, femaleIntensity: 0.8, maleIntensity: 0, makeupTexture: null }));
-    return { added_objects: [{ name: '眼部妆容', object_path: '面部面具/眼部妆容' }] };
-  };
-  assert.deepEqual(await lib.makeupAddLayer({ region: 'eye' }), { object_path: '面部面具/眼部妆容', added_objects: [{ name: '眼部妆容', object_path: '面部面具/眼部妆容' }] });
-  assert.deepEqual(added, ['FaceEye']);
-  await assert.rejects(lib.makeupAddLayer({ region: 'cheek' }), /INVALID_REGION/);
-  lib.menuAdd = async () => ({ added_objects: [{ name: '空', object_path: '空' }] });
-  await assert.rejects(lib.makeupAddLayer({ region: 'face' }), /ADD_LAYER_NO_FACE_MASK: FaceMask added 空/);
 });
 
 test('preview_fresh waits for new frames and says when none come', async () => {
@@ -158,15 +135,3 @@ test('makeup calls refuse to run when the editor lacks what they need', async ()
   assert.throws(() => lib.makeupList(), /INCOMPATIBLE_EDITOR: missing .*BusinessEventManager/);
 });
 
-test('makeup_set finds an imported texture by its path when the import does not hand the item back', async () => {
-  const { lib, items, modules } = setup();
-  const rm = modules[M.ef].ProjectManager.getInstance().getCurrentActiveProject().resourceManager;
-  rm.importResourceFileAsync = async (p) => {
-    setTimeout(() => items.push({ assetPath: p, mainObject: { tex: p }, compressMaxResolution: 512 }), 250);
-    return undefined;
-  };
-  const out = await lib.makeupSet({ changes: [{ object_path: '眼线', texture: '/p/Assets/late.png' }] });
-  assert.equal(out.after[0].texture, '/p/Assets/late.png');
-  rm.importResourceFileAsync = async () => undefined;
-  await assert.rejects(lib.makeupSet({ changes: [{ object_path: '眼线', texture: '/p/Assets/never.png' }] }), /TEXTURE_IMPORT_FAILED: \/p\/Assets\/never.png/);
-});

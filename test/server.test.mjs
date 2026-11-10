@@ -58,7 +58,6 @@ const OWN = [
   'library_images',
   'library_list',
   'library_search',
-  'makeup_calibrate',
   'makeup_compare',
   'makeup_layers',
   'menu_add',
