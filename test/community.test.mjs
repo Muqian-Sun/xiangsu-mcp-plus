@@ -1147,6 +1147,144 @@ async function connect(deps) {
   return client;
 }
 
+const PNG_BYTES = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+const JPEG_BYTES = Buffer.from('ffd8ffe000104a464946', 'hex');
+
+// A hotspot whose inspirations come back from fake detail calls, with images served by a fake fetch.
+function imageHarness({ items, details, images, tabs = ['全部'] }) {
+  const calls = { detail: [], fetch: [], scheduled: [] };
+  const dirs = [];
+  const deps = {
+    listInstances: () => [{ pid: 7 }],
+    callPlugin: async (method, params) => {
+      if (method === 'hotspot_inspirations') return { topic_id: params.topic_id, tabs, items };
+      if (method !== 'inspiration_detail') throw Error(`unexpected ${method}`);
+      calls.detail.push(params.inspiration_id);
+      return details(params.inspiration_id);
+    },
+    fetchImageBytes: async (url, opts) => {
+      calls.fetch.push({ url, opts });
+      return images(url, calls.fetch.filter((c) => c.url === url).length);
+    },
+    inspirationImagesDir: () => (dirs.push(tmpdir('xs-insp-img-')), dirs.at(-1)),
+    schedule: (fn, ms) => calls.scheduled.push({ fn, ms }),
+  };
+  return { deps, calls, dirs };
+}
+
+test('hotspot_inspiration_images saves every detail image once per inspiration, retries a failed image once and lists what failed', async () => {
+  const { deps, calls, dirs } = imageHarness({
+    tabs: ['全部', '妆容'],
+    items: [
+      { tab: '全部', inspiration_id: '1', title: '北风/暴击:妆', cover_url: 'https://c/1.png' },
+      { tab: '全部', inspiration_id: '2', title: '水管防冻抢修' },
+      { tab: '全部', inspiration_id: '3', title: '寒潮预警妆' },
+      { tab: '妆容', inspiration_id: '1', title: '北风/暴击:妆' },
+      { tab: '妆容', inspiration_id: '4', title: '冷风' },
+    ],
+    details: (id) => {
+      if (id === '2') throw Error('GET_INSPIRATION_FAILED: code=3000');
+      return { images: { 1: ['https://c/1a', 'https://c/1b'], 3: ['https://c/3'], 4: ['https://c/4'] }[id] };
+    },
+    images: (url, nth) => {
+      if (url === 'https://c/1a') return { buf: PNG_BYTES, mimeType: 'image/png' };
+      if (url === 'https://c/1b') return { buf: JPEG_BYTES, mimeType: 'image/jpeg' };
+      if (url === 'https://c/3' && nth > 1) return { buf: JPEG_BYTES, mimeType: 'image/jpeg' };
+      throw Error(`HTTP 50${nth}`);
+    },
+  });
+  const client = await connect(deps);
+  const res = await client.callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '13635' } });
+  assert.equal(res.isError, undefined, res.content[0].text);
+  const out = JSON.parse(res.content[0].text);
+  const [dir] = dirs;
+  assert.equal(out.dir, dir);
+  assert.deepEqual(calls.detail.sort(), ['1', '2', '3', '4']);
+  assert.deepEqual(
+    { ...out, expires_at: typeof out.expires_at },
+    {
+      topic_id: '13635',
+      tab: null,
+      dir,
+      index_file: path.join(dir, 'index.json'),
+      expires_at: 'string',
+      inspirations: 4,
+      images_saved: 3,
+      items: [
+        { inspiration_id: '1', title: '北风/暴击:妆', files: ['1-北风_暴击_妆-1.png', '1-北风_暴击_妆-2.jpg'] },
+        { inspiration_id: '2', title: '水管防冻抢修', files: [] },
+        { inspiration_id: '3', title: '寒潮预警妆', files: ['3-寒潮预警妆-1.jpg'] },
+        { inspiration_id: '4', title: '冷风', files: [] },
+      ],
+      failed: [
+        { inspiration_id: '2', title: '水管防冻抢修', errors: ['detail: GET_INSPIRATION_FAILED: code=3000'] },
+        { inspiration_id: '4', title: '冷风', errors: ['image 1: HTTP 502'] },
+      ],
+    },
+  );
+  assert.ok(Math.abs(Date.parse(out.expires_at) - Date.now() - 24 * 3600000) < 60000);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['1-北风_暴击_妆-1.png', '1-北风_暴击_妆-2.jpg', '3-寒潮预警妆-1.jpg', 'index.json']);
+  assert.deepEqual(fs.readFileSync(path.join(dir, '1-北风_暴击_妆-1.png')), PNG_BYTES);
+  assert.deepEqual(fs.readFileSync(path.join(dir, '3-寒潮预警妆-1.jpg')), JPEG_BYTES);
+  const index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'));
+  assert.deepEqual(index.items[0], { inspiration_id: '1', title: '北风/暴击:妆', tab: '全部', files: [{ file: '1-北风_暴击_妆-1.png', url: 'https://c/1a' }, { file: '1-北风_暴击_妆-2.jpg', url: 'https://c/1b' }], errors: [] });
+  assert.deepEqual(calls.fetch.filter((c) => c.url === 'https://c/3').length, 2);
+  assert.deepEqual(calls.fetch.filter((c) => c.url === 'https://c/4').length, 2);
+  assert.ok(calls.fetch.every((c) => c.opts.timeoutMs === 30000));
+  assert.deepEqual(calls.scheduled.map((s) => s.ms), [24 * 3600000]);
+  calls.scheduled[0].fn();
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test('hotspot_inspiration_images reads details six at a time and numbers files in hotspot order', async () => {
+  let running = 0;
+  let peak = 0;
+  const items = Array.from({ length: 14 }, (_, i) => ({ tab: '全部', inspiration_id: String(i + 1), title: `灵感${i + 1}` }));
+  const { deps, dirs } = imageHarness({
+    items,
+    details: async (id) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 30 - Number(id)));
+      running--;
+      return { images: [`https://c/${id}`] };
+    },
+    images: () => ({ buf: JPEG_BYTES, mimeType: 'image/jpeg' }),
+  });
+  const client = await connect(deps);
+  const out = JSON.parse((await client.callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '1' } })).content[0].text);
+  assert.equal(peak, 6);
+  assert.deepEqual(out.items.map((i) => i.files[0]), items.map((it, i) => `${String(i + 1).padStart(2, '0')}-灵感${i + 1}-1.jpg`));
+  assert.equal(fs.readdirSync(dirs[0]).length, 15);
+});
+
+test('hotspot_inspiration_images takes one tab, refuses an unknown tab, and fails when nothing was saved', async () => {
+  const items = [
+    { tab: '全部', inspiration_id: '1', title: 'a' },
+    { tab: '妆容', inspiration_id: '2', title: 'b' },
+    { tab: '妆容', inspiration_id: '3', title: 'c' },
+  ];
+  const ok = imageHarness({ tabs: ['全部', '妆容'], items, details: (id) => ({ images: [`https://c/${id}`] }), images: () => ({ buf: PNG_BYTES, mimeType: 'image/png' }) });
+  const client = await connect(ok.deps);
+  const out = JSON.parse((await client.callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '1', tab: '妆容' } })).content[0].text);
+  assert.equal(out.tab, '妆容');
+  assert.deepEqual(out.items.map((i) => i.files), [['1-b-1.png'], ['2-c-1.png']]);
+  assert.deepEqual(ok.calls.detail.sort(), ['2', '3']);
+  const bad = await client.callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '1', tab: '宠物' } });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /INVALID_TAB: 宠物; valid: 全部, 妆容/);
+  assert.equal(ok.calls.detail.length, 2);
+
+  const none = imageHarness({ items, details: () => ({ images: [] }), images: () => assert.fail('nothing to fetch') });
+  const res = await (await connect(none.deps)).callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '1' } });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /NO_IMAGES_SAVED: .*detail: no images/);
+  const empty = imageHarness({ items: [], details: () => assert.fail('no details'), images: () => assert.fail('nothing to fetch') });
+  const res2 = await (await connect(empty.deps)).callTool({ name: 'hotspot_inspiration_images', arguments: { topic_id: '9' } });
+  assert.match(res2.content[0].text, /NO_INSPIRATIONS: hotspot 9 lists no inspirations/);
+  assert.equal(empty.dirs.length, 0);
+});
+
 test('community tools use the lowest-pid window; lists hand out refs and details keep addresses, nothing fetched', async () => {
   const seen = [];
   const answers = {
