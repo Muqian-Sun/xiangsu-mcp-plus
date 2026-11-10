@@ -18,10 +18,23 @@ function toImage(buf, origin) {
   return { data: buf.toString('base64'), mimeType };
 }
 
-export async function fetchImage(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+async function fetchBytes(url, timeoutMs) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw Error(`HTTP ${res.status}`);
-  return toImage(Buffer.from(await res.arrayBuffer()), `content-type ${res.headers.get('content-type')}`);
+  return { buf: Buffer.from(await res.arrayBuffer()), origin: `content-type ${res.headers.get('content-type')}` };
+}
+
+export async function fetchImage(url) {
+  const { buf, origin } = await fetchBytes(url, 15000);
+  return toImage(buf, origin);
+}
+
+// The raw bytes of an image to save to disk, of any size.
+export async function fetchImageBytes(url, { timeoutMs = 15000 } = {}) {
+  const { buf, origin } = await fetchBytes(url, timeoutMs);
+  const mimeType = sniffImage(buf);
+  if (!mimeType) throw Error(`not a png/jpeg/gif/webp image (${origin})`);
+  return { buf, mimeType };
 }
 
 export async function readImageFile(file) {

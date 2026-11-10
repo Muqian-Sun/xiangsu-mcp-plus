@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../src/server.mjs';
 import { OfficialUnreachable } from '../src/official.mjs';
-import { fetchImage, readImageFile } from '../src/images.mjs';
+import { fetchImage, fetchImageBytes, readImageFile } from '../src/images.mjs';
 import { MediaRefs, Spill } from '../src/outputs.mjs';
 
 const OWN = [
@@ -42,6 +42,7 @@ const OWN = [
   'growth_route',
   'growth_task_detail',
   'growth_tasks_list',
+  'hotspot_inspiration_images',
   'hotspot_inspirations',
   'icon_open',
   'icon_set',
@@ -413,6 +414,9 @@ test('image helpers sniff real bytes from URLs and files and reject non-images',
   assert.equal((await fetchImage(`${base}/webp`)).mimeType, 'image/webp');
   await assert.rejects(fetchImage(`${base}/html`), /not a png\/jpeg\/gif\/webp image/);
   await assert.rejects(fetchImage(`${base}/missing`), /HTTP 404/);
+  assert.deepEqual(await fetchImageBytes(`${base}/png`), { buf: png, mimeType: 'image/png' });
+  await assert.rejects(fetchImageBytes(`${base}/html`), /not a png\/jpeg\/gif\/webp image \(content-type image\/png\)/);
+  await assert.rejects(fetchImageBytes(`${base}/missing`), /HTTP 404/);
   const dir = tmpdir('xs-img-');
   fs.writeFileSync(path.join(dir, 'a.gif'), 'GIF89a....');
   fs.writeFileSync(path.join(dir, 'b.txt'), 'hello');

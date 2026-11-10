@@ -3,6 +3,7 @@
 // official server cannot reach, served by the XiangsuMcpExt editor plugin.
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +15,7 @@ import { PNG } from 'pngjs';
 import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
-import { fetchImage, readImageFile, sniffImage } from './images.mjs';
+import { fetchImage, fetchImageBytes, readImageFile, sniffImage } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
@@ -24,7 +25,7 @@ import { makeupLayers, pixelStats } from './makeup.mjs';
 import { BLENDS, LAYOUTS } from './paint.mjs';
 import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
 import { LID_SEARCH, WINDOWS, decodeUv, encodeRamp, encodeUv, overlay, textureGrid, toneCurve, undoTone, upperLid } from './calib.mjs';
-import { cropImage, framesDir, jpegToPng, resizeImage } from './frames.mjs';
+import { FRAMES_TTL_MS, cropImage, framesDir, jpegToPng, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
@@ -124,6 +125,31 @@ const OFFICIAL_NOTES = {
 // Picked: an official error this long is a validator dump (apply_workflow_patch answered tens of KB);
 // the head says what went wrong, the rest goes to a file.
 const OFFICIAL_ERROR_CHARS = 4000;
+// Picked: 16 inspirations' details and images fetched all at once took 18 s (2026-11-10); six at a time
+// keeps a hotspot (66–70 inspirations) around a minute without opening dozens of connections.
+const INSPIRATION_IMAGE_CONCURRENCY = 6;
+// Derived: single inspiration images took up to 17.7 s from the CDN (2026-11-10), past fetchImage's 15 s.
+const INSPIRATION_IMAGE_TIMEOUT_MS = 30000;
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+// Picked: long enough for a title (they run to about 15 characters) and short of path limits.
+const FILE_TITLE_CHARS = 60;
+
+// Characters file systems refuse in a name, and control characters.
+const fileSafe = (s) => String(s ?? '').replace(/[/\\:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, FILE_TITLE_CHARS) || 'untitled';
+
+// Runs fn over items, at most `limit` at a time, keeping their order; fn must not throw.
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -178,6 +204,7 @@ export function createServer(deps = {}) {
     callPlugin,
     listInstances,
     fetchImage,
+    fetchImageBytes,
     readImageFile,
     fetchJson,
     openWithApp,
@@ -186,6 +213,7 @@ export function createServer(deps = {}) {
     resizeImage,
     jpegToPng,
     framesDir,
+    inspirationImagesDir: () => framesDir({ root: path.join(os.tmpdir(), 'xs-inspiration-images') }),
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
     // Expiry timers must not keep the process alive after the client goes away.
     schedule: (fn, ms) => setTimeout(fn, ms).unref(),
@@ -916,10 +944,70 @@ export function createServer(deps = {}) {
     {
       name: 'hotspot_inspirations',
       refs: true,
-      description: '一个热点下的灵感，按热点页页签的顺序、按 offset / count 分页：每条的页签 tab、inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）；tabs 是全部页签名。详情用 inspiration_detail。',
+      description: '一个热点下的灵感，按热点页页签的顺序、按 offset / count 分页：每条的页签 tab、inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）；tabs 是全部页签名。详情用 inspiration_detail；把这个热点下全部灵感的图片下载到本机用 hotspot_inspiration_images。',
       shape: { ...target, topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。'), ...pageShape },
       run: async ({ project_path, instance_id, topic_id, offset = 0, count = 20 }) =>
         text(pageOf(await d.callPlugin('hotspot_inspirations', { topic_id }, await homeWindow({ project_path, instance_id })), offset, count)),
+    },
+    {
+      name: 'hotspot_inspiration_images',
+      description: `把一个热点下全部灵感的图片下载到本机：逐条读灵感详情，下载详情里的全部图片（封面就是第一张；多数灵感只有 1 张，也有 3 张、6 张的），同一灵感在几个页签里出现只下一次。文件名是「序号-灵感标题-第几张.扩展名」，序号按热点页的顺序；同目录的 index.json 记下每条灵感的 inspiration_id、标题、页签、文件名和原图地址。文件是临时的：存在临时目录里，24 小时后删除（MCP 服务一直开着时到点删；服务重启过的，下次调用本工具时删），要留存就自己复制走。一个热点约 70 张图，一般一分钟左右。返回目录 dir、灵感数、存下的图片数、每条灵感的文件名，以及失败的灵感和原因 failed（详情读不出、图片下载两次都失败或不是图片）；一张都没存下时报错。topic_id 来自 rank_hotspots。`,
+      shape: {
+        ...target,
+        topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。'),
+        tab: z.string().min(1).optional().describe('只下这个页签的灵感（hotspot_inspirations 返回的 tabs 之一）；省略时下全部。'),
+      },
+      run: async ({ project_path, instance_id, topic_id, tab }) => {
+        const win = await homeWindow({ project_path, instance_id });
+        const listed = await d.callPlugin('hotspot_inspirations', { topic_id }, win);
+        if (tab !== undefined && !listed.tabs.includes(tab)) throw Error(`INVALID_TAB: ${tab}; valid: ${listed.tabs.join(', ')}`);
+        const ids = new Set();
+        const picked = listed.items.filter((i) => (tab === undefined || i.tab === tab) && !ids.has(i.inspiration_id) && ids.add(i.inspiration_id));
+        if (!picked.length) throw Error(`NO_INSPIRATIONS: hotspot ${topic_id}${tab === undefined ? '' : ` tab ${tab}`} lists no inspirations`);
+        const dir = d.inspirationImagesDir();
+        d.schedule(() => fs.rmSync(dir, { recursive: true, force: true }), FRAMES_TTL_MS);
+        const width = String(picked.length).length;
+        const rows = await mapPool(picked, INSPIRATION_IMAGE_CONCURRENCY, async (insp, i) => {
+          const row = { inspiration_id: insp.inspiration_id, title: insp.title, tab: insp.tab, files: [], errors: [] };
+          let images;
+          try {
+            ({ images } = await d.callPlugin('inspiration_detail', { inspiration_id: insp.inspiration_id }, win));
+          } catch (e) {
+            row.errors.push(`detail: ${e.message}`);
+            return row;
+          }
+          if (!images.length) row.errors.push('detail: no images');
+          const base = `${String(i + 1).padStart(width, '0')}-${fileSafe(insp.title)}`;
+          for (const [n, url] of images.entries()) {
+            const get = () => d.fetchImageBytes(url, { timeoutMs: INSPIRATION_IMAGE_TIMEOUT_MS });
+            try {
+              const { buf, mimeType } = await get().catch(get);
+              const file = `${base}-${n + 1}.${IMAGE_EXT[mimeType]}`;
+              fs.writeFileSync(path.join(dir, file), buf);
+              row.files.push({ file, url });
+            } catch (e) {
+              row.errors.push(`image ${n + 1}: ${e.message}`);
+            }
+          }
+          return row;
+        });
+        const saved = rows.reduce((n, r) => n + r.files.length, 0);
+        const failed = rows.filter((r) => r.errors.length).map(({ inspiration_id, title, errors }) => ({ inspiration_id, title, errors }));
+        if (!saved) throw Error(`NO_IMAGES_SAVED: ${JSON.stringify(failed.slice(0, 5))}`);
+        const index_file = path.join(dir, 'index.json');
+        fs.writeFileSync(index_file, JSON.stringify({ topic_id, tab: tab ?? null, items: rows }, null, 2));
+        return text({
+          topic_id,
+          tab: tab ?? null,
+          dir,
+          index_file,
+          expires_at: new Date(Date.now() + FRAMES_TTL_MS).toISOString(),
+          inspirations: picked.length,
+          images_saved: saved,
+          items: rows.map((r) => ({ inspiration_id: r.inspiration_id, title: r.title, files: r.files.map((f) => f.file) })),
+          failed,
+        });
+      },
     },
     {
       name: 'douyin_hot_list',
