@@ -700,7 +700,7 @@ export function createServer(deps = {}) {
           .string()
           .min(1)
           .optional()
-          .describe('「灵感绑定」要选的灵感或热点，取它在列表里显示的名称（当前账号收藏的灵感或热点，名称同 inspiration_list 的标题）；传「暂不绑定」解绑；省略时保留页面带出的（inspiration_bind 绑定过的会自动带出）。'),
+          .describe('「灵感绑定」要选的灵感或热点，取它在列表里显示的名称（当前账号收藏的灵感或热点，灵感的名称同 inspiration_collected 的标题）；传「暂不绑定」解绑；省略时保留页面带出的（inspiration_bind 绑定过的会自动带出）。'),
         task: z.string().min(1).optional().describe('「任务绑定」要选的任务标题（已领取的任务，同 tasks_list 的 title）；传「暂不参与」解绑；省略时保留页面带出的（task_bind 绑定过的会自动带出）。'),
         task_track: z.string().min(1).optional().describe('任务下的赛道名称，任务分赛道时必填，否则报 SUBMIT_TASK_NEEDS_TRACK 并列出赛道。'),
       },
@@ -749,7 +749,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspiration_detail',
       description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程 project（服务端只给标题、图标和「可在像塑桌面端搜索使用」，没有工程 id，2026-11-09 查了 13 个带工程的灵感都是这样；要下载就拿标题去 works_search）、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
-      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / inspiration_search / hotspot_inspirations / growth_task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
+      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / inspiration_collected / inspiration_search / hotspot_inspirations / growth_task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
       run: community('inspiration_detail'),
     },
     {
@@ -761,6 +761,19 @@ export function createServer(deps = {}) {
         collect: z.boolean().optional().describe('true 收藏（默认），false 取消收藏。'),
       },
       run: community('inspiration_collect'),
+    },
+    {
+      name: 'inspiration_collected',
+      refs: true,
+      description:
+        '分页列出当前账号收藏的灵感（和首页「灵感」页签里的「收藏」页同一接口），按收藏时间从新到旧：字段同 inspiration_list，另有收藏时间 collected_at、作品类型 artwork_type（0 特效、2 模板、5 表情）、所属征集任务 task（task_id 和标题；提交时选了别的任务，这条灵感会被挤掉）。服务端没给灵感卡片的条目只有 inspiration_id 和标题，并标 card_missing=true。只列灵感，不含收藏的热点和素材。submit_prepare 的 inspiration 按标题在这些收藏里选。按 cursor 翻页，total 是收藏总数。',
+      shape: {
+        ...target,
+        cursor: z.number().int().min(0).optional().describe('翻页游标（偏移量），取上一页的 next_cursor；默认 0。'),
+        // 100 came back as 50 (2026-11-10).
+        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20，最多 50。'),
+      },
+      run: community('inspiration_collected'),
     },
     {
       name: 'submit_close',
