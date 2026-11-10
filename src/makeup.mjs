@@ -91,8 +91,10 @@ const SURFACES = ['普通', '水润', '珠光', '渐变', '哑光', '丝绒', '�
 // intensity, and its lips gloss is a second blend mode (surfaceBlendMode) instead of a surface type.
 const FACE_MASKS = ['FaceMask', 'FaceMaskDY'];
 // Where the editor keeps official packages it imported from: an imported texture's .extra points
-// there (…\DouyinAR\package\<id>\…, …/Instances/Instance1/EHpackage/<id>/…).
-const PACKAGE_PATH = /DouyinAR[\\/](?:package|.*[\\/]EHpackage)[\\/](\d+)[\\/]/;
+// there (…\DouyinAR\package\<id>\…, …/Instances/Instance1/EHpackage/<id>/…). Packaged looks and some
+// packages unpack into a folder named after the package instead of its id (EHpackage/清冷_美妆/纹理/a5.png:
+// 51 layers of packaged looks in our projects, 2026-11-10).
+const PACKAGE_PATH = /DouyinAR[\\/](?:package|.*[\\/]EHpackage)[\\/]([^\\/]+)[\\/]/;
 // A texture duplicated in the file manager to be edited (圆眼 - 副本.png).
 const COPY_NAME = /副本|copy/i;
 // A FaceMask draws on every face unless faceIds says otherwise; the editor's default is all five.
@@ -174,8 +176,8 @@ function byEffect({ width, height, data }, neutral) {
 }
 
 // Where a texture came from, by its .extra: imported from an official package (assetPackageID, the
-// package's library template_id, or a path into the editor's package folder), or a file the author
-// imported; null without a readable .extra.
+// package's library template_id, or a path into the editor's package folder, which names the package
+// by id or by name), or a file the author imported; null without a readable .extra.
 function textureSource(file) {
   let entry;
   try {
@@ -184,8 +186,15 @@ function textureSource(file) {
     return null;
   }
   const from = typeof entry?.resourceFilePath === 'string' ? entry.resourceFilePath : null;
-  const pkg = entry?.assetPackageID ?? from?.match(PACKAGE_PATH)?.[1];
-  const source = pkg ? { from: '官方素材包', package_id: String(pkg) } : from ? { from: '作者导入', file: from.split(/[\\/]/).pop() } : { from: '未知' };
+  const folder = from?.match(PACKAGE_PATH)?.[1];
+  const id = entry?.assetPackageID || (/^\d+$/.test(folder ?? '') ? folder : null);
+  const source = id
+    ? { from: '官方素材包', package_id: String(id) }
+    : folder
+      ? { from: '官方素材包', package_folder: folder }
+      : from
+        ? { from: '作者导入', file: from.split(/[\\/]/).pop() }
+        : { from: '未知' };
   return COPY_NAME.test(path.basename(file)) ? { ...source, copy: true } : source;
 }
 

@@ -50,6 +50,8 @@ const TEXTURE_EXTRA = {
   brow: { assetPackageID: '7216630895652962362', resourceFilePath: '/Users/x/Library/Application Support/DouyinAR/Instances/Instance1/EHpackage/7216630895652962362/韩漫少女/纹理/brow000.png' },
   cheeks: { resourceFilePath: 'C:\\Users\\1\\AppData\\Local\\DouyinAR\\package\\7389989461582692415\\纹理\\韩式.png' },
   whiteNose: { resourceFilePath: 'D:\\特效-抖音\\美妆类psd\\面部\\鼻影.png' },
+  // A packaged look unpacks into a folder named after it, and its .extra carries an empty package id.
+  iris: { assetPackageID: '', resourceFilePath: 'C:\\Users\\1\\AppData\\Local\\DouyinAR\\Instances\\Instance2\\EHpackage\\清冷_美妆\\纹理\\a5.png' },
   '圆眼 - 副本': { resourceFilePath: 'F:\\像塑\\图片\\圆眼.png' },
 };
 
@@ -362,6 +364,7 @@ test('makeupLayers tells whether a texture came from an official package or a fi
   assert.deepEqual(l['面具'].texture_source, { from: '作者导入', file: '鼻影.png' });
   assert.deepEqual(l['圆眼'].texture_source, { from: '作者导入', file: '圆眼.png', copy: true });
   assert.deepEqual(l['唇部妆容'].texture_source, { from: '未知' });
+  assert.deepEqual(l['旧美瞳'].texture_source, { from: '官方素材包', package_folder: '清冷_美妆' }, 'a package folder named after the look, not by id');
 });
 
 test('makeup_layers tool reads a project folder, saves on request and fails on a folder without a scene', async () => {
