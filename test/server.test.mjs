@@ -49,6 +49,7 @@ const OWN = [
   'inspect_many',
   'inspiration_bind',
   'inspiration_collect',
+  'inspiration_collected',
   'inspiration_detail',
   'inspiration_list',
   'inspiration_search',

@@ -59,8 +59,15 @@ const MESSAGE_GROUPS = { all: '0', service: '1', official: '2' };
 const MESSAGE_GROUP_NAMES = { 1: '服务', 2: '官方' };
 // Picked: 50 came back whole (2026-11-09); more was not tried.
 const MESSAGE_MAX = 50;
-// 实时热点 list versions are Beijing time: the 16:25 version came back at 16:40 local (2026-11-09).
-const HOT_LIST_TZ = '+08:00';
+// Times written out without a zone are Beijing time: the 16:25 实时热点 version came back at 16:40 local
+// (2026-11-09), and an inspiration collected at 11:53 local listed 11:53:25 (2026-11-10).
+const BEIJING_TZ = '+08:00';
+// The collection lists no inspirations unless asked for their artwork types. The editor's pages ask for
+// 0 and 5 (the inspiration page's 收藏 tab) or 0, 5 and 14 (the submit window); 2 is in neither but held
+// a collected template inspiration (2026-11-10: 0 held 55, 2 held 1, 1 and 3–20 none).
+const COLLECTED_ARTWORK_TYPES = [0, 2, 5, 14];
+// Collection item types as the submit window labels them: 1 and 4 hotspots, 2 inspirations, 3 effects.
+const COLLECTED_INSPIRATION = 2;
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -466,7 +473,26 @@ function messageEffectId(page) {
 
 function hotListTime(v) {
   const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(String(v || ''));
-  return m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${HOT_LIST_TZ}`).toISOString() : null;
+  return m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${BEIJING_TZ}`).toISOString() : null;
+}
+
+// 收藏时间 as the collection list writes it ("2026-11-10 11:53:25"); other text passes as it came.
+function collectedAt(v) {
+  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(String(v || ''));
+  return m ? new Date(`${m[1]}T${m[2]}${BEIJING_TZ}`).toISOString() : str(v);
+}
+
+// A collection entry; the inspiration page drops entries that come without their card, which are kept
+// here under what the entry itself says.
+function slimCollected(i) {
+  const card = i.ins_detail ? slimInspiration(i.ins_detail) : { inspiration_id: String(i.item_id), title: i.item_name, card_missing: true };
+  const t = i.task_info;
+  return {
+    ...card,
+    artwork_type: i.artwork_type ?? null,
+    collected_at: collectedAt(i.create_time),
+    task: t && t.task_id ? { task_id: String(t.task_id), title: t.task_title || '' } : null,
+  };
 }
 
 // One heat reading of a hotspot: by day (date) or by hour (date with the hour).
@@ -612,6 +638,15 @@ const methods = {
     const now = await this.inspirationCollected(id);
     if (now !== !!collect) throw Error(`COLLECT_NOT_APPLIED: inspiration ${id} is ${now ? 'still' : 'not'} collected`);
     return { inspiration_id: id, title: base.title, collected: now };
+  },
+
+  // The inspiration page's 收藏 tab: the account's collected inspirations, latest first, each with its
+  // card. `cursor` is an offset.
+  async collectedInspirations({ cursor = 0, count = 20 } = {}) {
+    const d = await request(this, 'GET_COLLECTED_INSPIRATIONS', '/creator_api/inspiration/v1/collect_list', {
+      json: { item_types: [COLLECTED_INSPIRATION], artwork_types: COLLECTED_ARTWORK_TYPES, need_ins_detail: true, need_del: false, cursor, count },
+    });
+    return { total: d.total ?? null, items: (d.items || []).map(slimCollected), next_cursor: d.cursor ?? null, has_more: !!d.has_more };
   },
 
   // The activity center's activities and effect tasks. raw goes to the MCP server, which keeps it for
@@ -1136,6 +1171,7 @@ const METHODS = {
   inspiration_list: 'inspirationList',
   inspiration_detail: 'inspirationDetail',
   inspiration_collect: 'inspirationCollect',
+  inspiration_collected: 'collectedInspirations',
   inspiration_bind: 'inspirationBind',
   growth_route: 'growthRoute',
   tasks_list: 'tasksList',

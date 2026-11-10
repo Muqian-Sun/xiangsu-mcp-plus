@@ -410,6 +410,64 @@ test('inspiration_collect reports a collection the server did not apply', async 
   await assert.rejects(lib.inspirationCollect({ inspiration_id: '7696975869251864618' }), /COLLECT_NOT_APPLIED: inspiration 7696975869251864618 is not collected/);
 });
 
+test('inspiration_collected asks for collected inspirations of every known artwork type with their cards, and keeps cardless entries', async () => {
+  // Trimmed from a real page (2026-11-10).
+  const page = {
+    cursor: 52,
+    count: 2,
+    has_more: true,
+    total: 56,
+    items: [
+      {
+        item_id: '7697075498307897370',
+        item_name: '鎏花入镜',
+        item_type: 2,
+        create_time: '2026-11-10 11:53:25',
+        extra: '{"img_url":"https://cdn/x.png","img_width":529.0,"img_height":668.0,"tag_desc":""}',
+        item_status: 1,
+        artwork_type: 0,
+        ins_detail: { ...INSPIRATION, is_collect: true, insp_artwork_type: 0, ins_type: 1, source: 3 },
+        task_info: { designer_task_id: '7705385617585670178', task_title: '冷空气网感美妆定向征集赛', task_id: '108116' },
+      },
+      { item_id: '7690401119121672242', item_name: '小猫踏浪舞蹈抠像模板', item_type: 2, create_time: '2026-11-07 00:21:17', item_status: 1, artwork_type: 2 },
+    ],
+  };
+  const { lib, to } = setup({ 'POST /creator_api/inspiration/v1/collect_list': ok(page) });
+  assert.deepEqual(await lib.collectedInspirations({ cursor: 50, count: 2 }), {
+    total: 56,
+    items: [
+      {
+        inspiration_id: '7697075498307897370',
+        title: '鎏花入镜',
+        tag: '激励',
+        author: '唐糖',
+        author_uid: '2465527461847677',
+        collect_count: 185,
+        collected: true,
+        ai: true,
+        hotspot: { id: '13483', title: '进博会中国好物' },
+        cover_url: 'https://cdn/i1.png',
+        artwork_type: 0,
+        collected_at: '2026-11-10T03:53:25.000Z',
+        task: { task_id: '108116', title: '冷空气网感美妆定向征集赛' },
+      },
+      { inspiration_id: '7690401119121672242', title: '小猫踏浪舞蹈抠像模板', card_missing: true, artwork_type: 2, collected_at: '2026-11-06T16:21:17.000Z', task: null },
+    ],
+    next_cursor: 52,
+    has_more: true,
+  });
+  const post = to('/creator_api/inspiration/v1/collect_list')[0];
+  assert.equal(post.headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(post.body), { item_types: [2], artwork_types: [0, 2, 5, 14], need_ins_detail: true, need_del: false, cursor: 50, count: 2 });
+  await lib.collectedInspirations();
+  assert.deepEqual(JSON.parse(to('/creator_api/inspiration/v1/collect_list')[1].body), { item_types: [2], artwork_types: [0, 2, 5, 14], need_ins_detail: true, need_del: false, cursor: 0, count: 20 });
+});
+
+test('inspiration_collected reads an empty collection, which comes without items', async () => {
+  const { lib } = setup({ 'POST /creator_api/inspiration/v1/collect_list': ok({ cursor: 0, count: 0, has_more: false, total: 0 }) });
+  assert.deepEqual(await lib.collectedInspirations(), { total: 0, items: [], next_cursor: 0, has_more: false });
+});
+
 test('tasks_list merges activities and effect tasks, and prepares launch extras only for received ones', async () => {
   const { lib, to } = setup();
   const effect = await lib.tasksList();
@@ -1093,6 +1151,7 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   const seen = [];
   const answers = {
     inspiration_list: { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_url: 'https://c/1.png' }] },
+    inspiration_collected: { total: 1, items: [{ inspiration_id: '5', title: '冻伤妆', cover_url: 'https://c/5.png' }], next_cursor: 1, has_more: false },
     inspiration_detail: { inspiration_id: '2', title: '锦鲤妆', images: ['https://c/2.png', 'https://c/2b.png'] },
     hotspot_inspirations: { topic_id: '13439', tabs: ['全部'], items: [{ tab: '全部', inspiration_id: '3', title: '咕嘟', cover_url: null }] },
     growth_tasks_list: { items: [{ task_id: 'g' }] },
@@ -1119,6 +1178,9 @@ test('community tools use the lowest-pid window; lists hand out refs and details
   await json('growth_tasks_list', {});
   assert.deepEqual(await json('growth_task_detail', { task_id: 'g' }), { task_id: 'g', inspirations: [{ inspiration_id: '4', title: '重返2018', cover_ref: 'img:2' }] });
   assert.equal((await json('inspiration_list', {})).items[0].cover_ref, 'img:1');
+  assert.deepEqual(await json('inspiration_collected', { cursor: 20, count: 50 }), { total: 1, items: [{ inspiration_id: '5', title: '冻伤妆', cover_ref: 'img:3' }], next_cursor: 1, has_more: false });
+  assert.deepEqual(seen.at(-1), { method: 'inspiration_collected', params: { cursor: 20, count: 50 }, opts: { pid: 200 } });
+  assert.equal((await client.callTool({ name: 'inspiration_collected', arguments: { count: 51 } })).isError, true);
   for (const name of ['rank_list', 'rank_subjects']) {
     const tooMany = await client.callTool({ name, arguments: { count: 21 } });
     assert.equal(tooMany.isError, true, name);
