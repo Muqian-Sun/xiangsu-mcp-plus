@@ -43,6 +43,9 @@ const TEXTURES = {
   blank: ['11111111-0000-0000-0000-00000000000f', opaque(20, 20, () => false, [0, 0, 0], [253, 253, 253])],
   // Eye layout, a liner duplicated in the file manager to be edited.
   '圆眼 - 副本': ['11111111-0000-0000-0000-000000000010', png(100, 50, (x, y) => y >= 25 && y < 31 && x >= 10 && x < 90, [115, 71, 70, 255])],
+  // Lips from 素材库「AI 妆容」 and from a 素材广场 AI makeup card.
+  aiLip: ['11111111-0000-0000-0000-000000000011', png(100, 50, (x, y) => y >= 20 && y < 30 && x >= 30 && x < 70, [200, 90, 100, 255])],
+  squareLip: ['11111111-0000-0000-0000-000000000012', png(100, 50, (x, y) => y >= 20 && y < 30 && x >= 30 && x < 70, [210, 100, 110, 255])],
 };
 
 // What each texture's .extra says about where it came from (an official package, a file the author imported).
@@ -53,6 +56,17 @@ const TEXTURE_EXTRA = {
   // A packaged look unpacks into a folder named after it, and its .extra carries an empty package id.
   iris: { assetPackageID: '', resourceFilePath: 'C:\\Users\\1\\AppData\\Local\\DouyinAR\\Instances\\Instance2\\EHpackage\\清冷_美妆\\纹理\\a5.png' },
   '圆眼 - 副本': { resourceFilePath: 'F:\\像塑\\图片\\圆眼.png' },
+  // How the asset library tags them (9.8.1): both carry an assetPackageID that is no package's.
+  aiLip: {
+    assetPackageID: 'AIAsset_MakeUp_wf12026111114561755323136595714_lip',
+    assetStudioData: { id: 'AIAsset_MakeUp_wf12026111114561755323136595714_lip', styleTag: 'AIAsset_MakeUp', type: 'AIAsset_MakeUp' },
+    resourceFilePath: '/Users/x/Library/Application Support/DouyinAR/Shared/Cache/AIGC/AI 美妆_唇部.png',
+  },
+  squareLip: {
+    assetPackageID: '7612345678901234567',
+    assetStudioData: { id: '7612345678901234567', styleTag: 'AIAsset_MakeUp_AssetLibrary', type: 'AIAsset_Image' },
+    resourceFilePath: '/Users/x/Library/Application Support/DouyinAR/Shared/Cache/AIGC/aiAssetSquareMakeup/AI 美妆_唇部妆容.png',
+  },
 };
 
 // A w×h opaque PNG: `ink` where `inside(x, y)` holds, `paper` elsewhere.
@@ -365,6 +379,20 @@ test('makeupLayers tells whether a texture came from an official package or a fi
   assert.deepEqual(l['圆眼'].texture_source, { from: '作者导入', file: '圆眼.png', copy: true });
   assert.deepEqual(l['唇部妆容'].texture_source, { from: '未知' });
   assert.deepEqual(l['旧美瞳'].texture_source, { from: '官方素材包', package_folder: '清冷_美妆' }, 'a package folder named after the look, not by id');
+});
+
+test('makeupLayers tells AI 妆容 results and 素材广场 AI makeup apart from official packages', () => {
+  const l = byName(
+    makeupLayers(
+      makeupProject([
+        ['面部面具', null],
+        ['AI 美妆_唇部', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'aiLip', female: 0.5, male: 0.1 }, { parent: '面部面具' }],
+        ['AI 美妆_唇部妆容', { type: 'FACEU_LIPS_KEYPOINT', region: 3, tex: 'squareLip', female: 0.5, male: 0.1 }, { parent: '面部面具' }],
+      ]),
+    ),
+  );
+  assert.deepEqual(l['AI 美妆_唇部'].texture_source, { from: 'AI 妆容', task_id: 'wf12026111114561755323136595714', part: 'lip' });
+  assert.deepEqual(l['AI 美妆_唇部妆容'].texture_source, { from: '素材广场', id: '7612345678901234567' });
 });
 
 test('makeup_layers tool reads a project folder, saves on request and fails on a folder without a scene', async () => {

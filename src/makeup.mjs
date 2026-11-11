@@ -175,9 +175,15 @@ function byEffect({ width, height, data }, neutral) {
   return { width, height, data: out };
 }
 
-// Where a texture came from, by its .extra: imported from an official package (assetPackageID, the
-// package's library template_id, or a path into the editor's package folder, which names the package
-// by id or by name), or a file the author imported; null without a readable .extra.
+// How the asset library tags the textures it imports for AI makeup (editor 9.8.1): 「AI 妆容」 results
+// with the task and part in the id, 素材广场 cards with the card's id.
+const AI_MAKEUP_ID = /^AIAsset_MakeUp_(.+)_([a-z]+)$/;
+const SQUARE_MAKEUP_TAG = 'AIAsset_MakeUp_AssetLibrary';
+
+// Where a texture came from, by its .extra: an AI 妆容 result or a 素材广场 AI makeup card (their
+// assetStudioData), imported from an official package (assetPackageID, the package's library
+// template_id, or a path into the editor's package folder, which names the package by id or by name),
+// or a file the author imported; null without a readable .extra.
 function textureSource(file) {
   let entry;
   try {
@@ -185,16 +191,22 @@ function textureSource(file) {
   } catch {
     return null;
   }
+  const studio = entry?.assetStudioData;
+  const ai = studio?.type === 'AIAsset_MakeUp' ? AI_MAKEUP_ID.exec(studio.id ?? '') : null;
   const from = typeof entry?.resourceFilePath === 'string' ? entry.resourceFilePath : null;
   const folder = from?.match(PACKAGE_PATH)?.[1];
   const id = entry?.assetPackageID || (/^\d+$/.test(folder ?? '') ? folder : null);
-  const source = id
-    ? { from: '官方素材包', package_id: String(id) }
-    : folder
-      ? { from: '官方素材包', package_folder: folder }
-      : from
-        ? { from: '作者导入', file: from.split(/[\\/]/).pop() }
-        : { from: '未知' };
+  const source = ai
+    ? { from: 'AI 妆容', task_id: ai[1], part: ai[2] }
+    : studio?.styleTag === SQUARE_MAKEUP_TAG
+      ? { from: '素材广场', id: String(studio.id) }
+      : id
+        ? { from: '官方素材包', package_id: String(id) }
+        : folder
+          ? { from: '官方素材包', package_folder: folder }
+          : from
+            ? { from: '作者导入', file: from.split(/[\\/]/).pop() }
+            : { from: '未知' };
   return COPY_NAME.test(path.basename(file)) ? { ...source, copy: true } : source;
 }
 
