@@ -188,6 +188,20 @@ const REQUIRED = {
     [M.orionui, 'I18n.t'],
     [M.globalConfig, 'url'],
   ],
+  aiMakeup: [
+    [M.assetsLibrary, 'AssetsLibrary.getInstance'],
+    ...['submitMakeupExtract', 'taskRecordToMessage', 'updateTaskProgress', 'ensurePartPreview', 'createCorrespondingEntity'].map((p) => [M.aiMakeupManager, `AIMakeupManager.prototype.${p}`]),
+    [M.aiMakeupConst, 'AIMakeupManagerScene'],
+    [M.aiMakeupConst, 'MakeupParts'],
+    [M.aiMakeupConst, 'MakeupPartsIndex'],
+    [M.aiEffectApi, 'queryAIGCResult'],
+    [M.aiEffectApi, 'queryAITaskHistories'],
+    [M.lokiUtils, 'downloadTemplateFile'],
+    [M.resImport, 'ResourceImportHandles.importExtAsset'],
+    [M.resImport, 'ResourceImportHandles.registerLoadingCallbackByResItem'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.scene, 'SceneModule.getEditingSceneService'],
+  ],
   arVideo: [
     [M.assetsLibrary, 'AssetsLibrary.getInstance'],
     [M.arVideoManager, 'AR_VIDEO_MAX_CONCURRENT_TASKS'],
@@ -216,7 +230,8 @@ const REQUIRED = {
 };
 
 // Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)
-// cost quota and use a different flow, so they are not exposed.
+// generate in the cloud through a flow of their own, so they are not listed here (AI 妆容, AI 3D and AR
+// 视频 have their own tools).
 const PANEL_KINDS = { GeneralAssetsList: 'general', AssetsSquareList: 'square', CollectionAssetsList: 'collection' };
 
 function slim(item, kind) {

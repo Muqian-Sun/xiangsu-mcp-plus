@@ -19,7 +19,7 @@ import { fetchImage, fetchImageBytes, readImageFile, sniffImage } from './images
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
-import { dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
+import { BLEND_MODES, dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
 import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
@@ -30,12 +30,12 @@ import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具。';
+  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 妆容」（从参考图提取妆容）用 ai_makeup_* 工具，「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具。';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 const SCRIPT_TAG_TEXT = Object.entries(SCRIPT_TAGS).map(([k, name]) => `${k} ${name}`).join('、');
 
@@ -95,6 +95,16 @@ const AR_VIDEO_SUBMIT_TIMEOUT_MS = 1200000;
 const AR_VIDEO_MAX_WAIT_S = 600;
 // Picked, not measured: importing the video and audio resources and building the AR plane.
 const AR_VIDEO_IMPORT_TIMEOUT_MS = 180000;
+// Picked: the account's six extractions took 5–8 s each (2026-11-11); ten times the slowest.
+const AI_MAKEUP_WAIT_S = 60;
+const AI_MAKEUP_MAX_WAIT_S = 300;
+// Derived: the upload and the submit call (60 s each in the editor's APIs) plus the preview's five
+// texture downloads (30 s each in the editor), on top of wait_s.
+const AI_MAKEUP_SLACK_MS = 270000;
+// Derived: five texture downloads (30 s each in the editor) and five loads (30 s each in the plugin).
+const AI_MAKEUP_IMPORT_TIMEOUT_MS = 300000;
+// Fields of the ai_makeup_* answers that hold a blend mode number; its name goes next to it.
+const AI_MAKEUP_BLEND_KEYS = ['blend_mode', 'reflect_blend_mode', 'blend'];
 // Picked, not measured: as many images per image_view call as the old preview tools showed.
 const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
@@ -144,6 +154,18 @@ async function mapPool(items, limit, fn) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// Writes each blend mode's name next to its number, as inspect_many does.
+function nameBlends(value) {
+  if (Array.isArray(value)) return value.map(nameBlends);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = nameBlends(v);
+    if (AI_MAKEUP_BLEND_KEYS.includes(k) && Number.isInteger(v)) out[`${k}_name`] = BLEND_MODES[v] ?? `未知（${v}）`;
+  }
   return out;
 }
 
@@ -1663,6 +1685,59 @@ export function createServer(deps = {}) {
         '把一张 AI 工作流放进场景，等同 AI 效果窗口的「应用」（可撤销）：编辑器编译工作流、把工作流文件上传到特效平台，再添加「AI 组合效果」对象（场景里没有 2D 前景时一并建「2D 前景」「2D 摄像机」）。不扣额度，不新建草稿；工作流生成过预览视频时一并上传供审核。效果组合节点没有输入连线等情况下编辑器会拒绝，返回 AI_COMBINE_APPLY_FAILED 和编辑器的提示原文（如「请先连接效果组合器」）。返回 added_objects（新对象名和 object_path）和 draft_id（工作流已存成云端草稿时才有，否则为 null）。之后 save_project。',
       shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
       run: plugin('ai_combine_apply', 180000),
+    },
+    {
+      name: 'ai_makeup_submit',
+      refs: true,
+      description: `素材库「AI 妆容」的「立即提取」：上传一张带妆的人像参考图，AI 从中提取面部（腮红、修容这类）、美瞳、眼部、睫毛、唇部五张妆容贴图和每个部位的推荐强度，返回 task_id。任务走面板自己的 AIMakeupManager，面板的生成记录里同样能看到。参考图须是 ${AI_MAKEUP_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}、不超过 ${AI_MAKEUP_IMAGE_LIMIT.maxMB} MB，主体清晰、无遮挡（面板的提示），越接近正脸近景提取得越准。有任务在跑时拒绝提交（报 AI_MAKEUP_RUNNING；面板此时也禁用「立即提取」）。默认等任务完成（最多 wait_s 秒，2026-11-11 实测每次 5–8 秒），完成后返回：parts（每个部位的 part、name、贴图 image_ref、推荐的 intensity 面板不透明度、female / male 男女强度、blend_mode 混合模式及其名称；美瞳是 intensity、reflect_intensity 反光强度和两种混合模式）、参考原图 reference_image_ref，以及 preview_file（面板的「整妆」预览：妆画在编辑器内置样例脸上，交给 image_view 看）。没等到完成时 status 是 running，之后用 ai_makeup_tasks（task_id + wait_s）。满意后用 ai_makeup_import 导入工程。是否扣账号额度以编辑器为准，编辑器代码里没有相关提示（历史记录里的 cost 是任务耗时的秒数，不是额度）。`,
+      shape: {
+        ...target,
+        image_path: z.string().min(1).describe('参考图的绝对路径。'),
+        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe(`最多等任务完成的秒数，默认 ${AI_MAKEUP_WAIT_S}；0 表示提交后立即返回。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, wait_s = AI_MAKEUP_WAIT_S, ...params } = a;
+        const got = await d.callPlugin('ai_makeup_submit', { ...params, wait_s }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: wait_s * 1000 + AI_MAKEUP_SLACK_MS });
+        return text(nameBlends(got));
+      },
+    },
+    {
+      name: 'ai_makeup_tasks',
+      refs: true,
+      description: `素材库「AI 妆容」的提取记录（当前账号，与面板右侧的记录同一份），最新的在前。不传 task_id 时按 cursor 分页列出：状态（running / finished / failed）、创建和完成时间、参考原图 reference_image_ref、失败原因 failure，完成的带 parts（各部位贴图 image_ref 和推荐强度、混合模式，字段同 ai_makeup_submit）。传 task_id 时只查这一个，再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI_MAKEUP_MAX_WAIT_S} 秒）；完成的另给 preview_file（面板的「整妆」预览，交给 image_view 看）。`,
+      shape: {
+        ...target,
+        task_id: z.string().min(1).optional().describe('只查这个任务（ai_makeup_submit 返回的 task_id）。'),
+        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
+        count: z.number().int().min(1).max(AI_MAKEUP_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AI_MAKEUP_HISTORY_PAGE}（服务端上限）。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, task_id, wait_s = 0, cursor, count } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        if (task_id !== undefined) return text(nameBlends(await d.callPlugin('ai_makeup_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + AI_MAKEUP_SLACK_MS })));
+        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        return text(nameBlends(await d.callPlugin('ai_makeup_tasks', { cursor, count }, win)));
+      },
+    },
+    {
+      name: 'ai_makeup_import',
+      description:
+        '把一个已完成的 AI 妆容任务导入目标工程，等同面板里勾选部位后点「导入素材」（不动面板里自己勾选的项）：每个部位的贴图以面板的文件名「AI 美妆_面部.png」等导入 Assets（工程里已有同名文件时编辑器自动改名为「AI 美妆_面部 (1).png」，不会覆盖之前导入的），在「面部面具」下建同名的层（场景里没有「面部面具」时连同它的摄像机一起建），强度、男女强度和混合模式取 AI 的推荐值。美瞳层另外处理：编辑器 9.8.1 的面板会把美瞳的贴图和强度写到一个美瞳层上并不存在的组件，导入后的美瞳层其实是内置的默认棕色瞳色、强度 0.8；本工具把 AI 的美瞳贴图、推荐强度、反光强度和混合模式写到美瞳组件（EyeColorV2）上，并照面板的意图关掉透明度贴图。可撤销（编辑器每个部位记两步）。parts 只导部分部位，默认全部五个。返回 added_objects、layers（每层的 object_path、贴图 texture、读回的 intensity / female / male / blend 等，美瞳是 intensity）、skipped_parts（这次提取没给贴图的部位）和 package_folders。之后用 makeup_compare 调强度，save_project。',
+      shape: {
+        ...target,
+        task_id: z.string().min(1).describe('ai_makeup_submit / ai_makeup_tasks 返回的 task_id（须 status=finished）。'),
+        parts: z
+          .array(z.enum(['rest', 'pupil', 'eyepart', 'eyelash', 'lip']))
+          .min(1)
+          .optional()
+          .describe('只导这些部位：rest 面部、pupil 美瞳、eyepart 眼部、eyelash 睫毛、lip 唇部；默认全部。'),
+      },
+      run: async (args) => {
+        const { project_path, instance_id, ...params } = args;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        return text(nameBlends(await d.callPlugin('ai_makeup_import', params, { projectPath, timeoutMs: AI_MAKEUP_IMPORT_TIMEOUT_MS })));
+      },
     },
     {
       name: 'ai3d_image_submit',

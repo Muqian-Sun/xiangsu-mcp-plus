@@ -125,4 +125,4 @@ const methods = {
 
 const METHODS = { makeup_list: 'makeupList', makeup_set: 'makeupSet', preview_fresh: 'previewFresh' };
 
-module.exports = { methods, METHODS, KINDS, SETTABLE };
+module.exports = { methods, METHODS, KINDS, SETTABLE, tunables, describe };

@@ -22,6 +22,9 @@ const OWN = [
   'ai3d_tasks',
   'ai_combine_apply',
   'ai_combine_new',
+  'ai_makeup_import',
+  'ai_makeup_submit',
+  'ai_makeup_tasks',
   'ar_video_cancel',
   'ar_video_import',
   'ar_video_submit',
@@ -476,6 +479,50 @@ test('official tools that overlap ours are listed with a note naming ours; the r
   assert.match(desc('edit_by_dsl'), /（xiangsu-mcp-plus）.*object_remove/);
   assert.match(desc('edit_by_dsl'), /\$ref.*component_type.*换成该对象上 T 组件的 guid/);
   assert.equal(desc('list_resources'), '官方list_resources');
+});
+
+test('ai_makeup tools route account calls to any window, imports to the project, and name the blend modes', async () => {
+  const seen = [];
+  const part = { part: 'pupil', name: '美瞳', image_url: 'https://cdn/pupil.png', intensity: 0.35, reflect_intensity: 0.1, blend_mode: 0, reflect_blend_mode: 1 };
+  const view = { task_id: 't1', status: 'finished', reference_image_url: 'https://cdn/ref.jpg', parts: [part], preview_file: '/state/ai-makeup/t1.png' };
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 30 }, { pid: 20 }],
+    callPlugin: async (method, params, opts) => {
+      seen.push({ method, params, opts });
+      if (method === 'ai_makeup_import') return { task_id: 't1', layers: [{ part: 'lip', kind: 'face_mask', blend: 1 }, { part: 'pupil', kind: 'eye_color', intensity: 0.35 }] };
+      if (method === 'ai_makeup_tasks') return { items: [view], next_cursor: 1, has_more: false };
+      return view;
+    },
+  });
+  const call = async (name, args) => client.callTool({ name, arguments: args });
+  const sent = JSON.parse((await call('ai_makeup_submit', { image_path: '/a/ref.jpg' })).content[0].text);
+  assert.deepEqual(seen[0], { method: 'ai_makeup_submit', params: { image_path: '/a/ref.jpg', wait_s: 60 }, opts: { pid: 20, timeoutMs: 330000 } });
+  assert.match(sent.reference_image_ref, /^img:\d+$/);
+  assert.match(sent.parts[0].image_ref, /^img:\d+$/);
+  assert.deepEqual([sent.parts[0].blend_mode_name, sent.parts[0].reflect_blend_mode_name, sent.preview_file], ['普通', '正片叠底', '/state/ai-makeup/t1.png']);
+  await call('ai_makeup_submit', { image_path: '/a/ref.jpg', wait_s: 0 });
+  assert.deepEqual([seen[1].params.wait_s, seen[1].opts.timeoutMs], [0, 270000]);
+
+  const listed = JSON.parse((await call('ai_makeup_tasks', { count: 5 })).content[0].text);
+  assert.deepEqual(seen[2], { method: 'ai_makeup_tasks', params: { cursor: undefined, count: 5 }, opts: { pid: 20 } });
+  assert.equal(listed.items[0].parts[0].blend_mode_name, '普通');
+  await call('ai_makeup_tasks', { task_id: 't1', wait_s: 30 });
+  assert.deepEqual(seen[3], { method: 'ai_makeup_task', params: { task_id: 't1', wait_s: 30 }, opts: { pid: 20, timeoutMs: 300000 } });
+  const stray = await call('ai_makeup_tasks', { wait_s: 30 });
+  assert.match(stray.content[0].text, /wait_s only applies together with task_id/);
+  const tooMany = await call('ai_makeup_tasks', { count: 21 });
+  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai_makeup_tasks\): count/);
+
+  const imported = JSON.parse((await call('ai_makeup_import', { project_path: '/proj/B', task_id: 't1', parts: ['lip', 'pupil'] })).content[0].text);
+  assert.deepEqual(seen[4], { method: 'ai_makeup_import', params: { task_id: 't1', parts: ['lip', 'pupil'] }, opts: { projectPath: '/proj/B', timeoutMs: 300000 } });
+  assert.deepEqual(imported.layers, [
+    { part: 'lip', kind: 'face_mask', blend: 1, blend_name: '正片叠底' },
+    { part: 'pupil', kind: 'eye_color', intensity: 0.35 },
+  ]);
+  const badPart = await call('ai_makeup_import', { task_id: 't1', parts: ['brow'] });
+  assert.match(badPart.content[0].text, /INVALID_ARGUMENTS\(ai_makeup_import\): parts\.0/);
+  assert.equal(seen.length, 5);
 });
 
 test('ai3d tools route account calls to any window and keep the found subject for ai3d_gs_submit', async () => {

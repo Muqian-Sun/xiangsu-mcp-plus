@@ -57,6 +57,8 @@ const M = {
   editWindow: '@orion/Business/EditWindow/EditWindowController',
   aiGraphManager: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/Manager/AIGraphManager',
   aiGraphProject: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/AIGraphProjectUtils',
+  aiMakeupManager: '@orion/Business/AssetsLibrary/Core/Control/AIMakeupManager/AIMakeupManager',
+  aiMakeupConst: '@orion/Business/AssetsLibrary/Core/Control/AIMakeupManager/const',
   ai3dConst: '@orion/Business/AssetsLibrary/Core/Control/AI3DManager/const',
   ai3dUtils: '@orion/Business/AssetsLibrary/Core/Control/AI3DManager/utils',
   uploadApi: '@orion/Business/API/upload_api',
