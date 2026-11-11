@@ -366,9 +366,11 @@ test('own answers over the spill limit come back as a file and an outline, after
   assert.equal(small.items[0].cover_ref, 'img:1');
 });
 
-test('ext_status reports the official connection and each window with instance id and self check', async () => {
+test('ext_status reports the official connection, the plugin install and each window with instance id and self check', async () => {
+  const pluginInstall = { action: 'failed', error: 'PLUGIN_ROOT_NOT_FOUND: /x (start 像塑 once first)' };
   const { client } = await connect({
     official: fakeOfficial(),
+    pluginInstall,
     listInstances: () => [{ pid: 100 }, { pid: 101 }],
     callPlugin: async (method, _p, opts) => {
       if (method === 'status') return { projectPath: `/proj/${opts.pid}` };
@@ -379,6 +381,7 @@ test('ext_status reports the official connection and each window with instance i
   });
   const res = JSON.parse((await client.callTool({ name: 'ext_status', arguments: {} })).content[0].text);
   assert.deepEqual(res.official, { connected: true, tools: 1 });
+  assert.deepEqual(res.plugin_install, pluginInstall);
   assert.deepEqual(res.windows[0], { pid: 100, project_path: '/proj/100', instance_id: '1', unsaved_changes: true, self_check: { ok: true, missing: [] } });
   assert.equal(res.windows[1].instance_id, null);
   assert.equal(res.windows[1].unsaved_changes, null);
