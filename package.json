@@ -39,6 +39,7 @@
   },
   "license": "MIT",
   "bin": {
+    "xiangsu-mcp-plus": "src/server.mjs",
     "xiangsu-mcp-ext": "src/server.mjs",
     "xiangsu-mcp-ext-install": "scripts/install.mjs"
   },

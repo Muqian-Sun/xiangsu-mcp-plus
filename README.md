@@ -212,39 +212,52 @@
 
 需要 Node.js 24+ 和已安装的像塑。安装即表示你同意下面「协议与声明」里的用途限制：只用于学习和个人制作，不得用来抄袭他人作品。
 
-从 npm 安装（必须全局安装：插件按绝对路径加载这份代码，`npx` 的临时缓存会被清理，安装命令在那里会直接拒绝）：
+在 MCP 客户端里注册一个 stdio 服务即可，一行：
 
 ```bash
-npm install -g @muqian/xiangsu-mcp-plus
-xiangsu-mcp-ext-install   # 装到 ~/Library/Application Support/DouyinAR/Plugins/v<版本>/Local
-echo "$(npm root -g)/@muqian/xiangsu-mcp-plus/src/server.mjs"   # MCP 配置里 args 用这个路径
+claude mcp add -s user xiangsu -- npx -y @muqian/xiangsu-mcp-plus   # Claude Code
+codex mcp add xiangsu -- npx -y @muqian/xiangsu-mcp-plus            # Codex
 ```
 
-或从源码安装：
-
-```bash
-git clone https://github.com/Muqian-Sun/xiangsu-mcp-plus.git
-cd xiangsu-mcp-plus
-npm ci
-node scripts/install.mjs
-```
-
-在 MCP 客户端配置里加一个 stdio 服务（`command` 用 `which node` 的绝对路径，`args` 用上面的 `server.mjs` 路径或源码目录下的 `src/server.mjs`）：
+Cursor 等用 JSON 配置的客户端：
 
 ```json
 {
   "mcpServers": {
     "xiangsu": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/src/server.mjs"]
+      "command": "npx",
+      "args": ["-y", "@muqian/xiangsu-mcp-plus"]
     }
   }
 }
 ```
 
+服务每次启动时检查编辑器插件，没装、版本比自己旧或者插件指向的代码已经不在时，自动装到 `~/Library/Application Support/DouyinAR/Plugins/v<编辑器版本>/Local`（像塑升级后换了版本目录也会自动补装）；已装的是同版本或更新的就不动，所以同一台机器上开着几个不同来源的服务也不会来回覆盖。插件按绝对路径加载代码，而 `npx` 的缓存随时可能被清理，所以从 `npx` 运行时会先把 `editor-plugin/` 复制到 `~/.xiangsu-mcp-ext/editor-plugin/<版本>/`，插件加载那份复制；从源码目录或 `npm install -g` 的目录运行时直接加载原处，不要挪动。安装结果（新装、未动或失败原因，例如像塑没装或还没启动过）在 `ext_status` 的 `plugin_install` 里。
+
+插件只在安装后**新打开的工程窗口**里加载；第一次装好后，已开着的窗口要保存后重开。
+
+Codex 默认单次工具调用 60 秒、服务启动 10 秒超时，而打开工程、提交准备、AI 3D 和 AR 视频生成要等几分钟（`ar_video_submit` 最长 20 分钟），第一次 `npx` 启动还要先下载依赖，要在 `~/.codex/config.toml` 里调大：
+
+```toml
+[mcp_servers.xiangsu]
+command = "npx"
+args = ["-y", "@muqian/xiangsu-mcp-plus"]
+startup_timeout_sec = 60
+tool_timeout_sec = 1500
+```
+
 它已经包含官方工具，不必再单独配置官方的 `xiangsu-mcp-manager`。如果你还在用像塑自带的 `xiangsu-effect-editor` skill，它要求客户端里存在名为 `xiangsu-mcp-manager` 的服务；这种情况下保留官方配置即可，两者可以并存。
 
-插件只在安装后**新打开的工程窗口**里加载；已开着的窗口要保存后重开。插件直接 `require` 这份代码（源码目录或 npm 全局目录），安装后不要挪动；用 `npm install -g` 升级时路径不变，不用重新运行安装命令。
+从源码运行（开发用）：
+
+```bash
+git clone https://github.com/Muqian-Sun/xiangsu-mcp-plus.git
+cd xiangsu-mcp-plus
+npm ci
+claude mcp add -s user xiangsu -- "$(which node)" "$PWD/src/server.mjs"
+```
+
+`node scripts/install.mjs`（npm 全局安装后是 `xiangsu-mcp-ext-install`）不看版本，把插件强制指回这份代码，用于从别的来源切回源码目录。
 
 ### 更新后怎么生效
 
@@ -291,6 +304,6 @@ node scripts/install.mjs
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), create AI combine workflows (the photo is sent to the cloud and generated from the workflow) and apply them to the scene the way the AI effect window does, leaving node editing and preview generation to the official workflow tools, run the asset library's AI 3D generation (image → static mesh, a video's human motion → an animated FBX with the standard humanoid skeleton, an orbit video → a 3D Gaussian splat) and import the results the way its panel does, run its AR video generation (a subject image or video → a matted video of the subject doing a described motion, placed as an AR plane sticker) through the panel's own task manager, list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, filling in the submit window — name, trigger hint, camera, inspiration, task — up to its final step, where pressing 提交审核 stays a user click, phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, list the account's submitted effects with their review status and, for rejected ones, the reviewer's reason and full review timeline, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm install -g @muqian/xiangsu-mcp-plus && xiangsu-mcp-ext-install` (a global install is required: the editor plugin loads this code by absolute path, so the npx cache is refused), or from source with `npm ci && node scripts/install.mjs`; then register `node <package>/src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), create AI combine workflows (the photo is sent to the cloud and generated from the workflow) and apply them to the scene the way the AI effect window does, leaving node editing and preview generation to the official workflow tools, run the asset library's AI 3D generation (image → static mesh, a video's human motion → an animated FBX with the standard humanoid skeleton, an orbit video → a 3D Gaussian splat) and import the results the way its panel does, run its AR video generation (a subject image or video → a matted video of the subject doing a described motion, placed as an AR plane sticker) through the panel's own task manager, list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, filling in the submit window — name, trigger hint, camera, inspiration, task — up to its final step, where pressing 提交审核 stays a user click, phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, list the account's submitted effects with their review status and, for rejected ones, the reviewer's reason and full review timeline, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Register it as a stdio MCP server in one line, e.g. `claude mcp add -s user xiangsu -- npx -y @muqian/xiangsu-mcp-plus` or `codex mcp add xiangsu -- npx -y @muqian/xiangsu-mcp-plus` (for Codex also raise `tool_timeout_sec`, since some tools wait minutes). At startup the server installs the editor plugin when it is missing, older, or its code is gone (copying the plugin code out of the npx cache first) and leaves an equal or newer one alone; `ext_status` reports the outcome. Project windows already open load the plugin after they are reopened.
 
 **For learning and personal creation only. Do not use it to copy other creators' works**: works you view, download or apply through this tool (homepage projects, ranked effects, assets other creators shared) must not be republished, submitted, used commercially or passed off as your own, as is or modified. Licensed under [MIT](LICENSE), which covers this project's own code only. Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.

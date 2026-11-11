@@ -28,6 +28,7 @@ import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outli
 import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
+import { ensurePlugin } from './plugininstall.mjs';
 
 const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE } = createRequire(
   import.meta.url,
@@ -421,7 +422,7 @@ export function createServer(deps = {}) {
     {
       name: 'ext_status',
       description:
-        '扩展自身状态：官方 MCP 连接情况，以及每个已加载 XiangsuMcpExt 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
+        '扩展自身状态：官方 MCP 连接情况；本次启动时编辑器插件的安装结果 plugin_install（action 为 installed 新装、kept 已有同版本或更新的插件未动、failed 安装失败附 error）；以及每个已加载 XiangsuMcpExt 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
       shape: {},
       run: async () => {
         const official = await d.official.listTools().then(() => d.official.status());
@@ -434,7 +435,7 @@ export function createServer(deps = {}) {
           const state = await d.callPlugin('project_state', {}, { pid: w.pid, timeoutMs: 5000 }).catch(() => null);
           windows.push({ ...w, instance_id: ids.get(w.pid) ?? null, unsaved_changes: state ? state.changed : null, self_check });
         }
-        return text({ official, windows });
+        return text({ official, plugin_install: d.pluginInstall ?? null, windows });
       },
     },
     {
@@ -1993,5 +1994,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
     });
   }
   callLog.write({ event: 'started' });
-  await createServer({ official, callLog }).connect(new StdioServerTransport());
+  // A failed install (像塑 missing or never started) still leaves the official tools working.
+  let pluginInstall;
+  try {
+    pluginInstall = ensurePlugin();
+  } catch (e) {
+    pluginInstall = { action: 'failed', error: String(e?.message ?? e) };
+  }
+  callLog.write({ event: 'plugin_install', ...pluginInstall });
+  await createServer({ official, callLog, pluginInstall }).connect(new StdioServerTransport());
 }
