@@ -1186,7 +1186,7 @@ export function createServer(deps = {}) {
       name: 'my_effect_data',
       refs: true,
       description:
-        '一个自己已上线特效的数据卡片，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；流量状态 traffic（如「流量正常」）；播放数 views（与任务页的播放数同源）；绑定的任务和灵感 related。按天的趋势和投稿等级用 my_effect_trend，收益用 my_effect_revenue。',
+        '一个自己已上线特效的数据卡片，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；流量状态 traffic：status、标签名 tags（如「流量正常」「精选加热中」）和每个标签的 details（加热进度：vv_expected 目标曝光、vv_real 已发曝光，精选加热两个都有，官方加热一般只有 vv_real，没有的是 null）；播放数 views（与任务页的播放数同源）；绑定的任务和灵感 related。按天的趋势和投稿等级用 my_effect_trend，收益用 my_effect_revenue。',
       shape: { ...target, ...effectKeys },
       run: community('my_effect_data'),
     },
