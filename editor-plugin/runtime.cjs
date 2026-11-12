@@ -141,6 +141,11 @@ class Runtime {
     this.libraryMtime = mtime;
     const check = this.library.selfCheck();
     log('library loaded', JSON.stringify(check));
+    try {
+      this.library.installBackgroundOpen();
+    } catch (e) {
+      log('background open unavailable', e && e.message);
+    }
   }
 
   resolve(method) {

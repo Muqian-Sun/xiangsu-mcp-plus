@@ -3,13 +3,43 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 
-const BUNDLE_ID = 'com.ies.dyeh';
-const TMP_MARK = `${path.sep}ProjectCreatedTmp${path.sep}`;
+const { backgroundOpenFile } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
 
-export function openWithApp(file) {
-  return promisify(execFile)('open', ['-b', BUNDLE_ID, file]);
+const BUNDLE_ID = 'com.ies.dyeh';
+// The home process is com.ies.dyeh, its project windows com.ies.dyeh.orionkit.
+const EDITOR_BUNDLE = /^com\.ies\.dyeh(\.|$)/;
+const TMP_MARK = `${path.sep}ProjectCreatedTmp${path.sep}`;
+// Picked: how often the focus is checked during a background open; with it the focus a window process
+// took came back within 70–190 ms (9.8.1).
+const FOCUS_POLL_MS = 100;
+// Measured on 9.8.1: the last activation came about 0.1 s before the window turned minimized, and the
+// window state is polled once a second, so the focus is watched for one second more.
+const FOCUS_TAIL_MS = 1000;
+const run = promisify(execFile);
+
+export function openWithApp(file, { background = false } = {}, exec = run) {
+  return exec('open', [...(background ? ['-g'] : []), '-b', BUNDLE_ID, file]);
+}
+
+// The app in front as { pid, bundle_id }; null when no app is, or it quit between the two queries
+// (lsappinfo then prints [ NULL ] for it).
+export async function frontApp(exec = run) {
+  const asn = (await exec('lsappinfo', ['front'])).stdout.trim();
+  if (!asn.startsWith('ASN:')) return null;
+  const { stdout } = await exec('lsappinfo', ['info', '-only', 'pid', '-only', 'bundleid', asn]);
+  if (stdout.includes('"pid"=[ NULL ]')) return null;
+  const pid = /"pid"=(\d+)/.exec(stdout);
+  const bundle = /"CFBundleIdentifier"="([^"]+)"/.exec(stdout);
+  if (!pid || !bundle) throw Error(`FRONT_APP_UNREADABLE: lsappinfo said ${JSON.stringify(stdout)} for ${asn}`);
+  return { pid: Number(pid[1]), bundle_id: bundle[1] };
+}
+
+// Through LaunchServices, which needs no Accessibility or Automation permission.
+export function activateApp(bundleId, exec = run) {
+  return exec('open', ['-b', bundleId]);
 }
 
 const real = (p) => {
@@ -107,25 +137,86 @@ export class Projects {
     if (!ok) throw Error(`SCENE_NOT_READY: window ${pid} did not finish loading its scene`);
   }
 
+  // The edit window of a background open is shown minimized once the project has loaded.
+  async waitShownInBackground(pid) {
+    const win = await waitFor(
+      async () => {
+        const w = await this.d.callPlugin('preview_window', {}, { pid, timeoutMs: 5000 });
+        return w.minimized || w.visible ? w : null;
+      },
+      { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep },
+    );
+    if (!win) throw Error(`BACKGROUND_SHOW_TIMEOUT: window ${pid} loaded the project but never showed its window`);
+    if (!win.minimized) throw Error(`BACKGROUND_NOT_APPLIED: window ${pid} has the project open in front; its plugin has no background open (close the idle 像塑 windows started before the plugin update, or restart 像塑)`);
+  }
+
+  // Marks the project for the plugin of whichever window takes it; the mark outlives every wait of a
+  // launch, so only a server that exits mid-open leaves one behind, and it expires.
+  markBackground(abs) {
+    const file = backgroundOpenFile(abs);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ project_path: abs, expires_at: Date.now() + 3 * this.d.openTimeoutMs + this.d.launchRetryMs }));
+    return () => fs.rmSync(file, { force: true });
+  }
+
+  // Taking over a project activates the window process before any window shows; while this runs,
+  // whenever a 像塑 process takes the focus it goes back to the last other app in front, which is
+  // not the one in front at the start when the user switched apps meanwhile.
+  keepFocus(owner) {
+    let stopped = false;
+    const state = { owner, error: null };
+    const loop = (async () => {
+      while (!stopped) {
+        const front = await this.d.frontApp();
+        if (front && EDITOR_BUNDLE.test(front.bundle_id)) await this.d.activateApp(state.owner.bundle_id);
+        else if (front) state.owner = front;
+        await this.d.sleep(FOCUS_POLL_MS);
+      }
+    })().catch((e) => {
+      state.error = e;
+    });
+    return async () => {
+      stopped = true;
+      await loop;
+      return state;
+    };
+  }
+
   // template_id opens the folder the way the homepage opens a work (openTemplate): no version-upgrade
   // prompt, and the project starts unsaved. That launch goes through a window, so one must be open.
   // `activity` binds the project to a creator task the way the task detail window does (see the
-  // plugin's project_launch).
-  async open({ path: target, template_id, activity }) {
+  // plugin's project_launch). `background` keeps the window minimized and the focus where it was.
+  async open({ path: target, template_id, activity, background = false }) {
     const abs = path.resolve(target);
-    if (!fs.existsSync(path.join(abs, 'effect.dyehpj'))) throw Error(`NOT_A_PROJECT: ${abs} has no effect.dyehpj`);
+    const file = path.join(abs, 'effect.dyehpj');
+    if (!fs.existsSync(file)) throw Error(`NOT_A_PROJECT: ${abs} has no effect.dyehpj`);
     const windows = await this.windows();
     const already = windows.find((w) => samePath(w.project_path, abs));
     if (already) return { already_open: true, pid: already.pid, project_path: already.project_path, instance_id: await this.instanceIdForPid(already.pid, this.d.instanceTimeoutMs) };
+    if (!windows.length && (template_id !== undefined || activity !== undefined)) throw Error('NO_EDITOR_WINDOW: open any project window first; template and task launches go through an open editor window');
     const launch = template_id === undefined ? { operation: 'openLocal', path: abs } : { operation: 'openTemplate', path: abs, template_id };
     if (activity !== undefined) launch.activity = activity;
-    if (windows.length) await this.launch(windows[0].pid, launch);
-    else if (template_id === undefined && activity === undefined) await this.d.openWithApp(path.join(abs, 'effect.dyehpj'));
-    else throw Error('NO_EDITOR_WINDOW: open any project window first; template and task launches go through an open editor window');
-    const w = await waitFor(async () => (await this.windows()).find((x) => samePath(x.project_path, abs)), { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep });
-    if (!w) throw Error(`OPEN_TIMEOUT: ${abs} did not finish opening; 像塑 may be showing a dialog (e.g. version upgrade) that needs a click`);
-    await this.waitReady(w.pid);
-    return { already_open: false, pid: w.pid, project_path: w.project_path, instance_id: await this.instanceIdForPid(w.pid, this.d.instanceTimeoutMs) };
+    const owner = background ? await this.d.frontApp() : null;
+    const unmark = background ? this.markBackground(abs) : null;
+    const stopFocus = owner && !EDITOR_BUNDLE.test(owner.bundle_id) ? this.keepFocus(owner) : null;
+    let opened;
+    let focus = null;
+    try {
+      if (windows.length) await this.launch(windows[0].pid, launch);
+      else await this.d.openWithApp(file, { background });
+      const w = await waitFor(async () => (await this.windows()).find((x) => samePath(x.project_path, abs)), { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep });
+      if (!w) throw Error(`OPEN_TIMEOUT: ${abs} did not finish opening; 像塑 may be showing a dialog (e.g. version upgrade) that needs a click`);
+      await this.waitReady(w.pid);
+      if (background) await this.waitShownInBackground(w.pid);
+      if (stopFocus) await this.d.sleep(FOCUS_TAIL_MS);
+      opened = { already_open: false, pid: w.pid, project_path: w.project_path, instance_id: await this.instanceIdForPid(w.pid, this.d.instanceTimeoutMs) };
+    } finally {
+      if (unmark) unmark();
+      if (stopFocus) focus = await stopFocus();
+    }
+    if (background) opened.background = { minimized: true, focus_kept_on: focus ? focus.owner.bundle_id : null };
+    if (focus && focus.error) opened.background.focus_error = `FOCUS_NOT_RETURNED: ${focus.error.message}`;
+    return opened;
   }
 
   // A new, never saved project window (像塑 keeps it under ProjectCreatedTmp until it is saved).

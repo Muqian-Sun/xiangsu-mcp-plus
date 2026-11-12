@@ -55,6 +55,7 @@ const M = {
   preview: '@orion/Business/Preview/PreviewManager',
   backgroundMode: '@orion/Business/EditWindow/BackgroundModeManager',
   editWindow: '@orion/Business/EditWindow/EditWindowController',
+  progressWindow: '@orion/Business/BusinessCommon/Project/ProjectProgress/Service',
   aiGraphManager: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/Manager/AIGraphManager',
   aiGraphProject: '@orion/Business/AIEffectWindow/AICombinationToolPanel/Core/AIGraphProjectUtils',
   aiMakeupManager: '@orion/Business/AssetsLibrary/Core/Control/AIMakeupManager/AIMakeupManager',

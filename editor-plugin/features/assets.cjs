@@ -56,6 +56,14 @@ const REQUIRED = {
     [M.ipc, 'OpenProjectFromEditCommand'],
     [M.sender, 'EditSender.getInstance'],
   ],
+  backgroundOpen: [
+    [M.ef, 'ProjectManager.getInstance'],
+    [M.editWindow, 'EditWindowController.prototype.showWindow'],
+    [M.progressWindow, 'ProjectProgressServiceInstance.showProgressWindow'],
+    [M.orionui, 'ReactWindow.prototype.show'],
+    [M.orionui, 'MainWindow.prototype.showMinimized'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+  ],
   works: [
     [M.worksPanel, 'apiTemplatesPanel'],
     [M.worksCategory, 'apiTemplatesCategory'],

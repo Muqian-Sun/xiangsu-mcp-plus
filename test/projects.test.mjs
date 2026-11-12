@@ -3,7 +3,10 @@ import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Projects } from '../src/projects.mjs';
+import { createRequire } from 'node:module';
+import { Projects, activateApp, frontApp, openWithApp } from '../src/projects.mjs';
+
+const { backgroundOpenFile } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
 
 const tmp = () => tmpdir('xs-p-');
 
@@ -228,6 +231,138 @@ test('other launch failures are not retried', async () => {
   };
   await assert.rejects(new Projects(d).open({ path: project() }), /^Error: LAUNCH_FAILED/);
   assert.equal(launches, 1);
+});
+
+// The window process takes the focus while it loads; preview_window reports the edit window hidden
+// until it is shown, then as `shown`.
+function backgroundWorld({ owner = { pid: 1, bundle_id: 'com.todesktop.cursor' }, shown = { visible: false, minimized: true, window: true } } = {}) {
+  const w = world();
+  const { d, calls } = w;
+  let front = owner;
+  w.marks = [];
+  d.frontApp = async () => {
+    calls.push(['front']);
+    return front;
+  };
+  d.activateApp = async (bundle) => {
+    calls.push(['activate', bundle]);
+    front = owner;
+  };
+  const plugin = d.callPlugin;
+  let windowChecks = 0;
+  d.callPlugin = async (method, params, opts) => {
+    if (method === 'project_launch') {
+      const file = backgroundOpenFile(params.path);
+      w.marks.push(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null);
+      front = { pid: 200, bundle_id: 'com.ies.dyeh.orionkit' };
+    }
+    if (method === 'preview_window') {
+      windowChecks += 1;
+      calls.push(['plugin', method, params, opts]);
+      return windowChecks < 2 ? { visible: false, minimized: false, window: true } : shown;
+    }
+    return plugin(method, params, opts);
+  };
+  return w;
+}
+
+test('a background open marks the project while it opens, waits for the minimized window and hands the focus back', async () => {
+  const { d, calls, marks } = backgroundWorld();
+  const dir = project();
+  const out = await new Projects(d).open({ path: dir, background: true });
+  assert.deepEqual(out, { already_open: false, pid: 200, project_path: dir, instance_id: '2', background: { minimized: true, focus_kept_on: 'com.todesktop.cursor' } });
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].project_path, dir);
+  assert.ok(marks[0].expires_at > Date.now());
+  assert.equal(fs.existsSync(backgroundOpenFile(dir)), false);
+  assert.ok(calls.some((c) => c[0] === 'activate' && c[1] === 'com.todesktop.cursor'));
+  assert.equal(calls.filter((c) => c[1] === 'preview_window').length, 2);
+  const seen = calls.length;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, seen, 'focus watch stopped');
+});
+
+test('a background open whose window comes up in front fails loudly and still cleans up', async () => {
+  const { d, calls } = backgroundWorld({ shown: { visible: true, minimized: false, window: true } });
+  const dir = project();
+  await assert.rejects(new Projects(d).open({ path: dir, background: true }), /BACKGROUND_NOT_APPLIED: window 200 has the project open in front/);
+  assert.equal(fs.existsSync(backgroundOpenFile(dir)), false);
+  const seen = calls.length;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, seen, 'focus watch stopped');
+});
+
+test('a background open hands the focus to the app the user switched to while it opened', async () => {
+  const { d, calls } = backgroundWorld();
+  const fronts = [{ pid: 1, bundle_id: 'com.todesktop.cursor' }, { pid: 2, bundle_id: 'com.tencent.WeWorkMac' }, { pid: 200, bundle_id: 'com.ies.dyeh.orionkit' }];
+  let front = fronts[0];
+  let reads = 0;
+  d.frontApp = async () => {
+    reads += 1;
+    if (reads <= fronts.length) front = fronts[reads - 1];
+    return front;
+  };
+  d.activateApp = async (bundle) => {
+    calls.push(['activate', bundle]);
+    front = fronts.find((f) => f.bundle_id === bundle);
+  };
+  const out = await new Projects(d).open({ path: project(), background: true });
+  assert.deepEqual(calls.filter((c) => c[0] === 'activate'), [['activate', 'com.tencent.WeWorkMac']]);
+  assert.equal(out.background.focus_kept_on, 'com.tencent.WeWorkMac');
+});
+
+test('a background open leaves the focus alone when 像塑 itself is in front', async () => {
+  const { d, calls } = backgroundWorld({ owner: { pid: 72074, bundle_id: 'com.ies.dyeh' } });
+  const out = await new Projects(d).open({ path: project(), background: true });
+  assert.deepEqual(out.background, { minimized: true, focus_kept_on: null });
+  assert.deepEqual(calls.filter((c) => c[0] === 'front' || c[0] === 'activate'), [['front']]);
+});
+
+test('a background open reports a focus watch that broke, with the window open minimized', async () => {
+  const { d } = backgroundWorld();
+  const front = d.frontApp;
+  let n = 0;
+  d.frontApp = async () => {
+    if (++n === 2) throw Error('lsappinfo gone');
+    return front();
+  };
+  const out = await new Projects(d).open({ path: project(), background: true });
+  assert.equal(out.background.minimized, true);
+  assert.equal(out.background.focus_error, 'FOCUS_NOT_RETURNED: lsappinfo gone');
+});
+
+test('a background open with no editor window starts 像塑 without bringing it forward', async () => {
+  const { d, windows, calls } = backgroundWorld();
+  windows.clear();
+  const open = d.openWithApp;
+  d.openWithApp = async (file, opts) => {
+    calls.push(['open-opts', opts]);
+    return open(file);
+  };
+  const out = await new Projects(d).open({ path: project(), background: true });
+  assert.equal(out.pid, 300);
+  assert.deepEqual(calls.find((c) => c[0] === 'open-opts'), ['open-opts', { background: true }]);
+});
+
+test('像塑 is started through LaunchServices, in the background only when asked', async () => {
+  const seen = [];
+  const exec = async (cmd, args) => seen.push([cmd, ...args]);
+  await openWithApp('/p/effect.dyehpj', {}, exec);
+  await openWithApp('/p/effect.dyehpj', { background: true }, exec);
+  await activateApp('com.todesktop.cursor', exec);
+  assert.deepEqual(seen, [
+    ['open', '-b', 'com.ies.dyeh', '/p/effect.dyehpj'],
+    ['open', '-g', '-b', 'com.ies.dyeh', '/p/effect.dyehpj'],
+    ['open', '-b', 'com.todesktop.cursor'],
+  ]);
+});
+
+test('frontApp reads the app in front from lsappinfo and fails on output it cannot read', async () => {
+  const lsappinfo = (front, info) => async (cmd, args) => ({ stdout: args[0] === 'front' ? front : info });
+  assert.deepEqual(await frontApp(lsappinfo('ASN:0x0-0xbe2be2:\n', '"pid"=57795\n"CFBundleIdentifier"="com.google.Chrome"\n')), { pid: 57795, bundle_id: 'com.google.Chrome' });
+  assert.equal(await frontApp(lsappinfo('\n', '')), null);
+  assert.equal(await frontApp(lsappinfo('ASN:0x0-0x1:\n', '"pid"=[ NULL ] \n"CFBundleIdentifier"=[ NULL ] \n')), null);
+  await assert.rejects(frontApp(lsappinfo('ASN:0x0-0x1:\n', 'something else')), /FRONT_APP_UNREADABLE/);
 });
 
 test('ensureFreeWindow refuses when both windows are taken and lists them', async () => {

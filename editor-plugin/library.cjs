@@ -62,6 +62,7 @@ module.exports = {
   SCRIPT_TAGS: discover.SCRIPT_TAGS,
   SCRIPT_MAX: discover.SCRIPT_MAX,
   CONFIG_PATH: dev.CONFIG_PATH,
+  backgroundOpenFile: project.backgroundOpenFile,
   AI3D_FACE_NUM: ai3d.FACE_NUM,
   AI3D_IMAGE_LIMIT: ai3d.IMAGE_LIMIT,
   AI3D_VIDEO_LIMIT: ai3d.VIDEO_LIMIT,

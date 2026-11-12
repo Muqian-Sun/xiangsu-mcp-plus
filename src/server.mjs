@@ -17,7 +17,7 @@ import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
 import { fetchImage, fetchImageBytes, readImageFile, sniffImage } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
-import { Projects, openWithApp } from './projects.mjs';
+import { Projects, activateApp, frontApp, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { BLEND_MODES, dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
@@ -226,6 +226,8 @@ export function createServer(deps = {}) {
     readImageFile,
     fetchJson,
     openWithApp,
+    frontApp,
+    activateApp,
     prepareIcon,
     cropImage,
     resizeImage,
@@ -462,8 +464,12 @@ export function createServer(deps = {}) {
     },
     {
       name: 'project_open',
-      description: '在新窗口打开一个已有的像塑工程（已经开着就直接返回）。返回窗口 pid 和官方 instance_id。旧版本工程可能弹出升级对话框，需要在编辑器里点确认。',
-      shape: { path: z.string().min(1).describe('工程文件夹的绝对路径（含 effect.dyehpj）。') },
+      description:
+        '在新窗口打开一个已有的像塑工程（已经开着就直接返回，不改变它的窗口状态）。返回窗口 pid 和官方 instance_id。旧版本工程可能弹出升级对话框，需要在编辑器里点确认。background=true 在后台打开：加载进度窗不上屏，编辑窗口最小化到程序坞，打开期间像塑抢走的前台交还给调用时在前台的应用（结果里 background.focus_kept_on）；窗口照常能被各工具操作；最小化时 capture_preview 和 preview_frames 从渲染结果截图，interact_by_dsl 的 screenshot 是黑图。',
+      shape: {
+        path: z.string().min(1).describe('工程文件夹的绝对路径（含 effect.dyehpj）。'),
+        background: z.boolean().optional().describe('后台打开，不把窗口带到前台。默认 false。'),
+      },
       run: async (a) => text(await projects.open(a)),
     },
     {
