@@ -54,6 +54,9 @@ async function submitPage(arg) {
   const press = (el) => {
     for (const t of ['mousedown', 'mouseup', 'click']) el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
   };
+  const footerButton = (label) => [...document.querySelectorAll('footer .button')].find((b) => text(b) === label);
+  // After a submission the page leaves the steps for its 提交成功 view, whose footer offers 查看我的特效.
+  const submitted = () => !!footerButton('查看我的特效');
   const binder = (title) => [...document.querySelectorAll('.bind-wrapper')].filter(shown).find((w) => titleOf(w) === title);
   const shownText = (w) => (w ? text(w.querySelector('.selector-input .text')) : null);
   const optionName = (o) => text(o.querySelector('.option-name'));
@@ -159,13 +162,14 @@ async function submitPage(arg) {
     }
 
     case 'review': {
+      if (submitted()) throw Error('SUBMIT_ALREADY_DONE: the window already shows the 提交成功 page');
       if (step() !== '提交审核') throw Error(`SUBMIT_PAGE_CHANGED: expected the 提交审核 step, the page is on ${step() || '(none)'}`);
       const items = [...document.querySelectorAll('.publish-wrap .effect-content-item')].map(text);
       const field = (label) => {
         const hit = items.find((t) => t.startsWith(label));
         return hit === undefined ? null : hit.slice(label.length);
       };
-      const submit = need([...document.querySelectorAll('footer .button')].find((b) => text(b) === '提交审核'), 'the 提交审核 button');
+      const submit = need(footerButton('提交审核'), 'the 提交审核 button');
       const agreement = document.querySelector('footer .ip-agreement');
       return {
         title: text(document.querySelector('.publish-wrap .submit-title h1')),
@@ -174,6 +178,61 @@ async function submitPage(arg) {
         checks: [...document.querySelectorAll('.publish-wrap .effect-test-item-top-text')].map(text),
         agreed: agreement ? !!agreement.querySelector('.agreed') : null,
         submit_enabled: !submit.classList.contains('disable'),
+      };
+    }
+
+    // Ticks the agreement unless the account agreed before (the page then shows 已阅读并同意 instead of
+    // the checkbox) and presses 提交审核. The page reports the outcome to the editor with the query
+    // orionJSB://DYEHSubmitBridge/sendUploadResultEvent?{effectId} once /creator/v1/submit took the effect,
+    // or ?{failReason} when it did not; window.orionQuery is wrapped to keep that report for 'outcome'.
+    case 'confirm': {
+      if (submitted()) throw Error('SUBMIT_ALREADY_DONE: the window already shows the 提交成功 page');
+      if (step() !== '提交审核') throw Error(`SUBMIT_PAGE_CHANGED: expected the 提交审核 step, the page is on ${step() || '(none)'}`);
+      const agreement = need(document.querySelector('footer .ip-agreement'), 'the agreement');
+      let ticked = false;
+      if (!agreement.querySelector('.agreed')) {
+        const box = need(agreement.querySelector('input[type="checkbox"]'), 'the agreement checkbox');
+        if (!box.checked) {
+          box.click();
+          ticked = true;
+          await sleep(arg.settle_ms);
+        }
+        if (!box.checked) throw Error('SUBMIT_AGREEMENT_NOT_TICKED: the agreement checkbox stayed unticked');
+      }
+      const submit = need(footerButton('提交审核'), 'the 提交审核 button');
+      if (submit.classList.contains('disable')) {
+        throw Error(`SUBMIT_DISABLED: 提交审核 cannot be pressed; the page says ${text(document.querySelector('.publish-wrap .submit-title h1')) || '(nothing)'}`);
+      }
+      if (!window.__xsSubmit) {
+        const watch = { result: null };
+        const query = window.orionQuery;
+        window.orionQuery = function (req) {
+          const m = /^orionJSB:\/\/DYEHSubmitBridge\/sendUploadResultEvent\?(.*)$/.exec((req && req.request) || '');
+          if (m) {
+            try {
+              watch.result = JSON.parse(decodeURIComponent(m[1]));
+            } catch (_) {
+              watch.result = { unreadable: m[1] };
+            }
+          }
+          return query.apply(this, arguments);
+        };
+        window.__xsSubmit = watch;
+      }
+      window.__xsSubmit.result = null;
+      press(submit);
+      return { ticked };
+    }
+
+    case 'outcome': {
+      const submit = footerButton('提交审核');
+      return {
+        result: window.__xsSubmit ? window.__xsSubmit.result : null,
+        submitted: submitted(),
+        success_text: text(document.querySelector('.upload-preview header h2')) || null,
+        needs_real_name: !!footerButton('实名认证'),
+        loading: !!submit && submit.classList.contains('loading'),
+        toasts: [...document.querySelectorAll('.semi-toast-content-text')].map(text).filter(Boolean),
       };
     }
 

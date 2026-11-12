@@ -1,7 +1,6 @@
 'use strict';
 // Getting an effect ready to ship: icons, pre-submit checks, the cloud effect check, filling in the
-// submit window, and the phone preview upload. Publishing itself stays in the submit window: its
-// 提交审核 button is left for the user to press.
+// submit window and pressing its 提交审核, and the phone preview upload.
 const fs = require('fs');
 const path = require('path');
 const { M, scratchDir, exportEffectPackage, nextEvent } = require('./common.cjs');
@@ -28,8 +27,9 @@ const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称'
 // live), so filling waits for that request, or, should the page stop making it, until no request has
 // finished for quietMs. settleMs lets a picked option or typed text render before it is read back.
 // The 提交审核 step's checks (performance, similarity…) finished within a minute live; checksMs is picked.
-// closeMs is picked: closed submit windows were gone within 0.5 s live.
-const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000 };
+// closeMs is picked: closed submit windows were gone within 0.5 s live. resultMs is picked: after 提交审核
+// the page uploads the package and the project before it submits.
+const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000, resultMs: 300000 };
 const checkPending = (c) => c.endsWith('中...');
 const checkPassed = (c) => c.endsWith('通过') && !/[未不]通过$/.test(c);
 
@@ -143,31 +143,52 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     throw Error(`SUBMIT_NO_SETTINGS_STEP: this effect's submit page has no 「${STEP.settings}」 step, so inspiration and task cannot be set`);
   }
   if (step !== STEP.review) throw Error(`SUBMIT_PAGE_CHANGED: expected the 「${STEP.review}」 step, the page moved to 「${step}」`);
-  let review = await run({ action: 'review' });
+  const first = await run({ action: 'review' });
   // The summary is what gets submitted; a field that was wiped after it was typed shows up here.
   const hint = basic.trigger_hint || '无';
-  if (review.name !== basic.name || review.trigger_hint !== hint) {
-    throw Error(`SUBMIT_REVIEW_MISMATCH: the summary shows 名称「${review.name}」 触发提示「${review.trigger_hint}」, filled 「${basic.name}」 「${hint}」`);
+  if (first.name !== basic.name || first.trigger_hint !== hint) {
+    throw Error(`SUBMIT_REVIEW_MISMATCH: the summary shows 名称「${first.name}」 触发提示「${first.trigger_hint}」, filled 「${basic.name}」 「${hint}」`);
   }
-  for (const until = Date.now() + PAGE_TIMING.checksMs; review.checks.some(checkPending) && Date.now() < until; ) {
-    await sleep(PAGE_TIMING.pollMs * 10);
-    review = await run({ action: 'review' });
-  }
+  const review = await settledReview(run, first);
   const failing = review.checks.filter((c) => !checkPassed(c) && !checkPending(c));
-  const todo = [];
-  if (review.agreed === false) todo.push('tick the agreement (《创作者协议》) at the bottom of the window');
-  if (review.checks.some(checkPending)) todo.push(`the page's checks were still running after ${PAGE_TIMING.checksMs} ms; wait until 提交审核 can be pressed`);
-  else if (failing.length) todo.push(`the page's checks did not pass: ${failing.join(' | ')}; fix the effect and run submit_prepare again`);
-  else if (!review.submit_enabled && review.agreed !== false) todo.push(`提交审核 is still disabled (the page says ${review.title}); look at the window`);
-  todo.push('press 提交审核 to submit; this tool never presses it');
+  let next;
+  if (review.checks.some(checkPending)) next = `the page's checks were still running after ${PAGE_TIMING.checksMs} ms; call submit_confirm once they are done`;
+  else if (failing.length) next = `the page's checks did not pass: ${failing.join(' | ')}; fix the effect and run submit_prepare again`;
+  else if (!review.submit_enabled && review.agreed !== false) next = `提交审核 is still disabled (the page says ${review.title}); look at the window`;
+  else next = `call submit_confirm to ${review.agreed === false ? 'tick the agreement (《创作者协议》) and ' : ''}press 提交审核, or press it in the window`;
   return {
     step,
     filled: { icons: basic.icons, name: basic.name, trigger_hint: basic.trigger_hint, camera: basic.camera },
     bindings: bindings && { inspiration: bindings.inspiration, task: bindings.task },
     other_sections: otherSections,
     review,
-    next: todo.join('; then '),
+    next,
   };
+}
+
+// Reads the 提交审核 step again until its checks are no longer running, or checksMs runs out.
+async function settledReview(run, review) {
+  for (const until = Date.now() + PAGE_TIMING.checksMs; review.checks.some(checkPending) && Date.now() < until; ) {
+    await sleep(PAGE_TIMING.pollMs * 10);
+    review = await run({ action: 'review' });
+  }
+  return review;
+}
+
+// Polls the page after 提交审核 until it reports a result or shows its 提交成功 page, until it stops
+// submitting (it marks the button loading meanwhile) without either, or until resultMs runs out.
+async function submitOutcome(run) {
+  const until = Date.now() + PAGE_TIMING.resultMs;
+  let busy = false;
+  let out;
+  do {
+    await sleep(PAGE_TIMING.pollMs);
+    out = await run({ action: 'outcome' });
+    if (out.result || out.submitted) return { ...out, timed_out: false };
+    if (busy && !out.loading) return { ...out, timed_out: false };
+    busy = busy || out.loading;
+  } while (Date.now() < until);
+  return { ...out, timed_out: true };
 }
 
 const methods = {
@@ -303,7 +324,7 @@ const methods = {
   // window, after any submit window still open (from an earlier call) is closed. The window's page is then
   // filled in step by step and left on its 提交审核 step; every value is read back from the page, and
   // anything the page refused or changed fails the call with the window open. The window stays minimized
-  // (see quiet.cjs) until the user brings it up from the Dock to press 提交审核.
+  // (see quiet.cjs) for submitConfirm, or for the user to bring it up from the Dock and press 提交审核.
   submitPrepare(args) {
     return this.withQuietWindows(() => this.runSubmitPrepare(args));
   },
@@ -324,6 +345,63 @@ const methods = {
     } catch (e) {
       throw Error(`${e.message} (the submit window is left open)`);
     }
+  },
+
+  // Presses 提交审核 in the submit window submit_prepare left open, which sends the effect to review.
+  // `name` must match the window's summary, so a window filled for something else is not submitted.
+  // Nothing is pressed while the page's checks run or fail. A submission that reports no result in
+  // resultMs may still go through, so it is never pressed a second time here.
+  submitConfirm(args) {
+    return this.withQuietWindows(() => this.runSubmitConfirm(args));
+  },
+
+  async runSubmitConfirm({ name } = {}) {
+    this.ensureCompatible('submit');
+    if (typeof name !== 'string' || !name) throw Error('INVALID_NAME: pass the effect name the submit window was filled with');
+    const wins = openWindows(SUBMIT_WINDOW);
+    if (!wins.length) throw Error('SUBMIT_WINDOW_NOT_OPEN: no submit window is open; fill one with submit_prepare first');
+    if (wins.length > 1) throw Error(`SUBMIT_WINDOW_AMBIGUOUS: ${wins.length} submit windows are open; run submit_prepare again, which leaves one`);
+    const win = wins[0];
+    const run = submitPageBridge(win);
+    const review = await settledReview(run, await run({ action: 'review' }));
+    if (review.name !== name) throw Error(`SUBMIT_NAME_MISMATCH: the submit window is filled for 「${review.name}」, not 「${name}」`);
+    if (review.checks.some(checkPending)) throw Error(`SUBMIT_CHECKS_RUNNING: the page's checks were still running after ${PAGE_TIMING.checksMs} ms; call submit_confirm again later`);
+    const failing = review.checks.filter((c) => !checkPassed(c));
+    if (failing.length) throw Error(`SUBMIT_CHECKS_FAILED: ${failing.join(' | ')}; fix the effect and run submit_prepare again`);
+    const { ticked } = await run({ action: 'confirm', settle_ms: PAGE_TIMING.settleMs });
+    const out = await submitOutcome(run);
+    const page = quote(out.toasts);
+    if (out.result && out.result.unreadable !== undefined) {
+      throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse; look at my_effects before submitting again (the submit window is left open)`);
+    }
+    if (out.result && out.result.effectId === undefined) {
+      throw Error(`SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}${page} (the submit window is left open)`);
+    }
+    if (!out.result && !out.submitted) {
+      if (out.timed_out) {
+        throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms${page}; it may still go through, so look at my_effects before submitting again (the submit window is left open)`);
+      }
+      throw Error(`SUBMIT_FAILED: the page stopped submitting without a result${page} (the submit window is left open)`);
+    }
+    let closed = true;
+    let close_error;
+    try {
+      await closeWindows([win]);
+    } catch (e) {
+      closed = false;
+      close_error = e.message;
+    }
+    return {
+      submitted: true,
+      effect_id: out.result ? String(out.result.effectId) : null,
+      name: review.name,
+      trigger_hint: review.trigger_hint,
+      agreement_ticked: ticked,
+      success_text: out.success_text,
+      needs_real_name: out.needs_real_name,
+      window_closed: closed,
+      ...(close_error ? { close_error } : {}),
+    };
   },
 
   // What the toolbar's 手机预览 popup does (MobilePreviewPopupContent): register the SDK version
@@ -357,6 +435,7 @@ const METHODS = {
   icon_open: 'iconOpen',
   effect_check: 'effectCheck',
   submit_prepare: 'submitPrepare',
+  submit_confirm: 'submitConfirm',
   submit_close: 'submitClose',
   mobile_preview: 'mobilePreview',
 };

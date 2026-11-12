@@ -97,6 +97,7 @@ const OWN = [
   'shoot_activity',
   'shoot_scripts',
   'submit_close',
+  'submit_confirm',
   'submit_prepare',
   'task_bind',
   'task_detail',
@@ -689,20 +690,23 @@ function focusWatch() {
   };
 }
 
-test('icon_open, effect_check and submit_prepare run with the focus watched, and say when the watch broke', async () => {
+test('icon_open, effect_check, submit_prepare and submit_confirm run with the focus watched, and say when the watch broke', async () => {
   for (const [name, args] of [
     ['icon_open', {}],
     ['effect_check', {}],
     ['submit_prepare', { name: '特效' }],
+    ['submit_confirm', { name: '特效' }],
   ]) {
     const focus = focusWatch();
     const callPlugin = async (method) => {
+      if (method === 'my_effects') return { items: [] };
       focus.steal();
       return { tool: method };
     };
     const { client } = await connect({ official: fakeOfficial(), callPlugin, frontApp: focus.frontApp, activateApp: focus.activateApp, sleep: async () => {} });
     const out = JSON.parse((await client.callTool({ name, arguments: { project_path: '/proj/A', ...args } })).content[0].text);
-    assert.deepEqual(out, { tool: name });
+    assert.equal(out.tool, name);
+    assert.equal(out.focus_error, undefined, name);
     assert.ok(focus.log.includes('activate com.todesktop.cursor'), name);
     let reads = 0;
     const broken = (await connect({ official: fakeOfficial(), callPlugin, frontApp: async () => (++reads === 2 ? Promise.reject(Error('lsappinfo gone')) : focus.frontApp()), activateApp: focus.activateApp, sleep: async () => {} })).client;

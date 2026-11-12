@@ -9,7 +9,7 @@ const { Library, M } = require('../editor-plugin/library.cjs');
 const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
 const { BRIDGE_SCOPE, SOURCE_URL } = require('../editor-plugin/features/webpages.cjs');
 
-Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300 });
+Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300, resultMs: 1500 });
 
 class Bus {
   constructor() {
@@ -29,6 +29,9 @@ class Bus {
 // The live submit page of 2026-11-07, reduced to the classes and labels the plugin reads, with just
 // enough behaviour: tasks are picked on mouseup only, the name keeps 10 characters, emoji are refused,
 // icons without an upload block the first step, and the aiName config request wipes the name field.
+// Past the 提交审核 step it follows the offline page of the 9.8.3 install: an account that has not agreed
+// gets a checkbox, 提交审核 is disabled and loading while it submits, and the outcome goes to the editor
+// as a DYEHSubmitBridge sendUploadResultEvent query, then the 提交成功 view or a toast.
 function fakePage(options = {}) {
   const o = {
     settingsStep: true,
@@ -44,6 +47,11 @@ function fakePage(options = {}) {
     nextLabel: '下一步',
     agreed: true,
     checksPass: true,
+    checksMs: 100,
+    // report: what pressing 提交审核 ends in: 'ok', 'fail' (a failReason), 'stop' (stops without a
+    // report), or 'silent' (keeps loading).
+    report: 'ok',
+    realName: false,
     answer: true,
     extraBasic: '',
     extraSettings: '',
@@ -112,14 +120,45 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
     const next = $('footer .button.next');
     next.className = 'button next disable';
     $('.btn-content', next).textContent = '提交审核';
-    $('footer').insertAdjacentHTML('beforeend', `<div class="ip-agreement">${o.agreed ? '<span class="agreed">已阅读并同意</span>' : '<span>同意</span>'}</div>`);
+    $('footer').insertAdjacentHTML(
+      'beforeend',
+      `<div class="ip-agreement">${o.agreed ? '<span class="agreed">已阅读并同意</span>' : '<input type="checkbox"><span class="not-agreed">提交前请阅读并同意</span>'}</div>`,
+    );
+    let checksDone = false;
+    const box = $('.ip-agreement input');
+    const enable = () => next.classList.toggle('disable', !(checksDone && o.checksPass && (o.agreed || box.checked)));
+    if (box) box.addEventListener('change', enable);
     window.setTimeout(() => {
       $$('.effect-test-item-top-text')[1].textContent = o.checksPass ? '性能检测通过' : '性能检测未通过';
       $('.submit-title h1').textContent = o.checksPass ? '检测通过' : '检测未通过';
-      if (o.checksPass && o.agreed) next.classList.remove('disable');
-    }, 100);
+      checksDone = true;
+      enable();
+    }, o.checksMs);
+  };
+  const stats = { presses: 0 };
+  const submit = () => {
+    const next = $('footer .button.next');
+    if (next.classList.contains('disable')) return;
+    stats.presses += 1;
+    next.classList.add('disable', 'loading');
+    const report = (v) =>
+      window.orionQuery({ request: `orionJSB://DYEHSubmitBridge/sendUploadResultEvent?${encodeURIComponent(JSON.stringify(v))}`, onSuccess() {}, onFailure() {} });
+    window.setTimeout(() => {
+      if (o.report === 'silent') return;
+      if (o.report === 'ok') {
+        report({ effectId: '7001' });
+        $$('header .nav-item').forEach((n) => n.classList.remove('active'));
+        $('main').innerHTML = '<div class="upload-preview"><header><h2>恭喜你,提交成功!</h2></header></div>';
+        $('footer').innerHTML = `<div class="btn-wrapper">${o.realName ? '<span class="button">实名认证</span>' : ''}<span class="button next">查看我的特效</span></div>`;
+        return;
+      }
+      if (o.report === 'fail') report({ failReason: '服务繁忙' });
+      d.body.insertAdjacentHTML('beforeend', '<div class="semi-toast-wrapper"><span class="semi-toast-content-text">网络异常，请检查网络后重试</span></div>');
+      next.classList.remove('disable', 'loading');
+    }, 50);
   };
   $('footer .button.next').addEventListener('click', () => {
+    if (steps[step] === '提交审核') return submit();
     if (steps[step] === '特效基础信息') {
       if (!o.iconsUploaded) return void ($('.upload-icon-wrapper .text-err').textContent = '请至少上传一个图标');
       if (!name.value) return void ($('.name-wrapper .text-err').textContent = '请输入特效名称');
@@ -185,7 +224,7 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
         .join('');
     });
   }
-  return { window, o };
+  return { window, o, stats };
 }
 
 // How many tool calls that keep windows off screen (quiet.cjs) are running in this process.
@@ -194,20 +233,22 @@ const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDe
 // A fake editor whose SubmitEffect opens a new window showing `page` (added to App._windows, as the
 // editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
 // evaluateJavascript, answers come back as orionJSB:// queries.
-function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } = {}) {
+function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], closes = true } = {}) {
   const depths = [];
   const business = new Bus();
   const legacy = new Bus();
   globalThis.App = { _windows: [{ constructor: { name: 'MainWindow' }, isClosed: false }, ...left] };
   const sources = [];
   const handlers = new Map();
+  // Queries the page sends to the editor's own bridges, as `scope/method` and params.
+  const native = [];
   const Win = {
     [windowName]: class {
       constructor() {
         this.isClosed = false;
       }
       closeWindow() {
-        setTimeout(() => (this.isClosed = true), 5);
+        if (closes) setTimeout(() => (this.isClosed = true), 5);
       }
     },
   }[windowName];
@@ -225,7 +266,9 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } =
     };
     page.window.orionQuery = ({ request }) => {
       const m = /^orionJSB:\/\/([^/]+)\/([^?]+)\?(.*)$/.exec(request);
-      if (page.o.answer) handlers.get(m[1])[m[2]](JSON.parse(decodeURIComponent(m[3])));
+      const params = JSON.parse(decodeURIComponent(m[3]));
+      if (m[1] !== BRIDGE_SCOPE) native.push([`${m[1]}/${m[2]}`, params]);
+      else if (page.o.answer) handlers.get(m[1])[m[2]](params);
     };
     legacy.emit('OnSubmitWindowOpened', 1, 0);
   });
@@ -239,7 +282,7 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } =
   });
   lib.submitChecks = async () => ({ ok: true, issues: [] });
   const open = () => globalThis.App._windows.filter((w) => w.constructor.name === windowName && !w.isClosed);
-  return { lib, sources, handlers, open, depths };
+  return { lib, sources, handlers, open, depths, native };
 }
 
 const fill = { name: '测试特效名', trigger_hint: '张嘴试试', camera: 'back', inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' };
@@ -332,7 +375,8 @@ test('submit_prepare says what is left when the checks fail or the agreement is 
   assert.match(failed.next, /^the page's checks did not pass: 性能检测未通过; fix the effect/);
   const unagreed = await editor(fakePage({ agreed: false })).lib.submitPrepare(fill);
   assert.equal(unagreed.review.agreed, false);
-  assert.equal(unagreed.next, 'tick the agreement (《创作者协议》) at the bottom of the window; then press 提交审核 to submit; this tool never presses it');
+  assert.equal(unagreed.next, 'call submit_confirm to tick the agreement (《创作者协议》) and press 提交审核, or press it in the window');
+  assert.equal(unagreed.review.submit_enabled, false);
 });
 
 test('submit_prepare fails loudly when the page or the window is not what it expects', async () => {
@@ -352,4 +396,99 @@ test('submit_prepare closes a submit window left open before opening a fresh one
   const blocked = editor(fakePage(), { left: [stuck] });
   await assert.rejects(blocked.lib.submitPrepare({ name: '再提交一次' }), /WINDOW_NOT_CLOSED: 1 DYEHEffectSubmissionWindow/);
   assert.equal(blocked.open().length, 1, 'no second window while the old one is open');
+});
+
+const SUBMIT_REPORT = 'DYEHSubmitBridge/sendUploadResultEvent';
+
+// An editor with the submit window submit_prepare filled, left on its 提交审核 step.
+async function prepared(options, editorOptions) {
+  const page = fakePage(options);
+  const ed = editor(page, editorOptions);
+  await ed.lib.submitPrepare(fill);
+  return { page, ...ed };
+}
+
+test('submit_confirm presses 提交审核 once, reads the effect id the page reports and closes the window', async () => {
+  const { page, lib, open, native } = await prepared();
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual(out, {
+    submitted: true,
+    effect_id: '7001',
+    name: '测试特效名',
+    trigger_hint: '张嘴试试',
+    agreement_ticked: false,
+    success_text: '恭喜你,提交成功!',
+    needs_real_name: false,
+    window_closed: true,
+  });
+  assert.equal(page.stats.presses, 1);
+  assert.deepEqual(native, [[SUBMIT_REPORT, { effectId: '7001' }]], 'the report still reaches the editor');
+  assert.equal(open().length, 0);
+});
+
+test('submit_confirm ticks the agreement for an account that has not agreed', async () => {
+  const { page, lib } = await prepared({ agreed: false });
+  const box = page.window.document.querySelector('.ip-agreement input');
+  assert.equal(box.checked, false);
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.equal(out.agreement_ticked, true);
+  assert.equal(out.effect_id, '7001');
+  assert.equal(box.checked, true);
+  assert.equal(page.stats.presses, 1);
+});
+
+test('submit_confirm says when the page asks for 实名认证 after the submission', async () => {
+  const { lib } = await prepared({ realName: true });
+  assert.equal((await lib.submitConfirm({ name: fill.name })).needs_real_name, true);
+});
+
+test('submit_confirm presses nothing for a window filled for another name, or whose checks failed or still run', async () => {
+  const other = await prepared();
+  await assert.rejects(other.lib.submitConfirm({ name: '别的特效' }), /SUBMIT_NAME_MISMATCH: the submit window is filled for 「测试特效名」, not 「别的特效」/);
+  assert.equal(other.page.stats.presses, 0);
+  assert.equal(other.open().length, 1);
+  const failed = await prepared({ checksPass: false });
+  await assert.rejects(failed.lib.submitConfirm({ name: fill.name }), /SUBMIT_CHECKS_FAILED: 性能检测未通过/);
+  assert.equal(failed.page.stats.presses, 0);
+  const running = await prepared({ checksMs: 60000 });
+  await assert.rejects(running.lib.submitConfirm({ name: fill.name }), /SUBMIT_CHECKS_RUNNING/);
+  assert.equal(running.page.stats.presses, 0);
+});
+
+test('submit_confirm passes on the failure the page reports, with its toast, and leaves the window open', async () => {
+  const { page, lib, open, native } = await prepared({ report: 'fail' });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试 \(the submit window is left open\)/);
+  assert.deepEqual(native, [[SUBMIT_REPORT, { failReason: '服务繁忙' }]]);
+  assert.equal(page.stats.presses, 1);
+  assert.equal(open().length, 1);
+});
+
+test('submit_confirm fails when the page stops submitting without a report', async () => {
+  const { page, lib } = await prepared({ report: 'stop' });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_FAILED: the page stopped submitting without a result; the page says: 网络异常/);
+  assert.equal(page.stats.presses, 1);
+});
+
+test('submit_confirm reports an unknown outcome when the page never answers, and does not press again', async () => {
+  const { page, lib, open } = await prepared({ report: 'silent' });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms; it may still go through, so look at my_effects/);
+  assert.equal(page.stats.presses, 1);
+  assert.equal(open().length, 1);
+});
+
+test('submit_confirm needs exactly one open submit window, and refuses one already submitted', async () => {
+  const none = editor(fakePage());
+  await assert.rejects(none.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_NOT_OPEN/);
+  await assert.rejects(none.lib.submitConfirm({}), /INVALID_NAME/);
+  const extra = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() {} };
+  const two = await prepared();
+  globalThis.App._windows.push(extra);
+  await assert.rejects(two.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_AMBIGUOUS: 2 submit windows/);
+  assert.equal(two.page.stats.presses, 0);
+  const stuck = await prepared({}, { closes: false });
+  const out = await stuck.lib.submitConfirm({ name: fill.name });
+  assert.equal(out.window_closed, false);
+  assert.match(out.close_error, /WINDOW_NOT_CLOSED/);
+  await assert.rejects(stuck.lib.submitConfirm({ name: fill.name }), /SUBMIT_ALREADY_DONE/);
+  assert.equal(stuck.page.stats.presses, 1);
 });
