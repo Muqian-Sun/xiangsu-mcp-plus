@@ -1753,18 +1753,40 @@ test('messages_list pages the 消息 page by the last message id and names each 
   await assert.rejects(lib.messagesList({ group: 'system' }), /INVALID_GROUP: system; valid: all, service, official/);
 });
 
-test('my_innovation_status tells picked, in-review and notified effects from the 官方精选 filter and the 精选 messages', async () => {
+test('my_innovation_status tells each effect by the 官方精选 filter and its newest 精选 verdict message', async () => {
   const art = (id, name, status = 103, online = 1794191538000) => ({ id, name, effect_status: status, effect_status_desc: status === 103 ? '已上线' : '审核中', first_online_at: String(status === 103 ? online : 0) });
   // A full first page of offline effects, so the list is read on with the sort key it hands back.
   const filler = Array.from({ length: 50 }, (_, i) => art(String(80000000 + i), `旧${i}`, 104));
-  const all = [art('1', '已入选'), art('2', '审核中的'), art('3', '有结果的'), art('4', '没进的'), art('5', '还没上线', 100)];
+  const all = [
+    art('1', '已入选'),
+    art('2', '审核中的'),
+    art('3', '落选的'),
+    art('4', '没进的'),
+    art('5', '还没上线', 100),
+    art('6', '文案认不出'),
+    art('7', '落选没写原因'),
+    art('8', '消息说入选'),
+    art('9', '落选后重审'),
+  ];
   const detail = (id) => `effectcam://flutter?page=/effect-detail&appEffectId=9&effectId=${id}&source=1&appId=184`;
   const msg = (id, title, content, page, time) => ({ id, group: '2', title, content, is_ack: true, time, page });
+  const REVIEWING = '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。';
+  const REJECTED = '你的特效暂未被评为精选特效，原因为不满足设计精美，你可以参考精选评估标准进行优化。';
+  const PICKED = '你的特效被评为精选特效，可获得额外激励和精选标识。';
+  const PROMO = '持续创作精选特效均可获得额外曝光>>';
   const pages = {
     '': {
       has_more: true,
       messages: [
-        msg('900', '有结果的', '精选审核结果：未入选', detail('3'), 1794300000000),
+        msg('912', '落选后重审', REVIEWING, detail('9'), 1794330000000),
+        msg('911', '落选后重审', REJECTED, detail('9'), 1794320000000),
+        msg('910', '消息说入选', PROMO, detail('8'), 1794315000000),
+        msg('909', '消息说入选', PICKED, detail('8'), 1794312000000),
+        msg('908', '消息说入选', REVIEWING, detail('8'), 1794311000000),
+        msg('907', '落选没写原因', '你的特效暂未被评为精选特效。', detail('7'), 1794310000000),
+        msg('906', '文案认不出', '精选审核结果：未入选', detail('6'), 1794305000000),
+        msg('901', '落选的', PROMO, detail('3'), 1794301000000),
+        msg('900', '落选的', REJECTED, detail('3'), 1794300000000),
         msg('899', '票选精选遗珠', '快来投票', 'https://effect.douyin.com/m/vote', 1794290000000),
         msg('898', '审核中的', '特效已上线抖音，拍摄特效视频可获得更多冷启流量', detail('2'), 1794280000000),
       ],
@@ -1772,10 +1794,10 @@ test('my_innovation_status tells picked, in-review and notified effects from the
     898: {
       has_more: false,
       messages: [
-        msg('897', '审核中的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('2'), 1794270000000),
-        msg('896', '有结果的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('3'), 1794260000000),
-        msg('895', '已入选', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('1'), 1794250000000),
-        msg('894', '审核中的', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。', detail('2'), 1794240000000),
+        msg('897', '审核中的', REVIEWING, detail('2'), 1794270000000),
+        msg('896', '落选的', REVIEWING, detail('3'), 1794260000000),
+        msg('895', '已入选', REVIEWING, detail('1'), 1794250000000),
+        msg('894', '审核中的', REVIEWING, detail('2'), 1794240000000),
       ],
     },
   };
@@ -1787,8 +1809,8 @@ test('my_innovation_status tells picked, in-review and notified effects from the
     'GET /cam_api/message/v1/list': (call) => ok(pages[call.query.cursor]),
   });
   const out = await lib.myInnovationStatus();
-  assert.deepEqual(out.summary, { online: 4, picked: 1, in_review: 1, notified: 1, pick_rate: 0.25 });
-  assert.equal(out.items.length, 55);
+  assert.deepEqual(out.summary, { online: 8, picked: 2, in_review: 2, rejected: 2, notified: 1, pick_rate: 0.25 });
+  assert.equal(out.items.length, 59);
   const byId = Object.fromEntries(out.items.map((i) => [i.effect_id, i]));
   assert.deepEqual(byId['1'], {
     effect_id: '1',
@@ -1798,12 +1820,19 @@ test('my_innovation_status tells picked, in-review and notified effects from the
     online_at: new Date(1794191538000).toISOString(),
     state: 'picked',
     review_since: new Date(1794250000000).toISOString(),
-    notices: [{ at: new Date(1794250000000).toISOString(), content: '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。' }],
+    reject_reason: null,
+    notices: [{ at: new Date(1794250000000).toISOString(), content: REVIEWING }],
   });
+  const brief = (id) => [byId[id].state, byId[id].reject_reason];
   // review_since is the first 精选审核中 notice.
   assert.deepEqual([byId['2'].state, byId['2'].review_since, byId['2'].notices.length], ['in_review', new Date(1794240000000).toISOString(), 2]);
-  assert.deepEqual([byId['3'].state, byId['3'].review_since, byId['3'].notices.map((n) => n.content)], ['notified', new Date(1794260000000).toISOString(), ['精选审核结果：未入选', '你的特效正在精选审核中，预估7个工作日完成，请耐心等待。']]);
+  // A promotion after the verdict leaves it standing.
+  assert.deepEqual([...brief('3'), byId['3'].review_since, byId['3'].notices.map((n) => n.content)], ['rejected', '不满足设计精美', new Date(1794260000000).toISOString(), [PROMO, REJECTED, REVIEWING]]);
   assert.deepEqual([byId['4'].state, byId['4'].notices, byId['5'].state, byId['5'].online_at], ['none', [], 'none', null]);
+  assert.deepEqual([...brief('6'), byId['6'].notices.map((n) => n.content)], ['notified', null, ['精选审核结果：未入选']]);
+  assert.deepEqual(brief('7'), ['rejected', null]);
+  assert.deepEqual(brief('8'), ['picked', null], 'picked by its message while the filter does not list it');
+  assert.deepEqual(brief('9'), ['in_review', null], 'back in review after a rejection');
   assert.deepEqual(
     to('/effectcam/v1/artworks').map((c) => c.query),
     [{ count: '50' }, { count: '50', rating: '1' }, { count: '50', sort: 's1' }],
