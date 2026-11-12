@@ -76,6 +76,12 @@ const ONLINE = 103;
 const ARTWORK_PAGE = 50;
 // The only sign that an effect went into 精选审核: 「你的特效正在精选审核中，预估7个工作日完成，请耐心等待。」
 const IN_INNOVATION_REVIEW = /精选审核中/;
+// The 精选 verdicts as the messages put them (2026-11-11 and 11-12, one of each): 「你的特效被评为精选特效，
+// 可获得额外激励和精选标识。」 and 「你的特效暂未被评为精选特效，原因为不满足设计精美，你可以参考精选评估标准进行优化。」
+// Promotions such as 「持续创作精选特效均可获得额外曝光>>」 follow them and are no verdict.
+const INNOVATION_PICKED = /被评为精选特效/;
+const INNOVATION_REJECTED = /暂未被评为精选特效/;
+const REJECT_REASON = /原因为([^，,。；;]+)/;
 // Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
 const FAILED_STATUSES = [101, 112, 119];
 // The review record page's review types: 上线审核 and 精选审核.
@@ -1133,7 +1139,8 @@ const methods = {
 
   // Which effects went into 精选审核 and which were picked. Nothing lists the first: 精选审核 review_nodes
   // stayed empty for the effects that got the 精选审核中 message (2026-11-09), and the 收益 card's 精选奖
-  // says 不符合精选标准 for every effect. Picked effects are what the 作品 page's 官方精选 filter lists.
+  // says 不符合精选标准 for every effect. Picked effects are what the 作品 page's 官方精选 filter lists, or
+  // what the newest verdict message calls picked; the others take the state of their newest verdict.
   async myInnovationStatus() {
     const [effects, chosen] = await Promise.all([this.allArtworks(), this.allArtworks({ rating: CHOSEN_RATING })]);
     const messages = [];
@@ -1155,9 +1162,18 @@ const methods = {
       const id = String(e.id);
       const list = notices.get(id) || [];
       const reviewing = list.filter((n) => IN_INNOVATION_REVIEW.test(n.content));
+      // The newest message that says where the effect stands; the rejection test goes first, as its text
+      // contains the picked one.
+      const verdict = list
+        .map((n) => n.content)
+        .map((c) => (INNOVATION_REJECTED.test(c) ? 'rejected' : INNOVATION_PICKED.test(c) ? 'picked' : IN_INNOVATION_REVIEW.test(c) ? 'in_review' : null))
+        .find(Boolean);
       let state = 'none';
       if (picked.has(id)) state = 'picked';
-      else if (list.length) state = IN_INNOVATION_REVIEW.test(list[0].content) ? 'in_review' : 'notified';
+      else if (verdict) state = verdict;
+      else if (list.length) state = 'notified';
+      const rejection = state === 'rejected' ? list.find((n) => INNOVATION_REJECTED.test(n.content)) : null;
+      const reason = rejection && REJECT_REASON.exec(rejection.content);
       return {
         effect_id: id,
         name: e.name,
@@ -1166,13 +1182,21 @@ const methods = {
         online_at: iso(Number(e.first_online_at)),
         state,
         review_since: reviewing.length ? reviewing.at(-1).at : null,
+        reject_reason: reason ? reason[1] : null,
         notices: list,
       };
     });
     const online = items.filter((i) => i.status === ONLINE);
     const count = (state) => online.filter((i) => i.state === state).length;
     return {
-      summary: { online: online.length, picked: count('picked'), in_review: count('in_review'), notified: count('notified'), pick_rate: online.length ? count('picked') / online.length : null },
+      summary: {
+        online: online.length,
+        picked: count('picked'),
+        in_review: count('in_review'),
+        rejected: count('rejected'),
+        notified: count('notified'),
+        pick_rate: online.length ? count('picked') / online.length : null,
+      },
       items,
     };
   },
