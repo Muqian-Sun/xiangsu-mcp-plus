@@ -110,6 +110,10 @@ const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
 // animated GIFs from one task's content reached 16 MB of base64 (measured); this leaves room for the text.
 const IMAGE_VIEW_BYTES = 8 * 1024 * 1024;
+// Derived: the plugin's wait for the page's checks (180 s) and for the submission's result (300 s), plus a minute.
+const SUBMIT_CONFIRM_TIMEOUT_MS = 540000;
+// Picked: the submitted effect is the newest; a page this long also covers a few submitted meanwhile.
+const SUBMITTED_LOOKUP = 10;
 // Cursor ends a tool call that sends nothing for a while ("MCP tool call timed out (idle)", seen on a
 // submit_prepare that waited for the page's checks). Picked: well inside the 25 s calls that went through.
 const PROGRESS_MS = 5000;
@@ -425,6 +429,18 @@ export function createServer(deps = {}) {
     return { ...got, root };
   };
   const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
+  // The submitted effect in my_effects, the account's own record of it: by effect_id, or by name when the
+  // page showed 提交成功 without reporting the id.
+  const listedEffect = async (projectPath, { effect_id, name }) => {
+    try {
+      const { items } = await d.callPlugin('my_effects', { count: SUBMITTED_LOOKUP }, { projectPath });
+      const hit = effect_id ? items.find((e) => e.effect_id === effect_id) : items.find((e) => e.name === name);
+      if (hit) return { listed: hit };
+      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; look at my_effects again in a minute` };
+    } catch (e) {
+      return { listed: null, listed_error: e.message };
+    }
+  };
   const setIcon = async (projectPath, image_path, type = 'both') => {
     const { png, dir } = await d.prepareIcon(image_path);
     try {
@@ -743,7 +759,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_prepare',
       description:
-        '填好提交窗口，停在最后一步等用户点「提交审核」：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后先关掉还开着的提交窗口（之前调用留下的，closed_previous 是关掉的个数，关不掉报 WINDOW_NOT_CLOSED），再走和工具栏「提交特效」按钮相同的入口打开一个新的，（窗口最小化在程序坞里、不抢前台）然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（用户还要做什么）。本工具不会勾选协议，也不会点「提交审核」，发布只在用户从程序坞点开窗口、点了之后发生。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
+        '填好提交窗口，停在最后一步「提交审核」页（不送审）：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后先关掉还开着的提交窗口（之前调用留下的，closed_previous 是关掉的个数，关不掉报 WINDOW_NOT_CLOSED），再走和工具栏「提交特效」按钮相同的入口打开一个新的，（窗口最小化在程序坞里、不抢前台）然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（还要做什么）。本工具不勾选协议、不点「提交审核」，不会送审；确认摘要无误后用 submit_confirm 送审，或让用户从程序坞点开窗口自己点。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
       shape: {
         ...target,
         name: z.string().min(1).describe('特效名称（必填）：最多 10 个字，两个英文字母或数字算一个字，不能有表情和特殊符号；页面截断或报错时整次调用失败。'),
@@ -763,6 +779,21 @@ export function createServer(deps = {}) {
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
         if (icon_image !== undefined) await setIcon(projectPath, icon_image);
         return text(await keepingFocus(() => d.callPlugin('submit_prepare', fill, { projectPath, timeoutMs: 360000 })));
+      },
+    },
+    {
+      name: 'submit_confirm',
+      description:
+        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到 my_effects 里找这条特效放在 listed（审核状态等，字段同 my_effects；没找到时 listed 为 null 并在 listed_note 说明）。页面报失败时报 SUBMIT_FAILED 并带上原因和页面提示，窗口保持打开。5 分钟内页面没给结果时报 SUBMIT_RESULT_UNKNOWN：这次提交可能仍会成功，先用 my_effects 看有没有这条特效，再决定要不要重新提交，本工具不会自动重试。',
+      shape: {
+        ...target,
+        name: z.string().min(1).describe('要提交的特效名称，须和 submit_prepare 填进窗口、返回在 filled.name 里的一致。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, name } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const got = await keepingFocus(() => d.callPlugin('submit_confirm', { name }, { projectPath, timeoutMs: SUBMIT_CONFIRM_TIMEOUT_MS }));
+        return text({ ...got, ...(await listedEffect(projectPath, got)) });
       },
     },
     {
@@ -831,7 +862,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'submit_close',
-      description: '关掉这个工程窗口里开着的提交窗口（submit_prepare 打开、用户还没点提交的），不打开新的；返回关掉的个数 closed。要改填内容不用先关，直接再调 submit_prepare，它会先关掉旧的。',
+      description: '关掉这个工程窗口里开着的提交窗口（submit_prepare 打开、还没提交的），不打开新的；返回关掉的个数 closed。要改填内容不用先关，直接再调 submit_prepare，它会先关掉旧的。',
       shape: { ...target },
       run: plugin('submit_close'),
     },

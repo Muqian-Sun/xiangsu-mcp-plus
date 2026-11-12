@@ -532,6 +532,47 @@ test('submit_prepare needs a name, sets icon_image first and passes the rest to 
   );
 });
 
+test('submit_confirm needs the name, waits longer than the plugin and finds the submitted effect in my_effects', async () => {
+  const seen = [];
+  let effects = { items: [{ effect_id: '6990', name: '旧特效' }, { effect_id: '7001', name: '名字', status: 100, status_text: '审核中' }] };
+  const client = await connect({
+    callPlugin: async (method, params, opts) => {
+      seen.push([method, params, opts]);
+      if (method === 'my_effects') {
+        if (effects instanceof Error) throw effects;
+        return effects;
+      }
+      return { submitted: true, effect_id: '7001', name: '名字' };
+    },
+  });
+  const missing = await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p' } });
+  assert.equal(missing.isError, true);
+  assert.deepEqual(seen, []);
+  const out = json(await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p', name: '名字' } }));
+  assert.deepEqual(out, { submitted: true, effect_id: '7001', name: '名字', listed: { effect_id: '7001', name: '名字', status: 100, status_text: '审核中' } });
+  assert.deepEqual(seen, [
+    ['submit_confirm', { name: '名字' }, { projectPath: '/p', timeoutMs: 540000 }],
+    ['my_effects', { count: 10 }, { projectPath: '/p' }],
+  ]);
+  effects = { items: [{ effect_id: '6990', name: '名字' }] };
+  const absent = json(await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p', name: '名字' } }));
+  assert.equal(absent.listed, null, 'an older effect of the same name is not taken for it');
+  assert.match(absent.listed_note, /not among the newest 10 effects of my_effects by effect_id 7001/);
+  effects = Error('GET_MY_EFFECTS_FAILED');
+  const broken = json(await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p', name: '名字' } }));
+  assert.equal(broken.submitted, true, 'a failed lookup does not undo the submission');
+  assert.equal(broken.listed_error, 'GET_MY_EFFECTS_FAILED');
+});
+
+test('submit_confirm looks the effect up by name when the page showed 提交成功 without its id', async () => {
+  const client = await connect({
+    callPlugin: async (method) =>
+      method === 'my_effects' ? { items: [{ effect_id: '7002', name: '名字' }, { effect_id: '6990', name: '名字' }] } : { submitted: true, effect_id: null, name: '名字' },
+  });
+  const out = json(await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p', name: '名字' } }));
+  assert.deepEqual(out.listed, { effect_id: '7002', name: '名字' });
+});
+
 test('effect_check makes the single cloud check call, with an RPC timeout longer than the wait', async () => {
   const seen = [];
   const client = await connect({ callPlugin: async (method, params, opts) => (seen.push([method, params, opts.timeoutMs]), { finished: true, method }) });
