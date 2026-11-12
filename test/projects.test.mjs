@@ -6,16 +6,26 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { Projects, activateApp, frontApp, openWithApp } from '../src/projects.mjs';
 
-const { backgroundOpenFile } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
+const { quietMarkFile, QUIET_NEW_PROJECT } = createRequire(import.meta.url)('../editor-plugin/library.cjs');
 
 const tmp = () => tmpdir('xs-p-');
 
-// A fake editor: plugin windows keyed by pid, plus an official MCP mapping pids to instance ids.
-function world() {
+// A fake editor: plugin windows keyed by pid, plus an official MCP mapping pids to instance ids. A window
+// process takes the focus when it takes a project, and preview_window reports its edit window hidden
+// until it is shown, then as `shown`; the mark the plugin would see is recorded at each launch.
+const EDITOR = { pid: 200, bundle_id: 'com.ies.dyeh.orionkit' };
+function world({ owner = { pid: 1, bundle_id: 'com.todesktop.cursor' }, shown = { visible: false, minimized: true, window: true } } = {}) {
   const windows = new Map([[100, path.join(tmp(), 'S16')]]);
   const calls = [];
   const ready = new Map();
+  const checks = new Map();
+  const marks = [];
   let readyAfter = 2;
+  let front = owner;
+  const readMark = (key) => {
+    const file = quietMarkFile(key);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+  };
   const official = {
     callJson: async (name, args) => {
       calls.push(['official', name, args]);
@@ -36,10 +46,21 @@ function world() {
     launchRetryMs: 50,
     instanceTimeoutMs: 50,
     saveTimeoutMs: 50,
+    idleSpawnMs: 50,
     listInstances: () => [...windows.keys()].map((pid) => ({ pid })),
     openWithApp: async (file) => {
       calls.push(['open', file]);
+      marks.push(readMark(path.dirname(file)));
       windows.set(300, path.dirname(file));
+      front = EDITOR;
+    },
+    frontApp: async () => {
+      calls.push(['front']);
+      return front;
+    },
+    activateApp: async (bundle) => {
+      calls.push(['activate', bundle]);
+      front = owner;
     },
     callPlugin: async (method, params, opts) => {
       calls.push(['plugin', method, params, opts]);
@@ -48,6 +69,15 @@ function world() {
         const n = (ready.get(opts.pid) ?? 0) + 1;
         ready.set(opts.pid, n);
         return { scene_ready: n >= readyAfter };
+      }
+      if (method === 'preview_window') {
+        const n = (checks.get(opts.pid) ?? 0) + 1;
+        checks.set(opts.pid, n);
+        return n < 2 ? { visible: false, minimized: false, window: true } : shown;
+      }
+      if (method === 'project_launch') {
+        marks.push(readMark(params.operation === 'createNew' ? QUIET_NEW_PROJECT : params.path));
+        front = EDITOR;
       }
       if (method === 'project_launch' && params.operation !== 'createNew') windows.set(200, params.path);
       if (method === 'project_launch' && params.operation === 'createNew') windows.set(201, '/x/Instances/Instance2/ProjectCreatedTmp/未命名');
@@ -59,7 +89,7 @@ function world() {
       return {};
     },
   };
-  return { d, windows, calls, ready, setReadyAfter: (n) => (readyAfter = n) };
+  return { d, windows, calls, ready, marks, setReadyAfter: (n) => (readyAfter = n) };
 }
 
 function project() {
@@ -72,7 +102,7 @@ test('open asks an existing window to open the project and waits for it', async 
   const { d, calls } = world();
   const dir = project();
   const out = await new Projects(d).open({ path: dir });
-  assert.deepEqual(out, { already_open: false, pid: 200, project_path: dir, instance_id: '2' });
+  assert.deepEqual(out, { already_open: false, pid: 200, project_path: dir, instance_id: '2', background: { minimized: true, focus_kept_on: 'com.todesktop.cursor' } });
   assert.deepEqual(calls.find((c) => c[1] === 'project_launch').slice(1, 3), ['project_launch', { operation: 'openLocal', path: dir }]);
 });
 
@@ -127,7 +157,7 @@ test('create opens a new window and saves it to the target through the official 
   const { d, windows, calls } = world();
   const target = path.join(tmp(), '新工程');
   const out = await new Projects(d).create({ path: target });
-  assert.deepEqual(out, { pid: 201, instance_id: '2', project_path: target });
+  assert.deepEqual(out, { pid: 201, instance_id: '2', project_path: target, background: { minimized: true, focus_kept_on: 'com.todesktop.cursor' } });
   assert.equal(windows.get(201), target);
   const save = calls.find((c) => c[1] === 'save_project');
   assert.deepEqual(save[2], { instance_id: '2', path: target, intention: '新建工程首次保存' });
@@ -155,6 +185,41 @@ test('close targets the window by instance id and waits for it to exit', async (
   const out = await new Projects(d).close({ instance_id: '1', discard_changes: true });
   assert.deepEqual(out, { closed: true, pid: 100, project_path: s16, discarded_changes: true });
   assert.equal(windows.has(100), false);
+});
+
+test('after a close the focus is watched until the idle window started in its place is up', async () => {
+  const { d, windows, calls } = world();
+  const written = [];
+  d.callLog = { write: (e) => written.push(e) };
+  const plugin = d.callPlugin;
+  d.callPlugin = async (method, params, opts) => {
+    const out = await plugin(method, params, opts);
+    if (method === 'project_close') setTimeout(() => {
+      calls.push(['spawned']);
+      d.frontApp = ((f) => async () => (f.taken ? f.owner : ((f.taken = true), EDITOR)))({ owner: { pid: 1, bundle_id: 'com.todesktop.cursor' } });
+      windows.set(400, null);
+    }, 5);
+    return out;
+  };
+  const p = new Projects(d);
+  d.sleep = (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 2)));
+  d.idleSpawnMs = 5000;
+  await p.close({ instance_id: '1', discard_changes: true });
+  await p.spawnWatch;
+  const at = calls.findIndex((c) => c[0] === 'spawned');
+  assert.ok(at >= 0 && calls.slice(at).some((c) => c[0] === 'activate' && c[1] === 'com.todesktop.cursor'), JSON.stringify(calls.slice(at)));
+  assert.deepEqual(written, []);
+  const broken = world();
+  broken.d.callLog = { write: (e) => written.push(e) };
+  broken.d.frontApp = ((n) => async () => (++n > 1 ? Promise.reject(Error('lsappinfo gone')) : { pid: 1, bundle_id: 'com.todesktop.cursor' }))(0);
+  const q = new Projects(broken.d);
+  await q.close({ instance_id: '1', discard_changes: true });
+  await q.spawnWatch;
+  assert.deepEqual(written, [{ event: 'focus_watch_failed', after: 'project_close', error: 'lsappinfo gone' }]);
+  const inside = world({ owner: { pid: 72074, bundle_id: 'com.ies.dyeh' } });
+  const r = new Projects(inside.d);
+  await r.close({ instance_id: '1', discard_changes: true });
+  assert.equal(r.spawnWatch, undefined, 'nothing watched while 像塑 is in front');
 });
 
 test('close reports windows that keep running and unknown instances', async () => {
@@ -233,48 +298,15 @@ test('other launch failures are not retried', async () => {
   assert.equal(launches, 1);
 });
 
-// The window process takes the focus while it loads; preview_window reports the edit window hidden
-// until it is shown, then as `shown`.
-function backgroundWorld({ owner = { pid: 1, bundle_id: 'com.todesktop.cursor' }, shown = { visible: false, minimized: true, window: true } } = {}) {
-  const w = world();
-  const { d, calls } = w;
-  let front = owner;
-  w.marks = [];
-  d.frontApp = async () => {
-    calls.push(['front']);
-    return front;
-  };
-  d.activateApp = async (bundle) => {
-    calls.push(['activate', bundle]);
-    front = owner;
-  };
-  const plugin = d.callPlugin;
-  let windowChecks = 0;
-  d.callPlugin = async (method, params, opts) => {
-    if (method === 'project_launch') {
-      const file = backgroundOpenFile(params.path);
-      w.marks.push(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null);
-      front = { pid: 200, bundle_id: 'com.ies.dyeh.orionkit' };
-    }
-    if (method === 'preview_window') {
-      windowChecks += 1;
-      calls.push(['plugin', method, params, opts]);
-      return windowChecks < 2 ? { visible: false, minimized: false, window: true } : shown;
-    }
-    return plugin(method, params, opts);
-  };
-  return w;
-}
-
-test('a background open marks the project while it opens, waits for the minimized window and hands the focus back', async () => {
-  const { d, calls, marks } = backgroundWorld();
+test('an open marks the project while it opens, waits for the minimized window and hands the focus back', async () => {
+  const { d, calls, marks } = world();
   const dir = project();
-  const out = await new Projects(d).open({ path: dir, background: true });
+  const out = await new Projects(d).open({ path: dir });
   assert.deepEqual(out, { already_open: false, pid: 200, project_path: dir, instance_id: '2', background: { minimized: true, focus_kept_on: 'com.todesktop.cursor' } });
   assert.equal(marks.length, 1);
-  assert.equal(marks[0].project_path, dir);
+  assert.equal(marks[0].key, dir);
   assert.ok(marks[0].expires_at > Date.now());
-  assert.equal(fs.existsSync(backgroundOpenFile(dir)), false);
+  assert.equal(fs.existsSync(quietMarkFile(dir)), false);
   assert.ok(calls.some((c) => c[0] === 'activate' && c[1] === 'com.todesktop.cursor'));
   assert.equal(calls.filter((c) => c[1] === 'preview_window').length, 2);
   const seen = calls.length;
@@ -282,18 +314,18 @@ test('a background open marks the project while it opens, waits for the minimize
   assert.equal(calls.length, seen, 'focus watch stopped');
 });
 
-test('a background open whose window comes up in front fails loudly and still cleans up', async () => {
-  const { d, calls } = backgroundWorld({ shown: { visible: true, minimized: false, window: true } });
+test('an open whose window comes up in front fails loudly and still cleans up', async () => {
+  const { d, calls } = world({ shown: { visible: true, minimized: false, window: true } });
   const dir = project();
-  await assert.rejects(new Projects(d).open({ path: dir, background: true }), /BACKGROUND_NOT_APPLIED: window 200 has the project open in front/);
-  assert.equal(fs.existsSync(backgroundOpenFile(dir)), false);
+  await assert.rejects(new Projects(d).open({ path: dir }), /WINDOW_IN_FRONT: window 200 has the project open in front/);
+  assert.equal(fs.existsSync(quietMarkFile(dir)), false);
   const seen = calls.length;
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(calls.length, seen, 'focus watch stopped');
 });
 
-test('a background open hands the focus to the app the user switched to while it opened', async () => {
-  const { d, calls } = backgroundWorld();
+test('an open hands the focus to the app the user switched to while it opened', async () => {
+  const { d, calls } = world();
   const fronts = [{ pid: 1, bundle_id: 'com.todesktop.cursor' }, { pid: 2, bundle_id: 'com.tencent.WeWorkMac' }, { pid: 200, bundle_id: 'com.ies.dyeh.orionkit' }];
   let front = fronts[0];
   let reads = 0;
@@ -306,52 +338,74 @@ test('a background open hands the focus to the app the user switched to while it
     calls.push(['activate', bundle]);
     front = fronts.find((f) => f.bundle_id === bundle);
   };
-  const out = await new Projects(d).open({ path: project(), background: true });
+  const out = await new Projects(d).open({ path: project() });
   assert.deepEqual(calls.filter((c) => c[0] === 'activate'), [['activate', 'com.tencent.WeWorkMac']]);
   assert.equal(out.background.focus_kept_on, 'com.tencent.WeWorkMac');
 });
 
-test('a background open leaves the focus alone when 像塑 itself is in front', async () => {
-  const { d, calls } = backgroundWorld({ owner: { pid: 72074, bundle_id: 'com.ies.dyeh' } });
-  const out = await new Projects(d).open({ path: project(), background: true });
+test('an open leaves the focus alone when 像塑 itself is in front', async () => {
+  const { d, calls } = world({ owner: { pid: 72074, bundle_id: 'com.ies.dyeh' } });
+  const out = await new Projects(d).open({ path: project() });
   assert.deepEqual(out.background, { minimized: true, focus_kept_on: null });
   assert.deepEqual(calls.filter((c) => c[0] === 'front' || c[0] === 'activate'), [['front']]);
 });
 
-test('a background open reports a focus watch that broke, with the window open minimized', async () => {
-  const { d } = backgroundWorld();
+test('an open reports a focus watch that broke, with the window open minimized', async () => {
+  const { d } = world();
   const front = d.frontApp;
   let n = 0;
   d.frontApp = async () => {
     if (++n === 2) throw Error('lsappinfo gone');
     return front();
   };
-  const out = await new Projects(d).open({ path: project(), background: true });
+  const out = await new Projects(d).open({ path: project() });
   assert.equal(out.background.minimized, true);
   assert.equal(out.background.focus_error, 'FOCUS_NOT_RETURNED: lsappinfo gone');
 });
 
-test('a background open with no editor window starts 像塑 without bringing it forward', async () => {
-  const { d, windows, calls } = backgroundWorld();
+test('an open with no editor window marks the project before starting 像塑', async () => {
+  const { d, windows, marks } = world();
   windows.clear();
-  const open = d.openWithApp;
-  d.openWithApp = async (file, opts) => {
-    calls.push(['open-opts', opts]);
-    return open(file);
-  };
-  const out = await new Projects(d).open({ path: project(), background: true });
+  const dir = project();
+  const out = await new Projects(d).open({ path: dir });
   assert.equal(out.pid, 300);
-  assert.deepEqual(calls.find((c) => c[0] === 'open-opts'), ['open-opts', { background: true }]);
+  assert.equal(marks[0].key, dir);
+  assert.equal(out.background.minimized, true);
 });
 
-test('像塑 is started through LaunchServices, in the background only when asked', async () => {
+test('a new project is marked as the next new one while its window opens, and comes up minimized', async () => {
+  const { d, calls, marks } = world();
+  const w = await new Projects(d).newUnsaved();
+  assert.equal(w.pid, 201);
+  assert.deepEqual(w.background, { minimized: true, focus_kept_on: 'com.todesktop.cursor' });
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].key, QUIET_NEW_PROJECT);
+  assert.equal(fs.existsSync(quietMarkFile(QUIET_NEW_PROJECT)), false);
+  assert.ok(calls.some((c) => c[0] === 'activate'));
+});
+
+test('a tool run with the focus kept hands it back and reports a broken watch', async () => {
+  const { d, calls } = world();
+  const p = new Projects(d);
+  const got = await p.keepingFocus(async () => {
+    await d.callPlugin('project_launch', { operation: 'createNew' }, { pid: 100 });
+    return { opened: true };
+  });
+  assert.deepEqual(got, { value: { opened: true }, kept_on: 'com.todesktop.cursor', error: null });
+  assert.ok(calls.some((c) => c[0] === 'activate' && c[1] === 'com.todesktop.cursor'));
+  d.frontApp = ((n) => async () => {
+    if (++n === 2) throw Error('lsappinfo gone');
+    return { pid: 1, bundle_id: 'com.todesktop.cursor' };
+  })(0);
+  assert.equal((await p.keepingFocus(async () => 1)).error, 'FOCUS_NOT_RETURNED: lsappinfo gone');
+});
+
+test('像塑 is started through LaunchServices without coming to the front, and apps are activated the same way', async () => {
   const seen = [];
   const exec = async (cmd, args) => seen.push([cmd, ...args]);
-  await openWithApp('/p/effect.dyehpj', {}, exec);
-  await openWithApp('/p/effect.dyehpj', { background: true }, exec);
+  await openWithApp('/p/effect.dyehpj', exec);
   await activateApp('com.todesktop.cursor', exec);
   assert.deepEqual(seen, [
-    ['open', '-b', 'com.ies.dyeh', '/p/effect.dyehpj'],
     ['open', '-g', '-b', 'com.ies.dyeh', '/p/effect.dyehpj'],
     ['open', '-b', 'com.todesktop.cursor'],
   ]);

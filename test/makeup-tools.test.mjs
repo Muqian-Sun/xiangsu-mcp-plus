@@ -88,7 +88,7 @@ function fakeWindow({ projectDir, fail = {}, drift = false } = {}) {
 }
 
 async function connect(deps) {
-  const server = createServer({ listInstances: () => [], sleep: async () => {}, framesDir: () => tmpdir('xs-frames-'), ...deps });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, listInstances: () => [], sleep: async () => {}, framesDir: () => tmpdir('xs-frames-'), ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

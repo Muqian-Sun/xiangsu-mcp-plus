@@ -126,7 +126,7 @@ test('bilibili_popular pages the 热门 videos and bilibili_hot_search reads the
 test('the outside hot list tools answer through the injected fetcher, need no editor window, and hand out refs', async () => {
   const { fetch, urls } = fakeFetch({ 'https://top.baidu.com': BAIDU, 'https://api.bilibili.com': POPULAR, 'https://s.search.bilibili.com': HOTWORD });
   const official = { url: 'x', listTools: async () => [], status: () => ({}), callJson: async () => ({ instances: [] }) };
-  const server = createServer({ official, fetchJson: fetch, listInstances: () => [], callPlugin: async () => assert.fail('no window needed') });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, official, fetchJson: fetch, listInstances: () => [], callPlugin: async () => assert.fail('no window needed') });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

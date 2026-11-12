@@ -142,9 +142,9 @@ class Runtime {
     const check = this.library.selfCheck();
     log('library loaded', JSON.stringify(check));
     try {
-      this.library.installBackgroundOpen();
+      this.library.installQuietWindows();
     } catch (e) {
-      log('background open unavailable', e && e.message);
+      log('quiet windows unavailable', e && e.message);
     }
   }
 

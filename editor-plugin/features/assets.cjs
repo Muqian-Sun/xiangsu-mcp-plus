@@ -52,17 +52,19 @@ const REQUIRED = {
     [M.hover, 'HoverTipsMap.getObjectTipsBy'],
   ],
   project: [
-    [M.toolbar, 'closeProjectAndBackToHome'],
+    [M.ef, 'Project.unload'],
+    [M.analytics, 'AnalyticsBusinessPlugin.instance.flush'],
+    [M.analytics, 'AnalyticsBusinessPlugin.instance.safelyExitApplication'],
     [M.ipc, 'OpenProjectFromEditCommand'],
     [M.sender, 'EditSender.getInstance'],
   ],
-  backgroundOpen: [
+  quietWindows: [
     [M.ef, 'ProjectManager.getInstance'],
-    [M.editWindow, 'EditWindowController.prototype.showWindow'],
-    [M.progressWindow, 'ProjectProgressServiceInstance.showProgressWindow'],
-    [M.orionui, 'ReactWindow.prototype.show'],
-    [M.orionui, 'MainWindow.prototype.showMinimized'],
-    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.editWindow, 'EditWindowController.getInstance'],
+    ...['show', 'showMinimized', 'requestActive', 'raise', 'bringToTop'].map((p) => [M.orionui, `Window.prototype.${p}`]),
+    [M.orionui, 'WindowState.Minimized'],
+    [M.orionui, 'WindowStyle.ButtonMin'],
+    [M.orionui, 'WindowStyle.Borderless'],
   ],
   works: [
     [M.worksPanel, 'apiTemplatesPanel'],

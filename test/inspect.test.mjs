@@ -634,7 +634,7 @@ function fakeOfficial({ failSet, instances = [{ instance_id: '2', project_path: 
 }
 
 async function connect(deps) {
-  const server = createServer({ listInstances: () => [], callPlugin: async () => ({}), ...deps });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, listInstances: () => [], callPlugin: async () => ({}), ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

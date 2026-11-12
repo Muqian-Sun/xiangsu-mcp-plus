@@ -213,11 +213,14 @@ const methods = {
     return { types, icon_paths: written, removed, uploaded, project_icons: projectIcons(this, project) };
   },
 
+  // The window opens minimized (see quiet.cjs); the user brings it up from the Dock.
   iconOpen() {
     this.ensureCompatible('icon');
     activeProject(this);
-    this.mod(M.iconWindow).showIconCreationWindow('tool_bar');
-    return { opened: true };
+    return this.withQuietWindows(() => {
+      this.mod(M.iconWindow).showIconCreationWindow('tool_bar');
+      return { opened: true, minimized: true };
+    });
   },
 
   // submit_prepare's gate: what the submit flow would refuse, checked locally so the agent learns the
@@ -269,7 +272,11 @@ const methods = {
   // and runs the cloud check, then reports a status code back through getPerfTestStatus. Once the code
   // arrives the page's details are read and the window is closed; when they cannot be read the window is
   // left open for the user. One left by an earlier call (e.g. still running at its timeout) is closed first.
-  async effectCheck({ timeout_ms = 300000 } = {}) {
+  effectCheck(args) {
+    return this.withQuietWindows(() => this.runEffectCheck(args));
+  },
+
+  async runEffectCheck({ timeout_ms = 300000 } = {}) {
     this.ensureCompatible('check');
     activeProject(this);
     const closed_previous = await closeWindows(openWindows(PERF_WINDOW));
@@ -295,8 +302,13 @@ const methods = {
   // Same entry as the toolbar's 提交特效 button: the editor runs its own pre-checks and opens the submit
   // window, after any submit window still open (from an earlier call) is closed. The window's page is then
   // filled in step by step and left on its 提交审核 step; every value is read back from the page, and
-  // anything the page refused or changed fails the call with the window open.
-  async submitPrepare({ name, trigger_hint, camera, inspiration, task, task_track } = {}) {
+  // anything the page refused or changed fails the call with the window open. The window stays minimized
+  // (see quiet.cjs) until the user brings it up from the Dock to press 提交审核.
+  submitPrepare(args) {
+    return this.withQuietWindows(() => this.runSubmitPrepare(args));
+  },
+
+  async runSubmitPrepare({ name, trigger_hint, camera, inspiration, task, task_track } = {}) {
     this.ensureCompatible('submit');
     if (typeof name !== 'string' || !name) throw Error('INVALID_NAME: pass the effect name');
     if (camera !== undefined && !Object.prototype.hasOwnProperty.call(CAMERA, camera)) throw Error(`INVALID_CAMERA: ${camera}; valid: ${Object.keys(CAMERA).join(', ')}`);

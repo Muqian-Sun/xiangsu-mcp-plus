@@ -177,7 +177,7 @@ test('library_search forwards queries and keeps the results for preview and appl
     throw Error(`unexpected ${method}`);
   };
   const official = { url: 'x', listTools: async () => [], status: () => ({}), callJson: async () => ({ instances: [] }) };
-  const server = createServer({ official, callPlugin, listInstances: () => [{ pid: 1 }] });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, official, callPlugin, listInstances: () => [{ pid: 1 }] });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 't', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

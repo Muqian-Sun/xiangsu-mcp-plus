@@ -115,7 +115,7 @@ test('the server takes a string cursor for works_list and offset / queries for w
   const seen = [];
   const callPlugin = async (method, params) => (seen.push([method, params]), { items: [], raw: [] });
   const official = { url: 'x', listTools: async () => [], status: () => ({}), callJson: async () => ({ instances: [] }) };
-  const server = createServer({ official, callPlugin, listInstances: () => [{ pid: 1 }] });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, official, callPlugin, listInstances: () => [{ pid: 1 }] });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 't', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
