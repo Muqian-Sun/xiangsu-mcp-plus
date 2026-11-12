@@ -1532,7 +1532,13 @@ const EFFECT_ROUTES = {
   'GET /cam_api/effect/v1/online_data': ok(EFFECT_ONLINE),
   'GET /effectcam/v1/effect_pub_stat': ok(EFFECT_PUB_STAT),
   'GET /cam_api/effect/v1/revenue': ok(EFFECT_REVENUE),
-  'GET /cam_api/effect/v1/effect_traffic': ok({ traffic_status: 2, details: [{ tag: { type: 0, name: '流量正常' }, vv_real: '', schema: '' }] }),
+  'GET /cam_api/effect/v1/effect_traffic': ok({
+    traffic_status: 3,
+    details: [
+      { tag: { type: 0, name: '官方加热中' }, vv_real: '0', schema: '' },
+      { tag: { type: 1, name: '精选加热中' }, vv_expected: '100000', vv_real: '89159', schema: 'https://effect.douyin.com/content/x' },
+    ],
+  }),
   'GET /effectcam/v1/effect_vv': ok({ vv_num: '43' }),
   'GET /cam_api/effect/v1/related_info': ok({ details: [{ id: '107846', name: '扮演AR新玩法共创赛', type: 1, related_status: 2, type_desc: '绑定任务' }] }),
   'GET /cam_api/effect/v1/tips': noData,
@@ -1559,7 +1565,14 @@ test('my_effect_data reads the 作品详情 data cards with the 抖音 app id', 
       { name: '特效类型', value: 5167, text: '玩法测试' },
       { name: '年轻喜爱度', value: 10, text: '10分' },
     ],
-    traffic: { status: 2, tags: ['流量正常'] },
+    traffic: {
+      status: 3,
+      tags: ['官方加热中', '精选加热中'],
+      details: [
+        { name: '官方加热中', type: 0, vv_real: 0, vv_expected: null },
+        { name: '精选加热中', type: 1, vv_real: 89159, vv_expected: 100000 },
+      ],
+    },
     views: '43',
     related: [{ type: '绑定任务', id: '107846', name: '扮演AR新玩法共创赛', status: 2 }],
   });

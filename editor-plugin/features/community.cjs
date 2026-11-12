@@ -433,8 +433,21 @@ function slimFigures(list) {
   }));
 }
 
+// The traffic card's tags, each with its boost progress: 精选加热中 carries the planned exposure vv_expected
+// and the delivered vv_real (100000 and 89159 on 2026-11-12); 官方加热中 only vv_real, often 0.
+function slimTraffic(traffic) {
+  const details = (traffic.details || [])
+    .map((x) => {
+      const name = x.tag && x.tag.name;
+      if (!name) return null;
+      return { name, type: x.tag.type ?? null, vv_real: num(x.vv_real), vv_expected: num(x.vv_expected) };
+    })
+    .filter(Boolean);
+  return { status: traffic.traffic_status ?? null, tags: details.map((d) => d.name), details };
+}
+
 const day = (s) => (/^\d{8}$/.test(String(s)) ? `${String(s).slice(0, 4)}-${String(s).slice(4, 6)}-${String(s).slice(6)}` : s ?? null);
-const yuan = (s) => (s === undefined || s === null || s === '' ? null : Number(s));
+const num = (s) => (s === undefined || s === null || s === '' ? null : Number(s));
 
 function slimAppEffect(a) {
   return {
@@ -1001,7 +1014,7 @@ const methods = {
       functions: ((base.project && base.project.fn_types) || []).map((f) => f.name),
       tags: (base.tags || []).map((t) => t.text),
       figures: slimFigures(online.display_list),
-      traffic: { status: traffic.traffic_status ?? null, tags: (traffic.details || []).map((x) => x.tag && x.tag.name).filter(Boolean) },
+      traffic: slimTraffic(traffic),
       views: vv.vv_num ?? null,
       related: (related.details || []).map((r) => ({ type: r.type_desc || null, id: str(r.id), name: r.name || '', status: r.related_status ?? null })),
     };
@@ -1070,9 +1083,9 @@ const methods = {
       month: {
         date: day(date),
         online_count: on_amount ?? null,
-        revenue_yuan: yuan(monthRevenue),
-        previous_day_revenue_yuan: yuan(pd_revenue),
-        revenue_total_yuan: yuan(all_rev),
+        revenue_yuan: num(monthRevenue),
+        previous_day_revenue_yuan: num(pd_revenue),
+        revenue_total_yuan: num(all_rev),
         unread,
       },
     };
@@ -1082,17 +1095,17 @@ const methods = {
   async myRevenue({ month } = {}) {
     if (month !== undefined && !/^\d{6}$/.test(month)) throw Error(`INVALID_MONTH: ${month}; expected YYYYMM`);
     const revenue = (await request(this, 'GET_ACCOUNT_REVENUE', '/effectcam/v1/account_revenue', { query: { d_m: month } })) || {};
-    const sources = (r) => ((r && r.ro_list) || []).map((s) => ({ name: s.n, share: s.ro || null, yuan: yuan(s.re) }));
+    const sources = (r) => ((r && r.ro_list) || []).map((s) => ({ name: s.n, share: s.ro || null, yuan: num(s.re) }));
     const total = revenue.a_re || {};
     const inMonth = revenue.m_re || {};
     return {
-      total_yuan: yuan(total.t_re),
+      total_yuan: num(total.t_re),
       sources_total: sources(total),
       month: inMonth.re_m ?? null,
-      month_yuan: yuan(inMonth.t_re),
+      month_yuan: num(inMonth.t_re),
       sources_month: sources(inMonth),
-      days: (revenue.m_d_res || []).map((x) => ({ date: day(x.d), yuan: yuan(x.re) })),
-      partner_play_incentive_yuan: yuan(revenue.partner_play_incentive),
+      days: (revenue.m_d_res || []).map((x) => ({ date: day(x.d), yuan: num(x.re) })),
+      partner_play_incentive_yuan: num(revenue.partner_play_incentive),
     };
   },
 
