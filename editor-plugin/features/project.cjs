@@ -55,15 +55,22 @@ const methods = {
     throw Error(`UNEXPECTED_LAUNCH_RESPONSE: ${JSON.stringify(res)}`);
   },
 
-  // Same path as the toolbar's "back to home": unloads the project and exits this window's process,
-  // without a save prompt, so unsaved changes are refused unless discard_changes is set.
+  // The toolbar's "back to home" (closeProjectAndBackToHome) without its first step, which has the
+  // home process show its window and activate: unloads the project, flushes analytics and exits this
+  // window's process, without a save prompt, so unsaved changes are refused unless discard_changes is
+  // set. Like the editor, it exits whatever the unload answers.
   projectClose({ discard_changes = false } = {}) {
     this.ensureCompatible('project');
     const state = this.projectState();
     if (state.changed && !discard_changes) throw Error(`PROJECT_HAS_UNSAVED_CHANGES: ${state.project_path}; save it first or pass discard_changes`);
-    const close = this.mod(M.toolbar).closeProjectAndBackToHome;
+    const { Project } = this.mod(M.ef);
+    const analytics = this.mod(M.analytics).AnalyticsBusinessPlugin.instance;
     setTimeout(() => {
-      Promise.resolve(close(false, false)).catch(() => {});
+      (async () => {
+        await Project.unload();
+        await analytics.flush();
+        analytics.safelyExitApplication('no_save_exit');
+      })().catch(() => {});
     }, CLOSE_DELAY_MS);
     return { closing: true, project_path: state.project_path, discarded_changes: state.changed };
   },

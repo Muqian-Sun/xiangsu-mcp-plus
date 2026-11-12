@@ -17,6 +17,9 @@ const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
 
 PAGE_TIMING.closeMs = 300;
 
+// How many tool calls that keep windows off screen (quiet.cjs) are running in this process.
+const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDepth ?? 0;
+
 class Bus {
   constructor() {
     this.handlers = new Map();
@@ -38,7 +41,7 @@ class Bus {
 function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, perfWindow = true, mobileResponse, iconUploadOk = true } = {}) {
   const projectDir = tmpdir('xs-proj-');
   const instance = tmpdir('xs-inst-');
-  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [], iconSteps: [] };
+  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], iconDepth: [], showPerf: 0, perfDepth: [], cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [], iconSteps: [] };
   const business = new Bus();
   const legacy = new Bus();
   const project = {
@@ -123,6 +126,7 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
   const perfApi = {
     showWindow: () => {
       calls.showPerf += 1;
+      calls.perfDepth.push(quietDepth());
       if (perfWindow) globalThis.App._windows.push(new DYEHPerfTestWebWindow());
       if (perfStatus !== undefined) setTimeout(() => business.emit('getPerfTestStatus', perfStatus), 5);
     },
@@ -145,7 +149,7 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     },
     [M.iconPreview]: { iconTypeToProjectIconPathMap: iconMap, IconPreviewManager },
     [M.iconUpload]: { default: iconUpload },
-    [M.iconWindow]: { showIconCreationWindow: (from) => calls.iconWindow.push(from) },
+    [M.iconWindow]: { showIconCreationWindow: (from) => (calls.iconDepth.push(quietDepth()), calls.iconWindow.push(from)) },
     [M.submission]: { EffectSubmissionAPIKey: 'submitKey' },
     [M.perfTest]: { PerfTestAPIKey: 'perfKey' },
     [M.events]: { BusinessEventManager: { TypeGuard: () => business } },
@@ -259,10 +263,12 @@ test('icon_set fails when the upload does not go through and keeps no uri of the
   assert.deepEqual(JSON.parse(JSON.stringify(saved[1])), { 0: {}, 1: {} });
 });
 
-test('icon_open opens the icon creation window', () => {
+test('icon_open opens the icon creation window', async () => {
   const { lib, calls } = setup();
-  assert.deepEqual(lib.iconOpen(), { opened: true });
+  assert.deepEqual(await lib.iconOpen(), { opened: true, minimized: true });
   assert.deepEqual(calls.iconWindow, ['tool_bar']);
+  assert.deepEqual(calls.iconDepth, [1], 'opened with windows kept off screen');
+  assert.equal(quietDepth(), 0);
 });
 
 test('submitChecks passes a clean project and removes its scratch export', async () => {
@@ -342,6 +348,8 @@ test('effect_check opens the 特效检测 window, listening first, and maps the 
   assert.deepEqual([out.finished, out.status_code, out.result, out.closed_previous, out.window_closed], [true, 3, 'needs_optimization', 0, false]);
   assert.match(out.details_error, /left open to read there/);
   assert.equal(done.calls.showPerf, 1);
+  assert.deepEqual(done.calls.perfDepth, [1], 'opened with windows kept off screen');
+  assert.equal(quietDepth(), 0);
   assert.deepEqual(done.calls.exportDirs, [], 'no local export');
   assert.equal(globalThis.App._windows.filter((w) => w.constructor.name === 'DYEHPerfTestWebWindow' && !w.isClosed).length, 1);
 });
@@ -463,7 +471,7 @@ async function connect(deps) {
     status: () => ({}),
     callJson: async (name) => (name === 'list_instances' ? { instances: [] } : {}),
   };
-  const server = createServer({ official, listInstances: () => [{ pid: 1 }], sleep: async () => {}, openTimeoutMs: 50, closeTimeoutMs: 50, instanceTimeoutMs: 0, ...deps });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, official, listInstances: () => [{ pid: 1 }], sleep: async () => {}, openTimeoutMs: 50, closeTimeoutMs: 50, instanceTimeoutMs: 0, ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -616,6 +624,7 @@ test('task_bind needs a received task from tasks_list and reopens the project wi
       seen.push([method, params, opts]);
       if (method === 'status') return { projectPath: windows.get(opts.pid) };
       if (method === 'project_state') return { scene_ready: true };
+      if (method === 'preview_window') return { visible: false, minimized: true, window: true };
       if (method === 'tasks_list') {
         return {
           items: [
@@ -671,6 +680,7 @@ test('task_bind re-reads the task list once when its copy says not received, and
       seen.push(method);
       if (method === 'status') return { projectPath: windows.get(opts.pid) };
       if (method === 'project_state') return { scene_ready: true };
+      if (method === 'preview_window') return { visible: false, minimized: true, window: true };
       if (method === 'tasks_list') return { items: [{ task_id: '22', bindable: received }], raw: [{ kind: 'task', item_id: '2', extra: received ? extra : null }] };
       if (method === 'project_close') {
         windows.delete(opts.pid);
@@ -707,6 +717,7 @@ test('task_bind on the only open window launches through an unsaved stand-in pro
       seen.push([method, params, opts]);
       if (method === 'status') return { projectPath: windows.get(opts.pid) };
       if (method === 'project_state') return { scene_ready: true, changed: opts.pid === 7 && changed };
+      if (method === 'preview_window') return { visible: false, minimized: true, window: true };
       if (method === 'tasks_list') return { items: [{ task_id: '22', bindable: true }], raw: [{ kind: 'task', item_id: '2', extra }] };
       if (method === 'project_close') {
         windows.delete(opts.pid);

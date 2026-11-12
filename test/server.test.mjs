@@ -133,7 +133,7 @@ function fakeOfficial({ tools = [{ name: 'get_scene', description: 'official', i
 }
 
 async function connect(deps) {
-  const server = createServer(deps);
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -671,4 +671,62 @@ test('preview_videos lists only the video names by tracking type, and the curren
   assert.deepEqual(face.videos, { two_person: ['preview_two_person_normal'] });
   const bad = await client.callTool({ name: 'preview_videos', arguments: { instance_id: '1', tracking_type: 'cat' } });
   assert.match(bad.content[0].text, /INVALID_TRACKING_TYPE: cat; valid: face, two_person/);
+});
+
+// The focus watch of tools that open windows: 像塑 takes the focus when `steal` runs, the watch hands it back.
+function focusWatch() {
+  const owner = { pid: 1, bundle_id: 'com.todesktop.cursor' };
+  const log = [];
+  let front = owner;
+  return {
+    log,
+    steal: () => (front = { pid: 100, bundle_id: 'com.ies.dyeh.orionkit' }),
+    frontApp: async () => front,
+    activateApp: async (bundle) => {
+      log.push(`activate ${bundle}`);
+      front = owner;
+    },
+  };
+}
+
+test('icon_open, effect_check and submit_prepare run with the focus watched, and say when the watch broke', async () => {
+  for (const [name, args] of [
+    ['icon_open', {}],
+    ['effect_check', {}],
+    ['submit_prepare', { name: '特效' }],
+  ]) {
+    const focus = focusWatch();
+    const callPlugin = async (method) => {
+      focus.steal();
+      return { tool: method };
+    };
+    const { client } = await connect({ official: fakeOfficial(), callPlugin, frontApp: focus.frontApp, activateApp: focus.activateApp, sleep: async () => {} });
+    const out = JSON.parse((await client.callTool({ name, arguments: { project_path: '/proj/A', ...args } })).content[0].text);
+    assert.deepEqual(out, { tool: name });
+    assert.ok(focus.log.includes('activate com.todesktop.cursor'), name);
+    let reads = 0;
+    const broken = (await connect({ official: fakeOfficial(), callPlugin, frontApp: async () => (++reads === 2 ? Promise.reject(Error('lsappinfo gone')) : focus.frontApp()), activateApp: focus.activateApp, sleep: async () => {} })).client;
+    const out2 = JSON.parse((await broken.callTool({ name, arguments: { project_path: '/proj/A', ...args } })).content[0].text);
+    assert.equal(out2.focus_error, 'FOCUS_NOT_RETURNED: lsappinfo gone', name);
+  }
+});
+
+test('get_scene_view is refused for a minimized window and forwarded for one on screen or when the target is unclear', async () => {
+  const order = [];
+  let visible = false;
+  const official = fakeOfficial({ call: async (name) => (order.push(`official ${name}`), { content: [] }) });
+  const callPlugin = async (method, params, opts) => (order.push(`${method} ${opts.projectPath}`), { visible, minimized: !visible, window: true });
+  const { client } = await connect({ official, callPlugin, sleep: async () => {} });
+  const refused = await client.callTool({ name: 'get_scene_view', arguments: { instance_id: '1' } });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /^SCENE_VIEW_NOT_DRAWN: .*capture_preview.*程序坞点开/);
+  assert.deepEqual(order, ['preview_window /proj/A']);
+  order.length = 0;
+  visible = true;
+  await client.callTool({ name: 'get_scene_view', arguments: {} });
+  assert.deepEqual(order, ['preview_window /proj/A', 'official get_scene_view']);
+  order.length = 0;
+  official.callJson = async () => ({ instances: [{ instance_id: '1', generation: '100-1', project_path: '/proj/A' }, { instance_id: '2', generation: '200-1', project_path: '/proj/B' }] });
+  await client.callTool({ name: 'get_scene_view', arguments: {} });
+  assert.deepEqual(order, ['official get_scene_view']);
 });

@@ -396,7 +396,7 @@ test('copyProject copies into an empty target only, skipping the Library cache',
 
 async function connect(deps) {
   const official = { url: 'x', listTools: async () => [], status: () => ({}), callJson: async () => ({ instances: [] }) };
-  const server = createServer({ official, ...deps });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, official, ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -477,6 +477,7 @@ function worksWorld({ open = null } = {}) {
       seen.push({ method, params, opts });
       if (method === 'status') return { projectPath: opts.pid === 8 ? state.open : null };
       if (method === 'project_state') return { scene_ready: true };
+      if (method === 'preview_window') return { visible: false, minimized: true, window: true };
       if (method === 'project_launch') {
         if (state.launch) state.open = state.launch(params);
         return {};

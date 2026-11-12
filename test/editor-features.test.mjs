@@ -165,6 +165,7 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
       Extension: { MenuConfig: { MenuConfigAPIKey: 'menuKey' } },
       ProjectManager: { getInstance: () => ({ hasActiveProject: () => active, getCurrentActiveProject: () => project }) },
       UndoSystem: { instance: { start: (n) => calls.undo.push(`start:${n}`), end: () => calls.undo.push('end') } },
+      Project: { unload: async () => calls.closed.push('unload') },
     },
     [M.scene]: { SceneModule: { getEditingSceneService: () => service } },
     [M.orionui]: {
@@ -181,7 +182,7 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
       },
     },
     [M.hover]: { HoverTipsMap: { _basePath: hoverDir, getObjectTipsBy: (id) => tips[id] || { Enable: false, Images: [''] } } },
-    [M.toolbar]: { closeProjectAndBackToHome: async (...a) => calls.closed.push(a) },
+    [M.analytics]: { AnalyticsBusinessPlugin: { instance: { flush: async () => calls.closed.push('flush'), safelyExitApplication: (how) => calls.closed.push(`exit:${how}`) } } },
     [M.ipc]: { OpenProjectFromEditCommand },
     [M.sender]: {
       EditSender: {
@@ -363,14 +364,15 @@ test('project_launch turns every refusal of the home process into an error, neve
   await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir }), /UNEXPECTED_LAUNCH_RESPONSE/);
 });
 
-test('project_close refuses unsaved changes unless discarding, then closes asynchronously', async () => {
+test('project_close refuses unsaved changes unless discarding, then unloads and exits without bringing up the home window', async () => {
   const dirty = setup({ changed: true });
   assert.throws(() => dirty.lib.projectClose({}), /PROJECT_HAS_UNSAVED_CHANGES/);
   const out = dirty.lib.projectClose({ discard_changes: true });
   assert.equal(out.discarded_changes, true);
   assert.deepEqual(dirty.calls.closed, []);
   await new Promise((r) => setTimeout(r, 400));
-  assert.deepEqual(dirty.calls.closed, [[false, false]]);
+  assert.deepEqual(dirty.calls.closed, ['unload', 'flush', 'exit:no_save_exit']);
+  assert.deepEqual(dirty.calls.launched, [], 'no command to the home process');
   const clean = setup();
   assert.deepEqual(clean.lib.projectState(), { project_path: clean.projectDir, changed: false, scene_ready: true });
   clean.modules[M.scene].SceneModule.getEditingSceneService = () => null;

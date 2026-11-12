@@ -31,9 +31,10 @@ const arvideo = require('./features/arvideo.cjs');
 const aimakeup = require('./features/aimakeup.cjs');
 const makeup = require('./features/makeup.cjs');
 const dev = require('./features/dev.cjs');
+const quiet = require('./features/quiet.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -62,6 +63,8 @@ module.exports = {
   SCRIPT_TAGS: discover.SCRIPT_TAGS,
   SCRIPT_MAX: discover.SCRIPT_MAX,
   CONFIG_PATH: dev.CONFIG_PATH,
+  quietMarkFile: quiet.quietMarkFile,
+  QUIET_NEW_PROJECT: quiet.NEW_PROJECT,
   AI3D_FACE_NUM: ai3d.FACE_NUM,
   AI3D_IMAGE_LIMIT: ai3d.IMAGE_LIMIT,
   AI3D_VIDEO_LIMIT: ai3d.VIDEO_LIMIT,

@@ -396,7 +396,7 @@ test('makeupLayers tells AI 妆容 results and 素材广场 AI makeup apart from
 });
 
 test('makeup_layers tool reads a project folder, saves on request and fails on a folder without a scene', async () => {
-  const server = createServer({ listInstances: () => [], callPlugin: async () => ({}), official: { listTools: async () => [], status: () => ({}) } });
+  const server = createServer({ frontApp: async () => null, activateApp: async () => { throw Error('activateApp called in a test'); }, listInstances: () => [], callPlugin: async () => ({}), official: { listTools: async () => [], status: () => ({}) } });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

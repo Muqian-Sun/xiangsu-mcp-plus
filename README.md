@@ -20,7 +20,7 @@
 - 我的特效审核：自己提交过的特效和审核状态，审核不通过的具体原因和完整审核记录（编辑器里只显示「审核未通过」，原因原本只能在像塑移动版的审核记录页看到）。
 - 我的数据：像塑移动版「作品详情」「我的」「钱包」「消息」页的内容：每个特效的曝光、投稿、播放、按天的趋势、投稿等级和升级还差的投稿、流量状态、收益明细；账号的总览数字和收入；站内信（上线、冷启动流量提示、精选审核、任务完成、获奖公布等）；所有任务里自己作品的评定。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
-- 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。
+- 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。本服务开的窗口一律最小化在程序坞里、不抢前台（见下文约定）。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
 
 > 非官方项目，与字节跳动 / 抖音无关。依赖像塑编辑器的内部模块（9.7.2 实测），像塑升级后可能失效；`ext_status` 会逐项自检并列出缺失的接口。仓库不包含任何像塑的程序、代码或素材。
@@ -45,7 +45,7 @@
 | 工具 | 作用 |
 | --- | --- |
 | `ext_status` | 官方 MCP 连接状态；每个工程窗口的 pid、工程路径、instance_id、有没有未保存的改动、编辑器接口自检 |
-| `project_open` / `project_new` / `project_close` | 打开已有工程、新建空白工程并保存到指定目录、关闭工程窗口（有未保存改动时默认拒绝） |
+| `project_open` / `project_new` / `project_close` | 打开已有工程、新建空白工程并保存到指定目录（窗口都最小化在程序坞里，前台留在原来的应用）、关闭工程窗口（不把首页带出来；有未保存改动时默认拒绝） |
 | `image_view` | 看图：列表类工具返回的引用（`cover_ref`、`gif_ref`、任务内容块的 `image_refs` 等，形如 `img:12`）、详情类工具返回的地址（灵感 `images`、菜单示意图）或本机图片路径都放进它的 `images` 数组；视频和音频引用（`video:3`、`audio:5`）返回原地址；一次最多 8 张，动图等大图一次给不完时把没给的列在 `not_returned` 里（单次响应不超过 MCP stdio 的 10 MiB 上限） |
 | `library_list` / `library_search` | 官方素材库面板清单（不传 `panel_key`，含素材广场、收藏）和面板里的分页列表、关键词搜索：逐个面板查标题以拿全结果；词正好是面板名或子分类名时也带出那里的素材（「滤镜」「腮红」「复古滤镜」），按标题匹配程度排序，`queries` 一次搜多个词，返回各面板条数和展开了哪些分类，结果缓存 10 分钟供翻页；每条素材带 `kind`、封面 `cover_ref` 和命中方式 `matched`；第一页还附带「添加对象」菜单里同名的项到 `menu_items`（如「脸蛋天才」，用 `menu_add` 加） |
 | `library_images` | 一张 AI 图片卡片的整组结果图地址（按 `image_index` 编号） |
@@ -55,9 +55,9 @@
 | `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件概况（`key_files` 只列工程文件、场景和脚本，其余贴图模型只给计数）；`dest` 给定时把工程放到该目录；同一窗口的下载自动排队 |
 | `works_open` | 下载并在新窗口里按首页的方式打开（不弹版本升级提示，工程处于未保存状态），返回 pid 和 instance_id |
 | `works_cleanup` | 删除下载过的作品（含 `dest`）；编辑器窗口开着的保留，其它路径一律拒绝 |
-| `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个），并像「图标制作」窗口的「完成」一样上传到特效平台（提交窗口只认上传过的图标）；或打开「图标制作」窗口 |
-| `effect_check` | 和工具栏「特效检测」按钮一样：打开特效检测窗口做云端检测（会上传特效包做测试，不是发布），等待结果，并读出检测页的详情一起返回（页面结论、每项结论、包体积和安卓 / iOS 帧率对上限、没通过的项的改进建议），然后关掉窗口；详情读不出时窗口留着并返回 `details_error`；超时时窗口留着，下次调用先关掉它 |
-| `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后先关掉还开着的提交窗口（之前调用留下的），再走「提交特效」按钮的入口打开一个新的，逐页填写：名称（必填）、触发提示、默认摄像头方向、灵感、任务和赛道（可用 `icon_image` 先设图标），翻到「提交审核」页并等页面检测跑完，返回摘要、检测结果、协议是否已同意和 `next`（你还要做什么）。每一项都从页面读回核对，页面截断、报错、没选上或翻页被拦时报 `SUBMIT_*` 错误，窗口保持打开。不勾协议，也不点「提交审核」 |
+| `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个），并像「图标制作」窗口的「完成」一样上传到特效平台（提交窗口只认上传过的图标）；或打开「图标制作」窗口（最小化在程序坞里，由用户点开） |
+| `effect_check` | 和工具栏「特效检测」按钮一样：打开特效检测窗口（最小化，不上屏）做云端检测（会上传特效包做测试，不是发布），等待结果，并读出检测页的详情一起返回（页面结论、每项结论、包体积和安卓 / iOS 帧率对上限、没通过的项的改进建议），然后关掉窗口；详情读不出时窗口留着并返回 `details_error`；超时时窗口留着，下次调用先关掉它 |
+| `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后先关掉还开着的提交窗口（之前调用留下的），再走「提交特效」按钮的入口打开一个新的（最小化在程序坞里，用户点开后按「提交审核」），逐页填写：名称（必填）、触发提示、默认摄像头方向、灵感、任务和赛道（可用 `icon_image` 先设图标），翻到「提交审核」页并等页面检测跑完，返回摘要、检测结果、协议是否已同意和 `next`（你还要做什么）。每一项都从页面读回核对，页面截断、报错、没选上或翻页被拦时报 `SUBMIT_*` 错误，窗口保持打开。不勾协议，也不点「提交审核」 |
 | `submit_close` | 关掉开着的提交窗口，不打开新的 |
 | `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看；二维码同时存成文件（`~/.xiangsu-mcp-ext/mobile-qr/`），到期自动删除 |
 | `inspiration_list` / `inspiration_detail` | 灵感分页列表（每页带上全部分类，每条带关联热点）、详情（说明、图片、奖励、关联热点的热度和标签、同灵感特效、示例视频的播放地址和封面、贴纸、是否已收藏）；关联工程服务端只给标题，没有 id，要下载就拿标题去 `works_search` |
@@ -163,6 +163,7 @@
 
 - `library_apply` / `library_images` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`；`works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
 - 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。刚 `project_close` 完名额要过几秒才释放，开窗遇到 `WINDOW_LIMIT` 会每秒重试、最多 8 秒；仍失败时报错列出占着名额的窗口。`works_open` 在下载之前先查名额，满了直接拒绝。
+- 像塑不上屏、不抢前台：本服务做的任何事都不把像塑带到前台。9.8.1 / 9.8.3 实测窗口进程第一次显示一个窗口、以及接手一个工程时（还没有窗口上屏）都会把自己切到前台，加载完工程后编辑器还会聚焦编辑窗口并激活应用。所以：开工程窗口（`project_open`、`project_new`、`works_open`、`task_bind`）前，MCP 服务在状态目录 `quiet-open/` 下给这个工程（新建工程用一个「新建」标记）写一个标记，接手它的窗口进程里，插件看到标记后，加载进度窗不上屏，编辑窗口和之后出现的窗口都最小化显示（没有最小化按钮的窗口先补上按钮，否则它不进程序坞），聚焦、置顶、激活一律跳过；`icon_open`、`effect_check`、`submit_prepare` 打开的窗口在任何窗口进程里同样处理（检测和提交页面在最小化时照常运行）。用户从程序坞点开编辑窗口后，这个进程就照编辑器原样行事。接手工程那一下的激活拦不住，这些工具运行期间 MCP 服务每 0.1 秒查一次前台，像塑一抢到就交还给最近一个在前台的其它应用（`open -b`，不需要辅助功能权限）；`project_close` 不再让首页窗口出来，关窗后首页补起的空闲窗口进程也会抢前台（实测有一次一直不还），所以关窗后在后台继续盯到它起来。实测每次被抢 70–450 ms，屏幕上不出现像塑窗口；像塑本来就在前台（用户正在用）时不盯。窗口没按最小化出现时报 `WINDOW_IN_FRONT`（工程已经开着）：多半是接手它的窗口进程在插件更新之前就已启动，关掉它或重启像塑。最小化的窗口不绘制场景视图（挪到屏幕外显示也不行，macOS 会把它的一角留在屏幕上，拍到的仍是一片纯色），所以这时 `get_scene_view` 拒绝调用（`SCENE_VIEW_NOT_DRAWN`），`capture_preview` / `preview_frames` 照常从渲染结果截图。工程加载时编辑器自己会打开的窗口（如上次开着的「AI 合成」窗口）也最小化在程序坞里。旧版本工程的升级对话框仍会弹出。用户自己在像塑里打开的工程不受影响。
 - 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方 `edit_by_dsl` 的 `delete_render_group` 命令。
 - 素材库的搜索接口只匹配标题，很多素材的名字里没有人们会搜的词（美妆 › 腮红里是「雾堇胭」「红玫瑰」，没有素材叫「滤镜」），所以 `library_search` 还会展开名字与搜索词相同的面板或子分类，以及「子分类 + 面板」组合（「复古滤镜」）；「面板 + 其它词」（「韩系滤镜」）只在该面板里按标题搜「韩系」。名字只是包含搜索词的子分类不展开，列在 `related_categories`。每个面板或子分类最多取 300 条（实测子分类 17–125 条）。什么都没匹配到时返回 `hint`。
 - `works_*`、`inspiration_*`、`task_*`、`rank_*`、`my_effects`、`my_effect_reviews`、`my_effect_data`、`my_effect_trend`、`my_effect_revenue`、`my_profile`、`my_revenue`、`messages_list`、`my_task_status`、`effect_detail`、`effect_videos`、`effect_search`、`inspiration_search`、`tutorial_search`、`tutorials_list`、`shoot_activity`、`shoot_scripts`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
@@ -298,7 +299,7 @@ claude mcp add -s user xiangsu -- "$(which node)" "$PWD/src/server.mjs"
 - AI 妆容：`AssetsLibrary/Core/Control/AIMakeupManager/AIMakeupManager`（面板的管理器，经 `AssetsLibrary.getInstance().aiMakeupManager` 取实例：`submitMakeupExtract`、`taskRecordToMessage`、`updateTaskProgress`、`ensurePartPreview`、`createCorrespondingEntity`）、`.../AIMakeupManager/const`（场景名、部位和顺序）、`ai_effect_api` 的 `queryAIGCResult` / `queryAITaskHistories`、`Utils/LokiAsset/utils.downloadTemplateFile`、`ResourceImportHandles`（`importExtAsset` + 加载回调），美瞳另用 `EyeColorComponentEditor.setProperty`
 - AI 3D：`AssetsLibrary/Core/Control/AI3DManager/{const,utils}`（场景名、模型 ID、缓存目录、结果文件路径）、`@orion/Business/API/ai_effect_api`（提交 / 查询 / 历史 / 取消）、`@orion/Business/API/upload_api`（`uploadFileCommon`、`uploadToSpace`）、`AIEffectWindow/controller/apiUtils.QueryTaskResult`（主体识别的轮询）、`Utils/LokiAsset/utils.downloadTemplateFile`、`ResItemExtraData/ResourceImportHandles`（`importExtAsset` + 加载回调）、`EditorFramework` 的 `APJS.FbxLoaderAPJSWrapper`（检查本地模型）和 `Extension.Scene.AssetSceneObjectCreationSystem`、`PreviewManager.checkIsValidVideoFile` / `getFirstNonBlackFrame`、`@orion/config/LegacyGlobalConfig.url`（内置模型的绝对路径；`orionui` 的 `url` 给的是相对路径）
 - AR 视频：`AssetsLibrary/Core/Control/ARVideoManager/ARVideoManager`（面板的任务管理器，经 `AssetsLibrary.getInstance().arVideoManager` 取实例）、`VideoMatting/{ARVideoGenerationContract,ARVideoAudit,ARVideoAnalytics,ARVideoProject}`（限制与开关、审核状态、生成模式、导入）、`AssetsLibrary/Core/Control/AssetsLibraryNav/util.isARVideoEntryEnabled`、`Utils/Ffmpeg.ffmpegExec`（抽帧预览图）
-- 工程窗口：`OpenProjectFromEditCommand` + `EditSender`（与编辑器自己的 `launchProject` 同一请求，9.8.1 起首页进程只认它），`closeProjectAndBackToHome`
+- 工程窗口：`OpenProjectFromEditCommand` + `EditSender`（与编辑器自己的 `launchProject` 同一请求，9.8.1 起首页进程只认它）；关窗照 `closeProjectAndBackToHome` 的顺序做，去掉第一步的 `ShowHomeWindowCommand`（`EditorFramework.Project.unload`、`Analytics/AnalyticsBusiness.AnalyticsBusinessPlugin.instance.flush` / `safelyExitApplication`）；不上屏包住 `orionui.Window.prototype` 的 `show`（改为 `showMinimized`，缺 `WindowStyle.ButtonMin` 的先补上）、`focus`、`requestActive`、`raise`、`bringToTop` 和 `OrionApplication.App` 原型上的 `activate`，编辑窗口看 `EditWindow/EditWindowController`
 - 首页作品：`@orion/Business/HomeWindow/TemplatesPanel/Request/{templatesPanel,templatesCategory}`、`.../Model/util.transformTemplate`、`.../Model/DownloadTemplateModel`；打开作品用 `OpenProjectFromEditCommand` 的 `openTemplate`
 - 交付：`IconCreationNew/controller/IconPreviewManager`、`IconCreationNew/UI/BottomPanel/DYEHIconUploadHelper.uploadIcon`（上传图标，写回 `iconUri`）、`Submission/SubmissionExtension/EffectSubmissionExtension`（提交接口 `submit()` 只做前置检查并打开提交窗口）、全局 `App._windows`（编辑器每次都新开提交窗口和特效检测窗口、不保存引用，按类名 `DYEHEffectSubmissionWindow` / `DYEHPerfTestWebWindow` 在这里找到它们；提交窗口和特效检测窗口都是网页窗口，网页里的脚本经 `webview.evaluateJavascript` 注入，结果经窗口的 JS bridge 以 `orionJSB://` 查询传回）、`PerfTest/PerfTestExtension`、`EditWindow/ToolBar/MobilePreview/backendHelper`、`effectExporter.exportEffectPackage`
 - 灵感、任务、排行榜：`BusinessCommon/UrlConst` 的 `Domain.kBackendApiURL` 与 `DomainPath.{kActivityAPI,kTaskListAPI,kGrowthTaskList}`、`orion-sdk/orionui` 的 `CookieManager`、`BusinessCommon/Utils` 的 `PlatformUtils.genSignData` / `UserAgentUtils.userAgentGenerator`、`HomeWindow/ActivitiesCenter/Common/types`（任务状态、`getTypeName`）、`InspirationDetail/View/const` 的收藏类型、`Agent/AgentInspirationBridge`

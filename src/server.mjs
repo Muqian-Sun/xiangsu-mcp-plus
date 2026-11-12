@@ -17,7 +17,7 @@ import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
 import { fetchImage, fetchImageBytes, readImageFile, sniffImage } from './images.mjs';
 import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
-import { Projects, openWithApp } from './projects.mjs';
+import { Projects, activateApp, frontApp, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { BLEND_MODES, dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
@@ -114,9 +114,16 @@ const IMAGE_VIEW_BYTES = 8 * 1024 * 1024;
 // submit_prepare that waited for the page's checks). Picked: well inside the 25 s calls that went through.
 const PROGRESS_MS = 5000;
 // Appended to official tools whose work overlaps ours, saying which one to reach for.
+// What every tool that opens a project window says about it.
+const QUIET_TEXT =
+  '窗口最小化在程序坞里，不显示加载进度窗、不抢前台（结果里 background.focus_kept_on 是打开期间焦点留在的应用）；用户从程序坞点开后就是普通窗口。最小化时 capture_preview、preview_frames 从渲染结果截图，get_scene_view 不可用（拒绝并说明），interact_by_dsl 的 screenshot 是黑图。';
+const SCENE_VIEW_REFUSED =
+  'SCENE_VIEW_NOT_DRAWN: 这个工程窗口最小化在程序坞里（MCP 打开的窗口都不上屏），最小化的窗口不绘制场景视图，get_scene_view 只能拍到一片纯色，所以没有调用。看效果用 capture_preview / preview_frames，看结构和对象用 scene_tree / get_scene / inspect_many；确实要场景视图截图，请用户从程序坞点开这个窗口后再调用。';
+
 const OFFICIAL_NOTES = {
   capture_preview:
     '窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。',
+  get_scene_view: '工程窗口最小化时（本服务打开的窗口都最小化在程序坞里）拒绝调用并说明原因：最小化的窗口不绘制场景视图，只会拍到一片纯色。',
   get_scene: '先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。',
   inspect: '一次看多个对象、按组件类型或属性名过滤、只留关键参数时用 inspect_many（逐个调用本工具并整理结果）。',
   edit_by_dsl:
@@ -226,6 +233,8 @@ export function createServer(deps = {}) {
     readImageFile,
     fetchJson,
     openWithApp,
+    frontApp,
+    activateApp,
     prepareIcon,
     cropImage,
     resizeImage,
@@ -241,6 +250,8 @@ export function createServer(deps = {}) {
     // Picked: the trial saw the slot freed a few seconds after project_close returned.
     launchRetryMs: 8000,
     instanceTimeoutMs: 30000,
+    // Picked: the idle window process started after a close had its plugin up 6 s after it (9.8.3).
+    idleSpawnMs: 15000,
     saveTimeoutMs: 15000,
     progressMs: PROGRESS_MS,
     ...deps,
@@ -249,6 +260,12 @@ export function createServer(deps = {}) {
   d.official = d.official ?? new OfficialMcp();
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
+  // The window an official call goes to: by instance_id, or the only window with a project.
+  const officialTarget = async (instance_id) => {
+    if (instance_id !== undefined) return projects.resolveProjectPath({ instance_id });
+    const open = (await projects.officialInstances()).filter((i) => i.project_path);
+    return open.length === 1 ? open[0].project_path : null;
+  };
   d.downloads = d.downloads ?? new Downloads();
   d.qrCodes = d.qrCodes ?? new QrCodes();
   d.callLog = d.callLog ?? new CallLog();
@@ -347,6 +364,11 @@ export function createServer(deps = {}) {
     }
   };
   // Forwards to the plugin window showing the target project.
+  // Tools that open windows keep the focus off 像塑 while they run (see Projects.keepingFocus).
+  const keepingFocus = async (fn) => {
+    const got = await projects.keepingFocus(fn);
+    return got.error ? { ...got.value, focus_error: got.error } : got.value;
+  };
   const plugin = (method, timeoutMs) => async (args) => {
     const { project_path, instance_id, ...params } = args;
     const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
@@ -462,19 +484,19 @@ export function createServer(deps = {}) {
     },
     {
       name: 'project_open',
-      description: '在新窗口打开一个已有的像塑工程（已经开着就直接返回）。返回窗口 pid 和官方 instance_id。旧版本工程可能弹出升级对话框，需要在编辑器里点确认。',
+      description: '在新窗口打开一个已有的像塑工程（已经开着就直接返回，不改变它的窗口状态）。返回窗口 pid 和官方 instance_id。' + QUIET_TEXT + '旧版本工程可能弹出升级对话框，需要在编辑器里点确认。',
       shape: { path: z.string().min(1).describe('工程文件夹的绝对路径（含 effect.dyehpj）。') },
       run: async (a) => text(await projects.open(a)),
     },
     {
       name: 'project_new',
-      description: '新建一个空白像塑工程并首次保存到 path（目录须不存在或为空）。需要已有任意一个工程窗口开着。返回新窗口的 pid 和官方 instance_id。',
+      description: '新建一个空白像塑工程并首次保存到 path（目录须不存在或为空）。需要已有任意一个工程窗口开着。返回新窗口的 pid 和官方 instance_id。' + QUIET_TEXT,
       shape: { path: z.string().min(1).describe('新工程要保存到的文件夹绝对路径。') },
       run: async (a) => text(await projects.create(a)),
     },
     {
       name: 'project_close',
-      description: '关闭一个工程窗口（等同工具栏「回到首页」）。有未保存改动时默认拒绝，先 save_project；确实要丢弃改动才传 discard_changes=true。',
+      description: '关闭一个工程窗口（等同工具栏「回到首页」，但不把首页窗口带出来）。有未保存改动时默认拒绝，先 save_project；确实要丢弃改动才传 discard_changes=true。',
       shape: { ...target, discard_changes: z.boolean().optional().describe('丢弃未保存改动直接关闭。') },
       run: async (a) => text(await projects.close(a)),
     },
@@ -657,7 +679,7 @@ export function createServer(deps = {}) {
     {
       name: 'works_open',
       description:
-        '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
+        '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。' + QUIET_TEXT + '看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
       shape: { ...target, template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。') },
       run: async (a) => {
         await projects.ensureFreeWindow();
@@ -697,14 +719,17 @@ export function createServer(deps = {}) {
     },
     {
       name: 'icon_open',
-      description: '打开编辑器的「图标制作」窗口（官方图标模板、文字模板、AI 图标），让用户在里面挑选或调整。',
+      description: '打开编辑器的「图标制作」窗口（官方图标模板、文字模板、AI 图标），让用户在里面挑选或调整。窗口最小化在程序坞里、不抢前台，告诉用户从程序坞点开它。',
       shape: { ...target },
-      run: plugin('icon_open'),
+      run: async ({ project_path, instance_id }) => {
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        return text(await keepingFocus(() => d.callPlugin('icon_open', {}, { projectPath })));
+      },
     },
     {
       name: 'effect_check',
       description:
-        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口，由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed。出结果后读出检测页的详情一起返回：verdict（页面结论，如「检测通过」「特效不通过」）、checks（每项检测的结论；包体积、帧率给出 figures：数值、上限、是否达标，帧率分 android / ios；没通过的项带页面给的改进建议 advice，读不到时写 advice_unavailable），然后关掉这个窗口（window_closed=true）；详情读不出来时窗口留着，返回 details_error。超过 timeout_ms 还没出结果时返回 timeout，窗口留着继续检测；之前调用留下的检测窗口会先关掉再开新的（closed_previous 是关掉的个数），所以窗口不会越叠越多。',
+        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口（最小化，不抢前台），由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed。出结果后读出检测页的详情一起返回：verdict（页面结论，如「检测通过」「特效不通过」）、checks（每项检测的结论；包体积、帧率给出 figures：数值、上限、是否达标，帧率分 android / ios；没通过的项带页面给的改进建议 advice，读不到时写 advice_unavailable），然后关掉这个窗口（window_closed=true）；详情读不出来时窗口留着，返回 details_error。超过 timeout_ms 还没出结果时返回 timeout，窗口留着继续检测；之前调用留下的检测窗口会先关掉再开新的（closed_previous 是关掉的个数），所以窗口不会越叠越多。',
       shape: {
         ...target,
         timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('最长等待时间，默认 300000（5 分钟）。'),
@@ -712,13 +737,13 @@ export function createServer(deps = {}) {
       run: async (a) => {
         const { project_path, instance_id, timeout_ms = 300000 } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        return text(await d.callPlugin('effect_check', { timeout_ms }, { projectPath, timeoutMs: timeout_ms + 30000 }));
+        return text(await keepingFocus(() => d.callPlugin('effect_check', { timeout_ms }, { projectPath, timeoutMs: timeout_ms + 30000 })));
       },
     },
     {
       name: 'submit_prepare',
       description:
-        '填好提交窗口，停在最后一步等用户点「提交审核」：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后先关掉还开着的提交窗口（之前调用留下的，closed_previous 是关掉的个数，关不掉报 WINDOW_NOT_CLOSED），再走和工具栏「提交特效」按钮相同的入口打开一个新的，然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（用户还要做什么）。本工具不会勾选协议，也不会点「提交审核」，发布只在用户点了之后发生。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
+        '填好提交窗口，停在最后一步等用户点「提交审核」：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后先关掉还开着的提交窗口（之前调用留下的，closed_previous 是关掉的个数，关不掉报 WINDOW_NOT_CLOSED），再走和工具栏「提交特效」按钮相同的入口打开一个新的，（窗口最小化在程序坞里、不抢前台）然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（用户还要做什么）。本工具不会勾选协议，也不会点「提交审核」，发布只在用户从程序坞点开窗口、点了之后发生。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
       shape: {
         ...target,
         name: z.string().min(1).describe('特效名称（必填）：最多 10 个字，两个英文字母或数字算一个字，不能有表情和特殊符号；页面截断或报错时整次调用失败。'),
@@ -737,7 +762,7 @@ export function createServer(deps = {}) {
         const { project_path, instance_id, icon_image, ...fill } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
         if (icon_image !== undefined) await setIcon(projectPath, icon_image);
-        return text(await d.callPlugin('submit_prepare', fill, { projectPath, timeoutMs: 360000 }));
+        return text(await keepingFocus(() => d.callPlugin('submit_prepare', fill, { projectPath, timeoutMs: 360000 })));
       },
     },
     {
@@ -1922,6 +1947,15 @@ export function createServer(deps = {}) {
 
   // Official tools listed unchanged whose calls are partly served here.
   const intercepted = {
+    // Measured on 9.8.3: the scene view of a window that is not on screen comes back as one flat colour,
+    // also shown off screen (macOS then keeps a corner of it on screen), so get_scene_view is refused for
+    // a minimized window rather than bringing it up.
+    get_scene_view: async (args) => {
+      const projectPath = await officialTarget(args.instance_id);
+      const win = projectPath ? await d.callPlugin('preview_window', {}, { projectPath, timeoutMs: 5000 }) : null;
+      if (win && !win.visible) return failure(SCENE_VIEW_REFUSED);
+      return d.official.callTool('get_scene_view', args);
+    },
     // Since 9.8.1 the official screenshot photographs the window's preview area, which is black while
     // the window is minimized or hidden. Then the frame comes from the render output instead, scaled
     // to the official size.

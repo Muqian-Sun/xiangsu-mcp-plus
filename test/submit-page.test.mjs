@@ -188,10 +188,14 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   return { window, o };
 }
 
+// How many tool calls that keep windows off screen (quiet.cjs) are running in this process.
+const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDepth ?? 0;
+
 // A fake editor whose SubmitEffect opens a new window showing `page` (added to App._windows, as the
 // editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
 // evaluateJavascript, answers come back as orionJSB:// queries.
 function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } = {}) {
+  const depths = [];
   const business = new Bus();
   const legacy = new Bus();
   globalThis.App = { _windows: [{ constructor: { name: 'MainWindow' }, isClosed: false }, ...left] };
@@ -208,6 +212,7 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } =
     },
   }[windowName];
   business.on('SubmitEffect', () => {
+    depths.push(quietDepth());
     const win = new Win();
     globalThis.App._windows.push(win);
     win.JSB = { joinRegisterHandler: (scope, h) => handlers.set(scope, { ...handlers.get(scope), ...h }) };
@@ -234,16 +239,18 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } =
   });
   lib.submitChecks = async () => ({ ok: true, issues: [] });
   const open = () => globalThis.App._windows.filter((w) => w.constructor.name === windowName && !w.isClosed);
-  return { lib, sources, handlers, open };
+  return { lib, sources, handlers, open, depths };
 }
 
 const fill = { name: '测试特效名', trigger_hint: '张嘴试试', camera: 'back', inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' };
 
 test('submit_prepare fills every step, reads it back and stops on 提交审核 once the checks are done', async () => {
   const page = fakePage({ trickle: true, configAt: 120 });
-  const { lib, sources, handlers, open } = editor(page);
+  const { lib, sources, handlers, open, depths } = editor(page);
   const out = await lib.submitPrepare(fill);
   assert.equal(out.opened, true);
+  assert.deepEqual(depths, [1], 'the submit window opened with windows kept off screen');
+  assert.equal(quietDepth(), 0);
   assert.equal(out.step, '提交审核');
   assert.deepEqual(out.filled, { icons: { female: true, male: true }, name: '测试特效名', trigger_hint: '张嘴试试', camera: '后置' });
   assert.deepEqual(out.bindings, { inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' });
