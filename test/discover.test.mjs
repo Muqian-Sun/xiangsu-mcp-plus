@@ -426,7 +426,6 @@ test('the discover tools go to the lowest-pid window, lists hand out media refs 
   assert.deepEqual(await json('inspiration_search', { query: '美妆' }), { items: [{ title: '彩妆', cover_ref: 'img:7' }] });
   assert.deepEqual(await json('tutorial_search', { query: '美妆', cursor: 3 }), { items: [{ title: '课', cover_ref: 'img:8' }] });
   assert.deepEqual(await json('tutorials_list', { tab_id: 25 }), { items: [{ title: '课', link: 'https://doc/1', cover_ref: 'img:9', video_ref: 'video:10' }] });
-  await json('shoot_activity', {});
   assert.deepEqual(await json('shoot_scripts', { tag: 3, count: SCRIPT_MAX }), { items: [{ name: '脚本', cover_ref: 'img:11', video_ref: 'video:12' }] });
   assert.deepEqual(seen, [
     { method: 'effect_detail', params: { app_effect_id: '273663451' }, opts: { pid: 200 } },
@@ -435,7 +434,6 @@ test('the discover tools go to the lowest-pid window, lists hand out media refs 
     { method: 'inspiration_search', params: { query: '美妆' }, opts: { pid: 200 } },
     { method: 'tutorial_search', params: { query: '美妆', cursor: 3 }, opts: { pid: 200 } },
     { method: 'tutorials_list', params: { tab_id: 25 }, opts: { pid: 200 } },
-    { method: 'shoot_activity', params: {}, opts: { pid: 200 } },
     { method: 'shoot_scripts', params: { tag: 3, count: SCRIPT_MAX }, opts: { pid: 200 } },
   ]);
   for (const [name, args] of [
@@ -450,11 +448,10 @@ test('the discover tools go to the lowest-pid window, lists hand out media refs 
     ['tutorials_list', { count: 101 }],
     ['tutorials_list', { tab_id: '25' }],
     ['shoot_scripts', { count: SCRIPT_MAX + 1 }],
-    ['shoot_activity', { tag: 1 }],
   ]) {
     assert.equal((await client.callTool({ name, arguments: args })).isError, true, `${name} ${JSON.stringify(args)}`);
   }
-  assert.equal(seen.length, 8);
+  assert.equal(seen.length, 7);
 });
 
 test('shoot_scripts takes the tag code written as a string too', async () => {

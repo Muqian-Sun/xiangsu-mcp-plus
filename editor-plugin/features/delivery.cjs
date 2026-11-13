@@ -372,14 +372,14 @@ const methods = {
     const out = await submitOutcome(run);
     const page = quote(out.toasts);
     if (out.result && out.result.unreadable !== undefined) {
-      throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse; look at my_effects before submitting again (the submit window is left open)`);
+      throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse; call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
     }
     if (out.result && out.result.effectId === undefined) {
       throw Error(`SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}${page} (the submit window is left open)`);
     }
     if (!out.result && !out.submitted) {
       if (out.timed_out) {
-        throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms${page}; it may still go through, so look at my_effects before submitting again (the submit window is left open)`);
+        throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms${page}; it may still go through, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
       }
       throw Error(`SUBMIT_FAILED: the page stopped submitting without a result${page} (the submit window is left open)`);
     }

@@ -471,7 +471,7 @@ test('submit_confirm fails when the page stops submitting without a report', asy
 
 test('submit_confirm reports an unknown outcome when the page never answers, and does not press again', async () => {
   const { page, lib, open } = await prepared({ report: 'silent' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms; it may still go through, so look at my_effects/);
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms; it may still go through, so call ops_refresh and look at ops_works/);
   assert.equal(page.stats.presses, 1);
   assert.equal(open().length, 1);
 });
