@@ -29,8 +29,9 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
+import { opsRequest } from './opsdata.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
@@ -236,6 +237,7 @@ export function createServer(deps = {}) {
     fetchImageBytes,
     readImageFile,
     fetchJson,
+    opsRequest: (pathname, method = 'GET') => opsRequest(pathname, { method }),
     openWithApp,
     frontApp,
     activateApp,
@@ -436,7 +438,7 @@ export function createServer(deps = {}) {
       const { items } = await d.callPlugin('my_effects', { count: SUBMITTED_LOOKUP }, { projectPath });
       const hit = effect_id ? items.find((e) => e.effect_id === effect_id) : items.find((e) => e.name === name);
       if (hit) return { listed: hit };
-      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; look at my_effects again in a minute` };
+      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; call ops_refresh, then look at ops_works in a minute` };
     } catch (e) {
       return { listed: null, listed_error: e.message };
     }
@@ -454,10 +456,6 @@ export function createServer(deps = {}) {
   const community = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
     return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
-  };
-  const effectKeys = {
-    effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。'),
-    app_effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的同一个特效的 app_effect_id（抖音上的特效 ID）。'),
   };
   // Lists read whole from the plugin and paged here.
   const pageOf = ({ items, ...rest }, offset, count) => {
@@ -784,7 +782,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_confirm',
       description:
-        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到 my_effects 里找这条特效放在 listed（审核状态等，字段同 my_effects；没找到时 listed 为 null 并在 listed_note 说明）。页面报失败时报 SUBMIT_FAILED 并带上原因和页面提示，窗口保持打开。5 分钟内页面没给结果时报 SUBMIT_RESULT_UNKNOWN：这次提交可能仍会成功，先用 my_effects 看有没有这条特效，再决定要不要重新提交，本工具不会自动重试。',
+        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到账号最新的作品列表里找这条特效放在 listed（审核状态等；没找到时 listed 为 null 并在 listed_note 说明）。页面报失败时报 SUBMIT_FAILED 并带上原因和页面提示，窗口保持打开。5 分钟内页面没给结果时报 SUBMIT_RESULT_UNKNOWN：这次提交可能仍会成功，先 ops_refresh 再用 ops_works 看有没有这条特效，再决定要不要重新提交，本工具不会自动重试。',
       shape: {
         ...target,
         name: z.string().min(1).describe('要提交的特效名称，须和 submit_prepare 填进窗口、返回在 filled.name 里的一致。'),
@@ -884,7 +882,7 @@ export function createServer(deps = {}) {
     {
       name: 'growth_tasks_list',
       refs: true,
-      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度在 growth_route。',
+      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度看 ops_account 的 growth。',
       shape: { ...target, ...pageShape },
       run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenGrowth.keep(await d.callPlugin('growth_tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
     },
@@ -892,7 +890,7 @@ export function createServer(deps = {}) {
       name: 'task_detail',
       refs: true,
       description:
-        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（去重后最多前 20 个，总数在 recommended_template_total，全部见 save_to；目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list 或 my_task_status（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 my_task_status 一次取全。',
+        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（去重后最多前 20 个，总数在 recommended_template_total，全部见 save_to；目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list 或 ops_account 的 tasks（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 ops_account 的 tasks 一次取全。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
@@ -963,13 +961,6 @@ export function createServer(deps = {}) {
         if (bridge) await projects.close({ project_path: bridge.project_path, discard_changes: true });
         return text({ task: t.slim, ...opened, ...(bridge ? { stand_in_window: 'closed' } : {}) });
       },
-    },
-    {
-      name: 'growth_route',
-      description:
-        '像塑移动版的「成长之路」：当前账号的特效师等级 current_level，以及每一级（新手特效师、潜力特效师……大师特效师）的现金奖励、状态（done 已完成 / in_progress 进行中 / locked 未解锁）和要达成的目标：每个目标的说明（如「绑定「灵感」上线 0/3 个作品」）、当前进度 current / 目标 target、对应奖励。最高级给的是权益 rights。任意一个工程窗口开着即可，用编辑器里登录的账号读取。活动中心里一个个带参考工程和教程的成长任务用 growth_tasks_list。',
-      shape: { ...target },
-      run: community('growth_route'),
     },
     {
       name: 'rank_list',
@@ -1146,7 +1137,7 @@ export function createServer(deps = {}) {
     {
       name: 'rank_innovation',
       refs: true,
-      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签 labels（同一页里同一个特效带不同标签出现多次时合成一条）、投稿量、总收益、入选日期、封面。服务端的 offset 不按条目计，翻页时上一页的特效会再出现，返回的 date 也可能变；要全看时按 effect_id 去重。创作者月榜用 rank_creators。',
+      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签 labels（同一页里同一个特效带不同标签出现多次时合成一条）、投稿量、总收益、入选日期、封面。服务端的 offset 不按条目计，翻页时上一页的特效会再出现，返回的 date 也可能变；要全看时按 effect_id 去重。',
       shape: {
         ...target,
         kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效。'),
@@ -1156,103 +1147,60 @@ export function createServer(deps = {}) {
       run: community('rank_innovation'),
     },
     {
-      name: 'rank_creators',
-      refs: true,
-      description: '创新计划的创作者月榜，按 offset / count 分页：名次、创作者 uid、昵称和头像 avatar_ref、上榜素材数、跟拍量、预计奖金（元）。',
-      shape: { ...target, ...pageShape },
-      run: community('rank_creators'),
-    },
-    {
-      name: 'my_effects',
-      refs: true,
+      name: 'ops_works',
       description:
-        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 my_effect_reviews；把 effect_id 和 app_effect_id 交给 my_effect_data（数据卡片）、my_effect_trend（按天趋势和投稿等级）、my_effect_revenue（收益）。',
-      shape: {
-        ...target,
-        cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
-        // Picked, not measured: every failed effect on a page costs one or two more requests.
-        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20（最大 50）。'),
-      },
-      run: community('my_effects'),
+        '我们全部作品的精选流水线（运营看板 /api/agent/works，看板每小时从像塑取一次数）：每个作品的阶段 stage（submitted 审核中、blocked 被驳回、offline 已下线、fresh 上线不到 12 小时还可能进精选审核、missed 上线超过 12 小时没进精选审核、template 模板没有精选审核消息、round1 一审中、round2 首轮没过在二审、picked 入选、pick_rejected 没入选）和 stage_label、审核状态 status / status_text、类型 kind、平台细分类型 category 和大类 group、提交和上线时间、进审时间和上线后几秒进的 entry、审核已等几个工作日和预计出结果日 review、二审通知时间 second_at、出结果时间和落选原因 reason、精选加热 boost、精选奖待解锁 / 已解锁金额、驳回原因 refuse_reasons、任务评定 task（state：pending 待评定、unfinished 未完成、done 已完成、off_theme 主题不符合）、灵感绑定 inspiration（state：ok 成功、failed 不符合灵感主题、pending 评定中）、累计曝光 / 投稿 / 跟拍、自己拍没拍过 shot。summary 是各阶段个数、进审率（只算过了 12 小时的特效）、上线到进审的中位秒数、进审到出结果用了几个工作日。还带账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（今天交了几个、下次最早可交 next_allowed_at；被限制时为 null）。fetched_at 是看板取数时间，refreshing 表示正在重取；刚提交、刚上线要看最新状态时先 ops_refresh。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/works')),
     },
     {
-      name: 'my_effect_reviews',
+      name: 'ops_work',
       description:
-        '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空；实测正在精选审核中的特效这里也是空的，有没有进精选审核、是否入选用 my_innovation_status）。',
-      shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('my_effects 返回的 effect_id。') },
-      run: community('my_effect_reviews'),
+        '一个作品的全部运营信息（运营看板 /api/agent/works/:id）：ops_works 里那一行，加上数据卡片 figures（累计曝光、投稿、播放、跟拍、平台判定的类型、特效等级、年轻喜爱度等，页面原样文字）、用到的能力 functions、流量标签 traffic_tags、时间线 timeline（提交、进测试、上线、进精选审核、首轮没过、入选 / 没入选、加热、精选奖，每步距上一步几秒）、上线审核记录 reviews（驳回原因原文）、看板的规则诊断 findings、搜索词排名 search（AI 定的用户会搜的词、我们排第几、同题材投稿）、按天的累计曝光和投稿 trend、试拍 trial_total、收益明细 revenue、热门用户视频 videos。effect_id 来自 ops_works。',
+      shape: { effect_id: z.string().regex(/^\d+$/).describe('ops_works 返回的 effect_id。') },
+      run: async ({ effect_id }) => text(await d.opsRequest(`/api/agent/works/${effect_id}`)),
     },
     {
-      name: 'my_effect_data',
-      refs: true,
+      name: 'ops_tracks',
       description:
-        '一个自己已上线特效的数据卡片，与像塑移动版「作品详情」页同一组接口：名称、类型、各 App 上线情况 apps（抖音 app_id 184、抖音极速版 1164：上线状态、时间、投稿峰值和累计）、用到的功能 functions、标签；数据卡片 figures（页面原样的名称、值和文字：累计曝光、累计投稿、累计播放、累计跟拍、平台判定的特效类型如「技巧比拼」「玩法测试」、特效等级、跟拍等级、年轻喜爱度）；流量状态 traffic：status、标签名 tags（如「流量正常」「精选加热中」）和每个标签的 details（加热进度：vv_expected 目标曝光、vv_real 已发曝光，精选加热两个都有，官方加热一般只有 vv_real，没有的是 null）；播放数 views（与任务页的播放数同源）；绑定的任务和灵感 related。按天的趋势和投稿等级用 my_effect_trend，收益用 my_effect_revenue。',
-      shape: { ...target, ...effectKeys },
-      run: community('my_effect_data'),
+        '按赛道（平台大类，如测一测、游戏玩法、人像美化、基础头饰、模板）看精选（运营看板 /api/agent/tracks）：每个赛道我们做了几个 ours、进过精选审核几个 entered、进审率 entry_rate、在审 / 入选 / 没入选 / 没进 / 刚上线各几个、我们每个作品的阶段 works；平台近 30 天这个赛道精选了几个 market_picks_30d、最近入选的作品 recent_picks（名称、细分类型、标签、入选日、投稿、用到的能力）、这个赛道里官方偏爱的细分类型 prefer（精选占比比头部明显高的 prefer=true）。只列我们做过或平台近 30 天精选过的赛道，按平台精选数排。选题、定赛道时先看这里。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/tracks')),
     },
     {
-      name: 'my_effect_trend',
+      name: 'ops_market',
       description:
-        '一个自己已上线特效的「数据趋势」和投稿等级（像塑移动版「作品详情」页同一接口）：按天的曝光 exposure 和投稿 publish（逐日累计值，数据隔天才更新，当天为空），累计曝光、试拍 trial_total、跟拍、视频播放；投稿等级 level（当前等级代码 code、当前投稿 publish、下一级代码 next_code、升到下一级还差的投稿 publish_to_next）。等级代码和字母等级的对应没有接口给出，投稿门槛见像塑 App「激励规则」页。',
-      shape: {
-        ...target,
-        ...effectKeys,
-        trend: z.enum(Object.keys(TREND_CYCLES)).optional().describe('范围：recent 近 7 日（默认），since_online 上线后。'),
-      },
-      run: community('my_effect_trend'),
+        '平台每日快照的分析（运营看板 /api/agent/market，每天取一次榜单、精选、热点）：类型热度 category_heat（年轻喜爱榜和投稿榜前 50 去重后每个细分类型几个、近两周每天的个数 series、和前一天比、平均投稿、我们有的）、上升最快 risers、各榜前 20 boards、头部常用能力 function_heat、官方偏爱的类型 official_prefer、近 30 天精选特效和模板 picks、像塑热点和下面的灵感 hotspots（新上的 fresh、热度变化 heat_delta）、热点灵感按类型吃不吃得开排好的 hot_inspirations、抖音热榜 douyin（上榜时间、近几天热度）、所有作品放在一起看的整体诊断 overall_findings。要按分类筛榜、按词搜同类、看某个特效详情时仍用 rank_list、effect_search、effect_detail 现查。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/market')),
     },
     {
-      name: 'my_effect_revenue',
-      description: '一个自己已上线特效的收益明细（像塑移动版「作品详情」页同一接口）：总收益、基础等级奖、年轻奖、跟拍奖、精选奖，每项的金额 amount（页面原样）、说明 note（如「暂未达到最低等级」「不符合精选标准」）和是否已解锁。精选奖的「不符合精选标准」实测对每个特效都一样（包括正在精选审核中的），看不出精选状态，用 my_innovation_status。',
-      shape: { ...target, ...effectKeys },
-      run: community('my_effect_revenue'),
-    },
-    {
-      name: 'my_profile',
+      name: 'ops_account',
       description:
-        '当前账号的资料和数字，与像塑移动版「我的」页同一组接口：昵称、粉丝数、是否实名、特效作者 / 模板作者各自的等级 identities；数据卡片 figures（开拍总计、播放总计、本月提交、本月上线、本月收入、累计收入，页面原样的名称、值和文字）；本月数据 month（本月上线数、本月收入、前一天收入、累计收入，其余字段含义未核实，原样放在 unread）。收益明细用 my_revenue。',
-      shape: { ...target },
-      run: community('my_profile'),
+        '账号情况（运营看板 /api/agent/account）：资料和数字 profile（昵称、粉丝、特效作者 / 模板作者等级、开拍总计、本月提交、本月上线、本月收入、累计收入）、收入 revenue、等级成长 growth（本级和下一级的目标、进度、奖励）、精选作者计划 author_plan、本期拍视频激励 shoot_activity（任务、连续打卡档位）、按任务分组的任务评定 tasks（截止时间、奖励公布时间、每个作品的 state）、最近 50 条站内信 messages（审核、上线、精选审核和结果、任务完成、获奖公布、账号处罚，推广不列）；还带账号是否被限制提交和提交节奏，同 ops_works。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/account')),
     },
     {
-      name: 'my_revenue',
-      description: '当前账号的收益，与像塑移动版「钱包」同一接口：累计和某个月的总额、按来源（投稿收益等）的占比和金额、那个月每天的收入。',
-      shape: { ...target, month: z.string().regex(/^\d{6}$/).optional().describe('月份 YYYYMM，默认本月。') },
-      run: community('my_revenue'),
-    },
-    {
-      name: 'messages_list',
+      name: 'ops_feedback',
       description:
-        '像塑移动版「消息」页的站内信，最新的在前：标题、正文、时间、是否已读、分组（服务 / 官方）、审核类消息的状态、对应特效的 effect_id（审核、上线、精选审核等关于某个特效的消息才有）、点开的链接 link。包括发布成功、进入测试、上线（「拍摄特效视频可获得更多冷启流量」）、审核未通过、精选审核中、任务完成、获奖公布、成长之路奖金到账等。按 cursor 翻页。',
-      shape: {
-        ...target,
-        group: z.enum(Object.keys(MESSAGE_GROUPS)).optional().describe('all 全部（默认），service 服务（任务完成、获奖公布、精选审核等），official 官方（发布、审核、上线等）。'),
-        cursor: z.string().regex(/^\d+$/).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(MESSAGE_MAX).optional().describe(`每页数量，默认 20（最大 ${MESSAGE_MAX}）。`),
-      },
-      run: community('messages_list'),
+        '运营给制作方的反馈（运营看板 /api/agent/feedback，和看板「给制作的反馈」页同一份）：账号是否被限制 account、提交节奏 submit_pace（next_allowed_at 之前不开提交窗口）、最近 14 天被驳回的原因 rejections、精选结果 picks、各大类我们做了几个进审几个 review_entry、上线到进审多久和一直没进的 pick_entry、整体问题 issues、图标和同类头部不一样的地方 icon_gaps、搜题材词搜不搜得到 search、一句话结论 summary。每次开提交窗口前读一次。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/feedback')),
     },
     {
-      name: 'my_task_status',
-      refs: true,
+      name: 'ops_refresh',
       description:
-        '一次列出提交到所有已领取任务里的作品和它们的任务评定（逐个任务读任务详情页的「我的作品」，与 task_detail 的 my_effects 相同）：每条带任务 task_id 和标题、作品名、effect_id、审核状态、拍摄 / 播放 / 投稿峰值、任务评定 task_state（pending 待评定、unfinished 任务未完成、done 任务已完成）和 off_theme（任务页标了「主题不符合」）；summary 按评定计数并统计主题不符合的条数。没交过作品的任务不出现在列表里；每个已领取任务一次请求，按顺序发。',
-      shape: { ...target },
-      run: community('my_task_status'),
-    },
-    {
-      name: 'my_innovation_status',
-      description:
-        '当前账号每个特效的精选情况和精选率。精选不用单独提交：平台在审核时评估，挑中的特效会收到站内信「你的特效正在精选审核中，预估7个工作日完成」（实测多数在上线后半分钟内，也有几小时后的）；只有 LV3+ 特效师能在提交页勾「精选提报」。逐个给出 state，按最近一条结论性的站内信定（之后的「持续创作精选特效均可获得额外曝光」这类推广不算）：picked 已入选（像塑移动版「作品」页「官方精选」筛选列出的，或站内信「你的特效被评为精选特效」）、in_review 精选审核中、rejected 落选（站内信「你的特效暂未被评为精选特效，原因为……」，reject_reason 是「原因为」后面那段，如「不满足设计精美」，没写原因时为 null）、notified 有提到精选的站内信但不是以上几种文案（原文在 notices 里）、none 没收到过精选相关的站内信；review_since 是收到「精选审核中」的时间，notices 是这个特效全部提到精选的站内信（新的在前）。入选和落选的文案各只见过一条（2026-11-11、11-12），别的说法会落到 notified。summary 统计已上线（status 103）的特效里各状态的个数和精选率 pick_rate。每次读全部作品（两遍，一遍只取精选）和全部站内信，每 50 条一次请求，作品和站内信越多请求越多（18 个作品、103 条站内信时 5 次）。',
-      shape: { ...target },
-      run: community('my_innovation_status'),
+        '让运营看板现在就重取一次账号和作品数据（运营看板 POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；看板平时每小时取一次。5 分钟内最多一次：太近时 started=false，带 next_allowed_at。一遍取数十几到二十几秒，之后再调 ops_works 看 fetched_at 变没变、refreshing 是否还是 true。',
+      shape: {},
+      run: async () => text(await d.opsRequest('/api/agent/refresh', 'POST')),
     },
     {
       name: 'effect_detail',
       refs: true,
       description:
         '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、图标 icon_ref、几条示例视频（video_ref 和封面 cover_ref）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
-      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、my_effects 返回的 app_effect_id。') },
+      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、ops_works 返回的 app_effect_id。') },
       run: community('effect_detail'),
     },
     {
@@ -1262,7 +1210,7 @@ export function createServer(deps = {}) {
         '用一个特效拍的抖音视频（像塑移动版「作品详情」页的视频卡片，别人的特效也能看）：累计点赞和跟拍（页面原样文字），以及几条热门视频 videos（实测 5 条）：抖音视频 ID item_id、标题、作者、点赞、跟拍、封面 cover_ref 和视频 video_ref（交给 image_view 拿地址）。看别人怎么拍、文案怎么写。自己刚上线、还没人拍的特效列表是空的。',
       shape: {
         ...target,
-        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、my_effects 等返回的 effect_id）。'),
+        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、ops_works 等返回的 effect_id）。'),
         app_effect_id: z.string().regex(/^\d+$/).describe('同一个特效的 app_effect_id。'),
       },
       run: community('effect_videos'),
@@ -1315,13 +1263,6 @@ export function createServer(deps = {}) {
         ...pageShape,
       },
       run: community('tutorials_list'),
-    },
-    {
-      name: 'shoot_activity',
-      description:
-        '当前账号本期的「拍视频激励」活动（像塑移动版首页活动卡片同一接口，按周重置）：活动名、起止时间、本期拍摄数 shoot_count、收入 income（单位未核实，原样给）、本期任务 tasks（如「拍作品视频发布到抖音」「按照脚本拍摄同款视频」，各自的奖励文字、完成次数）、连续创作打卡 streaks（每档目标次数和奖金）、新手成长任务 newbie（每项的状态和页面文字、全部完成的奖金）、下次重置时间。状态码 status 的含义接口没给，原样给出，结合 text、finish_count 看。拍摄脚本用 shoot_scripts。',
-      shape: { ...target },
-      run: community('shoot_activity'),
     },
     {
       name: 'shoot_scripts',

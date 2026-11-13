@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.mjs';
 
 const require = createRequire(import.meta.url);
-const { Library, M, INNOVATION_KINDS, RANK_FILTERS, SUBJECT_KINDS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX } = require('../editor-plugin/library.cjs');
+const { Library, M, INNOVATION_KINDS, RANK_FILTERS, SUBJECT_KINDS } = require('../editor-plugin/library.cjs');
 
 const ok = (data) => JSON.stringify({ code: 0, message: 'success', data });
 
@@ -1418,28 +1418,6 @@ test('task tools take the task_id of their own list and hand the plugin the id i
   assert.equal(seen.filter((s) => s.method === 'task_receive').length, 1);
 });
 
-test('my_effects and my_effect_reviews go to the lowest-pid window and check their arguments', async () => {
-  const seen = [];
-  const client = await connect({
-    listInstances: () => [{ pid: 300 }, { pid: 200 }],
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { method }),
-  });
-  const call = (name, args) => client.callTool({ name, arguments: args });
-  assert.deepEqual(JSON.parse((await call('my_effects', { cursor: '["x",1]', count: 50 })).content[0].text), { method: 'my_effects' });
-  assert.deepEqual(seen[0], { method: 'my_effects', params: { cursor: '["x",1]', count: 50 }, opts: { pid: 200 } });
-  await call('my_effect_reviews', { effect_id: '92139627' });
-  assert.deepEqual(seen[1], { method: 'my_effect_reviews', params: { effect_id: '92139627' }, opts: { pid: 200 } });
-  for (const [name, args] of [
-    ['my_effects', { count: 51 }],
-    ['my_effects', { cursor: '' }],
-    ['my_effect_reviews', { effect_id: 'abc' }],
-    ['my_effect_reviews', {}],
-  ]) {
-    assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
-  }
-  assert.equal(seen.length, 2);
-});
-
 test('server kind and rank filter enums match the plugin tables', async () => {
   const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
@@ -1447,9 +1425,6 @@ test('server kind and rank filter enums match the plugin tables', async () => {
   assert.deepEqual(props('rank_innovation').kind.enum, INNOVATION_KINDS);
   for (const key of Object.keys(RANK_FILTERS)) assert.deepEqual(props('rank_list')[key].items.enum, Object.keys(RANK_FILTERS[key].options), key);
   assert.deepEqual(props('rank_subjects').kind.enum, Object.keys(SUBJECT_KINDS));
-  assert.deepEqual(props('my_effect_trend').trend.enum, Object.keys(TREND_CYCLES));
-  assert.deepEqual(props('messages_list').group.enum, Object.keys(MESSAGE_GROUPS));
-  assert.equal(props('messages_list').count.maximum, MESSAGE_MAX);
 });
 
 test('growth_route reads the mobile app 成长之路 with each level, goal and state', async () => {
@@ -1900,49 +1875,6 @@ test('my_task_status reads 我的作品 of every received task, in order, and co
   assert.equal(out.items[1].icon_url, 'https://cdn/c.png');
 });
 
-test('the creator data tools go to the lowest-pid window and check their arguments', async () => {
-  const seen = [];
-  const client = await connect({
-    listInstances: () => [{ pid: 300 }, { pid: 200 }],
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), method === 'my_effect_data' ? { icon_url: 'https://cdn/s16.png' } : { method }),
-  });
-  const call = (name, args) => client.callTool({ name, arguments: args });
-  assert.deepEqual(JSON.parse((await call('my_effect_data', { effect_id: '92012413', app_effect_id: '285940787' })).content[0].text), { icon_ref: 'img:1' });
-  await call('my_effect_trend', { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' });
-  await call('my_effect_revenue', { effect_id: '92012413', app_effect_id: '285940787' });
-  await call('my_profile', {});
-  await call('my_revenue', { month: '202610' });
-  await call('messages_list', { group: 'official', cursor: '414978447', count: 50 });
-  await call('my_task_status', {});
-  await call('my_innovation_status', {});
-  assert.deepEqual(seen, [
-    { method: 'my_effect_data', params: { effect_id: '92012413', app_effect_id: '285940787' }, opts: { pid: 200 } },
-    { method: 'my_effect_trend', params: { effect_id: '92012413', app_effect_id: '285940787', trend: 'since_online' }, opts: { pid: 200 } },
-    { method: 'my_effect_revenue', params: { effect_id: '92012413', app_effect_id: '285940787' }, opts: { pid: 200 } },
-    { method: 'my_profile', params: {}, opts: { pid: 200 } },
-    { method: 'my_revenue', params: { month: '202610' }, opts: { pid: 200 } },
-    { method: 'messages_list', params: { group: 'official', cursor: '414978447', count: 50 }, opts: { pid: 200 } },
-    { method: 'my_task_status', params: {}, opts: { pid: 200 } },
-    { method: 'my_innovation_status', params: {}, opts: { pid: 200 } },
-  ]);
-  for (const [name, args] of [
-    ['my_effect_data', { effect_id: '92012413' }],
-    ['my_effect_data', { effect_id: '92012413', app_effect_id: 'x' }],
-    ['my_effect_data', { effect_id: '92012413', app_effect_id: '285940787', trend: 'recent' }],
-    ['my_effect_trend', { effect_id: '92012413', app_effect_id: '285940787', trend: '7d' }],
-    ['my_effect_revenue', { app_effect_id: '285940787' }],
-    ['my_profile', { month: '202610' }],
-    ['my_revenue', { month: '2026-10' }],
-    ['messages_list', { group: 'system' }],
-    ['messages_list', { count: 51 }],
-    ['messages_list', { cursor: 'abc' }],
-    ['my_innovation_status', { effect_id: '92012413' }],
-  ]) {
-    assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
-  }
-  assert.equal(seen.length, 8);
-});
-
 // Trimmed from the 实时热点 and 热点详情 answers (2026-11-09).
 const HOT_LIST = {
   t: 3000,
@@ -2054,8 +1986,3 @@ test('douyin hot tools take the hot_id from douyin_hot_list and send its t and v
   assert.equal((await call('douyin_hot_videos', { hot_id: 'abc' })).isError, true);
 });
 
-test('rank_creators hands out the avatars as refs', async () => {
-  const client = await connect({ listInstances: () => [{ pid: 7 }], callPlugin: async () => ({ total: 1, items: [{ uid: '1', name: 'u', avatar_url: 'https://p/avatar-signed-long.jpeg' }] }) });
-  const out = JSON.parse((await client.callTool({ name: 'rank_creators', arguments: {} })).content[0].text);
-  assert.deepEqual(out.items, [{ uid: '1', name: 'u', avatar_ref: 'img:1' }]);
-});
