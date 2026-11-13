@@ -73,6 +73,17 @@ const M = {
   arVideoAnalytics: '@orion/Business/VideoMatting/ARVideoAnalytics',
   arVideoProject: '@orion/Business/VideoMatting/ARVideoProject',
   ffmpeg: '@orion/Business/Utils/Ffmpeg',
+  ehPreview: '@orion/Business/Agent/EHCommand/EHPreviewCommand',
+  playAudio: '@orion/Business/Agent/EHCommand/AgentPlayAudioInputService',
+  playthroughRuntime: '@orion/Business/Agent/EHCommand/AgentPlaythroughRuntimeSession',
+  aiVfxManager: '@orion/Business/AssetsLibrary/Core/Control/AIVisualEffectManager/AIVisualEffectManager',
+  aiVfxInput: '@orion/Business/AssetsLibrary/Core/Control/AIVisualEffect/visualEffectInput',
+  aiVfxPreview: '@orion/Business/AssetsLibrary/Core/Control/AIVisualEffect/downloadGeneratedVisualEffectPreview',
+  uganManager: '@orion/Business/AssetsLibrary/Core/Control/AssetUGan/UGanManager',
+  uganUtils: '@orion/Business/AssetsLibrary/Core/Control/AssetUGan/utils',
+  uganConst: '@orion/Business/AssetsLibrary/Core/Control/AssetUGan/const',
+  imageEditAI: '@orion/Business/ImageEditor/utils/imageEditAIGen',
+  imageSegmentation: '@orion/Business/ImageEditor/utils/imageSegmentationUtil',
 };
 
 // Where this plugin keeps its own files (import records, preview strips) outside any project.

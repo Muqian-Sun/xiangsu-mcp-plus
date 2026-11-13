@@ -186,6 +186,13 @@ export function loadScene(projectDir) {
 
   return {
     unreadable,
+    entityCount: entities.length,
+    // An object found by #id, name or path: its position in the Scene's entities list (0-based), name and path.
+    locate(ref) {
+      const hit = located.find((o) => o.entity === find(ref));
+      if (!hit) throw Error(`OBJECT_NOT_FOUND: ${ref}; use the #ids, names or paths scene_tree prints for project_dir`);
+      return { index: entities.indexOf(hit.entity), id: hit.guid, name: hit.entity.raw.name, path: hit.path.join('/'), components: (hit.entity.raw.components || []).map(typeOf) };
+    },
     // get_scene's object tree, `depth` levels deep; `subtree` is an #id, a name or a path.
     tree({ subtree, depth }) {
       const build = (e, level) => ({ ...node(e), children: level < depth ? children(e).map((c) => build(c, level + 1)) : [] });
