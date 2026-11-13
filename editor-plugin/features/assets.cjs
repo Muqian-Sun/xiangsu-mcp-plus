@@ -238,6 +238,39 @@ const REQUIRED = {
     [M.navConst, 'NavItemKey.ARVideo'],
     [M.ffmpeg, 'ffmpegExec'],
   ],
+  previewInput: [
+    [M.preview, 'PreviewManager.getInstance'],
+    [M.preview, 'PreviewStreamState.Paused'],
+    ...['reloadSticker', 'previewTouchMove', 'seekToTime', 'switchGestureVideo'].map((p) => [M.ehPreview, `EHPreviewCommand.prototype.${p}`]),
+    ...['setPlayAudioInput', 'clearPlayAudioInput'].map((p) => [M.playAudio, `AgentPlayAudioInputService.prototype.${p}`]),
+    ...['activateAgentPlaythroughRuntimeSession', 'deactivateAgentPlaythroughRuntimeSession', 'isAgentPlaythroughRuntimeSessionActive', 'clearAgentPlaythroughRuntimeSession'].map((p) => [M.playthroughRuntime, p]),
+  ],
+  aiVfx: [
+    [M.assetsLibrary, 'AssetsLibrary.getInstance'],
+    ...['resume', 'leavePage', 'updatePrompt', 'updateDurationSeconds', 'updateReferenceMedia', 'getReferenceAdmissionError', 'submit', 'queryTaskList', 'importCurrentResult', 'cancel'].map((p) => [M.aiVfxManager, `default.prototype.${p}`]),
+    ...['VisualEffectDurationRange', 'VisualEffectReferenceLimits', 'VisualEffectMaxConcurrentTasks', 'isVisualEffectTaskRunning'].map((p) => [M.aiVfxManager, p]),
+    ...['validateVisualEffectFile', 'visualEffectImageExtensions', 'visualEffectVideoExtensions'].map((p) => [M.aiVfxInput, p]),
+    [M.aiVfxPreview, 'ensureGeneratedVisualEffectPreview'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.ffmpeg, 'ffmpegExec'],
+  ],
+  customGan: [
+    [M.assetsLibrary, 'AssetsLibrary.getInstance'],
+    ...['onUGanEditParamsUpdate', 'queryTaskList', 'getStyleItemFromTask', 'submitUGanPreviewRequest', 'submitGanModelRequest', 'submitGANPreviewSelectRequest', 'submitGanModelWithSelectImagesRequest', 'updatePreviewTask2GanTask', 'importUGanModel'].map((p) => [M.uganManager, `default.prototype.${p}`]),
+    ...['isGanTask', 'isGanPreviewTask', 'getGanTaskStatus', 'getGanSelectPreviewTaskStatus', 'getGanPreviewImageList', 'getUGanModelLocalInfoByTaskId', 'queryQuota', 'assetGanSettings'].map((p) => [M.uganUtils, p]),
+    [M.uganConst, 'MaxImportNum'],
+    [M.uganConst, 'RespDownloadTimeOut'],
+    [M.aiEffectApi, 'queryAIGCResultWithBizInfo'],
+    [M.aiEffectApi, 'AIGCRecordStatus.Running'],
+    [M.lokiUtils, 'downloadTemplateFile'],
+    [M.preview, 'PreviewManager.getInstance'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+  ],
+  imageEdit: [
+    [M.imageEditAI, 'requestImageEditorAIResult'],
+    [M.imageSegmentation, 'default'],
+    [M.aiEffectApi, 'AI_SCENE.AIMattingGenPC'],
+  ],
 };
 
 // Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)

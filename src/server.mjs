@@ -30,13 +30,17 @@ import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
 import { opsRequest } from './opsdata.mjs';
+import { DEFAULT_FONT } from './editorres.mjs';
+import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
+import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
+import { setSceneLayers } from './scenelayers.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE, CUSTOM_GAN_SELECT_COUNT, IMAGE_MATTING_PARTS } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 妆容」（从参考图提取妆容）用 ai_makeup_* 工具，「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具。';
+  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 妆容」（从参考图提取妆容）用 ai_makeup_* 工具，「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具，「画面特效」用 ai_vfx_* 工具，「实时变脸」（训练自己的 AI 实时变脸）用 custom_gan_* 工具；「图片」「视频」生成没有接入。';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 const SCRIPT_TAG_TEXT = Object.entries(SCRIPT_TAGS).map(([k, name]) => `${k} ${name}`).join('、');
 
@@ -52,6 +56,39 @@ const refBox = z
   .strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) })
   .optional()
   .describe('同一部位在参考图上的框（按参考图宽高的比例），和 reference 一起用。');
+
+// Skia (@napi-rs/canvas) takes seconds to load cold, so the drawing tools load it on first use.
+const graphics = () => import('./graphics.mjs');
+const absPath = (what) => z.string().min(1).refine((p) => path.isAbsolute(p), `${what}须是绝对路径`);
+const outDir = absPath('目录').describe('输出目录的绝对路径（不存在会创建）；放进工程的 Assets/ 下时 PNG 会被编辑器自动导入。');
+const hexColor = z.string().regex(/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/, '颜色写 #rgb、#rgba、#rrggbb 或 #rrggbbaa');
+const fontArg = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(`字体：像塑自带字体的文件夹名（douyinti 抖音体、yansongxin、xinqingnianti、wenyuehouxiandaiti、nihongxin、gangfengfanti、fenglingyouyou、DouyinNumberABC-ExtraBold，以本机安装的为准），或 .ttf / .otf 的绝对路径；默认 ${DEFAULT_FONT}。`);
+const strokeArg = z.strictObject({ color: hexColor, width: z.number().min(0.5).max(60).describe('描边宽度（像素）') }).optional().describe('描边。');
+const shadowArg = z
+  .strictObject({
+    color: hexColor.optional(),
+    blur: z.number().min(0).max(60).optional(),
+    offset_y: z.number().min(-60).max(60).optional(),
+    opacity: z.number().min(0).max(1).optional(),
+  })
+  .optional()
+  .describe('投影；传 {} 用默认的柔和黑影（模糊 6、下移 4、不透明度 0.45）。');
+const textStyle = {
+  text: z.string().min(1).describe('文字，\\n 换行，多行居中。'),
+  font: fontArg,
+  size: z.number().min(6).max(400).describe('字号（像素）。'),
+  fill: hexColor.optional().describe('填充色，默认 #ffffff。'),
+  gradient: z.array(hexColor).min(2).max(6).optional().describe('从上到下的渐变色（替代 fill）。'),
+  stroke: strokeArg,
+  shadow: shadowArg,
+  line_height: z.number().min(0.8).max(3).optional().describe('行距（字号的倍数），默认 1.25。'),
+};
+const pngFile = z.string().regex(/^[^/\\:*?"<>|]+\.png$/, '文件名（不含目录）以 .png 结尾');
+const fileStem = z.string().regex(/^[^/\\:*?"<>|.][^/\\:*?"<>|]*$/, '文件名（不含目录和扩展名）');
 
 // Picked, not measured: four videos covers 正脸、摇头、点头、双人; 24 full-size frames (about 75 KB
 // each, measured) keep one answer at about 1.8 MB of images.
@@ -106,6 +143,19 @@ const AI_MAKEUP_SLACK_MS = 270000;
 const AI_MAKEUP_IMPORT_TIMEOUT_MS = 300000;
 // Fields of the ai_makeup_* answers that hold a blend mode number; its name goes next to it.
 const AI_MAKEUP_BLEND_KEYS = ['blend_mode', 'reflect_blend_mode', 'blend'];
+// Derived: the image editor's requests wait up to 60 s for the cloud result, on top of the upload and download.
+const IMAGE_AI_TIMEOUT_MS = 180000;
+// Derived: the editor's audit of a reference video gives up within 15 min, plus the upload and the create call.
+const AI_VFX_SUBMIT_TIMEOUT_MS = 1100000;
+// Picked: long enough for one wait to cover a typical generation, short of the client's patience.
+const AI_VFX_MAX_WAIT_S = 900;
+const CUSTOM_GAN_MAX_WAIT_S = 900;
+// Derived: the model and preview downloads (120 s each in the editor) and the import.
+const CUSTOM_GAN_IMPORT_TIMEOUT_MS = 600000;
+// Derived: the preview reload behind starting or stopping the audio session (measured 0.5–0.9 s; the editor gives up after 10 s).
+const AUDIO_SESSION_TIMEOUT_MS = 30000;
+// Picked: generated images shown inline in one answer (the rest are only listed as files).
+const INLINE_IMAGES = 8;
 // Picked, not measured: as many images per image_view call as the old preview tools showed.
 const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
@@ -248,6 +298,8 @@ export function createServer(deps = {}) {
     framesDir,
     inspirationImagesDir: () => framesDir({ root: path.join(os.tmpdir(), 'xs-inspiration-images') }),
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
+    writeSound,
+    addPreviewModel,
     // Expiry timers must not keep the process alive after the client goes away.
     schedule: (fn, ms) => setTimeout(fn, ms).unref(),
     sleep,
@@ -450,6 +502,17 @@ export function createServer(deps = {}) {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  };
+  // An image editor AI request, served by any window; the result is copied out of the editor's cache.
+  const imageAi = async (a, method, params, suffix, { dir, stem, ...info } = {}) => {
+    const { previewJpeg } = await graphics();
+    const { project_path, instance_id, image_path, out_dir } = a;
+    const got = await d.callPlugin(method, { image_path, ...params }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: IMAGE_AI_TIMEOUT_MS });
+    const where = dir ?? (out_dir ? saveDir(out_dir) : d.framesDir());
+    const file = path.join(where, `${stem ?? path.basename(image_path, path.extname(image_path))}_${suffix}.png`);
+    fs.copyFileSync(got.output, file);
+    const summary = { file, ...(got.mode ? { mode: got.mode } : {}), ...info, ...(out_dir ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 out_dir' }) };
+    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, { type: 'image', mimeType: 'image/jpeg', data: (await previewJpeg(file)).toString('base64') }] };
   };
   // Inspirations, tasks and rank boards belong to the account rather than a project, so any window
   // serves them.
@@ -729,6 +792,74 @@ export function createServer(deps = {}) {
         const { project_path, instance_id, image_path, type } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
         return text(await setIcon(projectPath, image_path, type));
+      },
+    },
+    {
+      name: 'icon_compose',
+      description:
+        '做图标图片（不开像塑）：从 preview_frames 存下的预览帧里裁一块正方形，按需压一行描边 / 渐变 / 投影字幕（说明玩法的一句话），缩放到 size（默认 720）存成 PNG，另存一张 160 的缩略图；一次最多 4 张（比如女生图、男生图，或几种取景）。另出一张列表大小（160）的并排图 sheet_160.jpg：先是这次做的图标，后面接 compare_images（同类作品的图标，用来看缩到列表大小后和它们拉不拉得开）。并排图和每张图标的 360 预览都在返回里。crop 用帧自己的像素：{top} 是和帧一样宽的正方形的上沿，{x, y, size} 是任意正方形；超出画面报 CROP_OUT_OF_FRAME（不做补边，补背景、补被切掉的头饰仍按工程里的做法）。字幕字号按输出尺寸算，太宽时等比缩到图宽的 max_width（默认 0.86），返回里 caption_shrunk_to 说明缩了多少。满意后把 file 交给 icon_set 上传（女生、男生图不同时分两次传 type）。',
+      shape: {
+        sources: z
+          .array(
+            z.strictObject({
+              frame: absPath('帧').describe('预览帧图片的绝对路径（preview_frames 的 files，或任意 PNG / JPEG）。'),
+              crop: z
+                .union([
+                  z.strictObject({ top: z.number().int().min(0).describe('和帧一样宽的正方形的上沿（帧的像素）。') }),
+                  z.strictObject({ x: z.number().int().min(0), y: z.number().int().min(0), size: z.number().int().min(16) }),
+                ])
+                .describe('裁哪块正方形。'),
+              caption: z
+                .strictObject({
+                  ...textStyle,
+                  position: z
+                    .union([z.enum(['top', 'bottom']), z.number().min(0).max(1)])
+                    .optional()
+                    .describe('top / bottom（默认，离边 3%），或字幕中心所在的高度（0–1）。字幕不要挡下巴和嘴。'),
+                  max_width: z.number().gt(0).max(1).optional().describe('字幕最宽占图宽的比例，默认 0.86。'),
+                })
+                .optional()
+                .describe('字幕；字号、描边宽度按输出尺寸（size）的像素算。'),
+              name: fileStem.optional().describe('文件名（不含扩展名），默认 icon_1、icon_2…'),
+            }),
+          )
+          .min(1)
+          .max(4),
+        size: z.number().int().min(160).max(1080).optional().describe('图标边长，默认 720（icon_set 会再缩到 360）。'),
+        out_dir: outDir.optional().describe('输出目录的绝对路径；省略时放临时目录（24 小时后删除）。'),
+        compare_images: z.array(absPath('图片')).max(8).optional().describe('同类作品的图标（本机路径），接在并排图后面对比。'),
+      },
+      run: async (a) => {
+        const { iconCanvas, jpeg, png, scaled, sheetCanvas } = await graphics();
+        const size = a.size ?? 720;
+        const dir = a.out_dir ? saveDir(a.out_dir) : d.framesDir();
+        const icons = [];
+        const thumbs = [];
+        const previews = [];
+        for (const [i, s] of a.sources.entries()) {
+          const name = s.name ?? `icon_${i + 1}`;
+          const got = await iconCanvas(s, size);
+          const file = path.join(dir, `${name}.png`);
+          const thumbFile = path.join(dir, `${name}_160.png`);
+          const thumb = scaled(got.canvas, 160);
+          fs.writeFileSync(file, await png(got.canvas));
+          fs.writeFileSync(thumbFile, await png(thumb));
+          thumbs.push(thumb);
+          previews.push({ type: 'text', text: `${name}（360 预览）` }, { type: 'image', mimeType: 'image/jpeg', data: (await jpeg(scaled(got.canvas, 360))).toString('base64') });
+          icons.push({ name, file, thumb_file: thumbFile, size, crop: got.crop, frame_size: got.source, ...(got.caption_shrunk_to ? { caption_shrunk_to: got.caption_shrunk_to } : {}) });
+        }
+        const sheetFile = path.join(dir, 'sheet_160.jpg');
+        const sheet = await jpeg(await sheetCanvas(thumbs, a.compare_images ?? [], 160));
+        fs.writeFileSync(sheetFile, sheet);
+        const summary = { icons, sheet_file: sheetFile, ...(a.out_dir ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 out_dir' }), next: '满意后把 file 交给 icon_set' };
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify(summary, null, 2) },
+            { type: 'text', text: `列表大小并排：前 ${icons.length} 张是这次做的图标${a.compare_images?.length ? '，后面是 compare_images' : ''}` },
+            { type: 'image', mimeType: 'image/jpeg', data: sheet.toString('base64') },
+            ...previews,
+          ],
+        };
       },
     },
     {
@@ -1885,6 +2016,400 @@ export function createServer(deps = {}) {
       description: '取消一个还在 running（或 unconfirmed）的 AR 视频生成任务，等同面板里的「取消生成」。取消确认后任务从记录里消失（cancelled=true）；取消前它已经结束时返回 cancelled=false 和结束时的 status。已经结束的任务（完成、失败、已取消）不能取消，直接报 AR_VIDEO_NOT_RUNNING。',
       shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
       run: plugin('ar_video_cancel'),
+    },
+    {
+      name: 'sfx_synth',
+      description: `合成音效（不开像塑，用像塑自带的 ffmpeg 出 MP3）：预设取自各特效工程用过的音效脚本，频率、包络和默认音量照原样（没有随机噪声的预设和原脚本逐采样一致）。预设：${Object.entries(SFX_PRESETS)
+        .map(([k, p]) => `${k} ${p.desc}`)
+        .join('；')}。pitch 整体升降调（${PITCH_RANGE[0]}–${PITCH_RANGE[1]} 倍），volume 是峰值（默认按预设）。.mp3 是双声道 128 kbps（工程里导入的就是这种），.wav 是单声道 16 位。mp3 拷进 Assets/ 后有时会自动导入、有时不会：用官方 list_resources 看，没有再用官方 import_resource（绝对路径）导入。官方音效库没有合适的声音时用它；要做的是循环音、旋律或预设里没有的声音，仍按工程的做法写脚本。`,
+      shape: {
+        out_dir: outDir,
+        sounds: z
+          .array(
+            z.strictObject({
+              preset: z.enum(Object.keys(SFX_PRESETS)),
+              file: z.string().regex(/^[^/\\:*?"<>|]+\.(mp3|wav)$/, '文件名（不含目录）以 .mp3 或 .wav 结尾'),
+              pitch: z.number().min(PITCH_RANGE[0]).max(PITCH_RANGE[1]).optional().describe('升降调倍数，默认 1。'),
+              volume: z.number().min(0.05).max(1).optional().describe('峰值 0–1，默认按预设（0.45–0.8）。'),
+            }),
+          )
+          .min(1)
+          .max(30),
+      },
+      run: async ({ out_dir, sounds }) => {
+        const dir = saveDir(out_dir);
+        const written = [];
+        for (const s of sounds) {
+          const samples = synth(s.preset, { pitch: s.pitch ?? 1, peak: s.volume });
+          const file = path.join(dir, s.file);
+          await d.writeSound(samples, file);
+          written.push({ file, preset: s.preset, seconds: Number((samples.length / SFX_RATE).toFixed(2)), peak: s.volume ?? SFX_PRESETS[s.preset].peak, ...(s.pitch && s.pitch !== 1 ? { pitch: s.pitch } : {}) });
+        }
+        return text({ sounds: written });
+      },
+    },
+    {
+      name: 'ui_text_image',
+      description:
+        '把文字渲染成透明 PNG（不开像塑）：描边、上下渐变、投影都能做（Text2D 的描边设不进去，粗描边字只能做成图片放在 Image 上）。一次最多 60 张，比如一组数字 0–9、几句弹字。图片按文字加描边、投影和留白的范围裁好，返回每张的宽高（摆 ScreenTransform 用）。字体默认抖音体；字体须有授权（像塑自带字体或 SIL OFL 这类开源可商用字体）。',
+      shape: {
+        out_dir: outDir,
+        items: z
+          .array(z.strictObject({ file: pngFile, ...textStyle, padding: z.number().min(0).max(100).optional().describe('四周留白（像素），默认 4。') }))
+          .min(1)
+          .max(60),
+      },
+      run: async ({ out_dir, items }) => {
+        const { png, textCanvas } = await graphics();
+        const dir = saveDir(out_dir);
+        const out = [];
+        const shown = [];
+        for (const [i, item] of items.entries()) {
+          const canvas = textCanvas(item, `items[${i}]`);
+          const file = path.join(dir, item.file);
+          const buf = await png(canvas);
+          fs.writeFileSync(file, buf);
+          out.push({ file, width: canvas.width, height: canvas.height });
+          if (shown.length < INLINE_IMAGES * 2) shown.push({ type: 'text', text: item.file }, { type: 'image', mimeType: 'image/png', data: buf.toString('base64') });
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ images: out }, null, 2) }, ...shown] };
+      },
+    },
+    {
+      name: 'ui_panel',
+      description:
+        '画界面底板 PNG（不开像塑）：圆角矩形或胶囊（radius="pill"），纯色或上下渐变（颜色可带透明度，如 #121c2e96 半透明深色磨砂底），可加描边和投影，里面可以放几行居中的文字（每行单独设字号、颜色、描边）。不给 width / height 时按文字加 padding 自动定大小。用来做开局提示条、结算卡、按钮底。一次最多 30 张，返回每张的宽高（含投影外扩）。',
+      shape: {
+        out_dir: outDir,
+        items: z
+          .array(
+            z.strictObject({
+              file: pngFile,
+              width: z.number().int().min(4).max(2048).optional(),
+              height: z.number().int().min(4).max(2048).optional(),
+              radius: z.union([z.number().min(0).max(1024), z.literal('pill')]).optional().describe('圆角半径（像素），或 pill 两头全圆；默认 24。'),
+              fill: hexColor.optional().describe('底色，默认 #ffffff。'),
+              gradient: z.array(hexColor).min(2).max(6).optional().describe('从上到下的渐变（替代 fill）。'),
+              stroke: strokeArg,
+              shadow: shadowArg,
+              padding: z.number().min(0).max(200).optional().describe('自动定大小时文字四周的留白，默认 24。'),
+              line_gap: z.number().min(0).max(200).optional().describe('行与行之间的间距，默认 8。'),
+              lines: z
+                .array(z.strictObject({ ...textStyle, shadow: shadowArg }))
+                .max(6)
+                .optional()
+                .describe('底板上的文字，从上到下居中排列。'),
+            }),
+          )
+          .min(1)
+          .max(30),
+      },
+      run: async ({ out_dir, items }) => {
+        const { png, panelCanvas } = await graphics();
+        const dir = saveDir(out_dir);
+        const out = [];
+        const shown = [];
+        for (const [i, item] of items.entries()) {
+          const canvas = panelCanvas(item, `items[${i}]`);
+          const file = path.join(dir, item.file);
+          const buf = await png(canvas);
+          fs.writeFileSync(file, buf);
+          out.push({ file, width: canvas.width, height: canvas.height });
+          if (shown.length < INLINE_IMAGES * 2) shown.push({ type: 'text', text: item.file }, { type: 'image', mimeType: 'image/png', data: buf.toString('base64') });
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ images: out }, null, 2) }, ...shown] };
+      },
+    },
+    {
+      name: 'preview_model_add',
+      description: `把自己的模特加进像塑的预览视频清单（不开像塑）：一张照片（默认 ${PHOTO_SECONDS} 秒静止视频）、一段视频，或两张照片交替循环（alternate，用来验「做一次表情记一次」：平静照和表情照交替），按内置预览视频的规格转码（720×1280、h264、30000/1001 fps、带静音 AAC；动图 320×569、图标 56×96），写进 ~/Library/Application Support/DouyinAR/Shared/Resources/PreviewResource/PreviewResources.json（改之前的版本备份到 ~/.xiangsu-mcp-ext/preview-resources-backup/，留最近 10 份）。之后新打开的工程窗口就有这个视频（set_preview_video 的 video_name、preview_frames 的 videos 用 name）；已开着的窗口要关掉重开。replace=true 原位换掉同名模特的视频：替换某个窗口播过的视频会让那个窗口的预览卡住，先关掉那些窗口再替换。像塑更新可能覆盖清单，覆盖后重新加。`,
+      shape: {
+        name: z.string().min(1).max(40).describe('清单里的名字，照现有的写法「模特W短发||女」（|| 后面是性别）。'),
+        file_name: z.string().regex(/^[a-z0-9_]+$/).describe('文件名（小写字母、数字、下划线），如 model_w、model_s_kiss。'),
+        type: z.enum(PREVIEW_TYPES).optional().describe('预览类型，默认 preview_face。'),
+        image: absPath('照片').optional().describe('照片（PNG / JPG / WEBP），铺满 720×1280 后居中裁切。'),
+        seconds: z.number().min(1).max(30).optional().describe(`照片做成的视频时长，默认 ${PHOTO_SECONDS} 秒。`),
+        video: absPath('视频').optional().describe('视频（MP4 / MOV），铺满 720×1280 后居中裁切，保留原声（没有就配静音）。'),
+        alternate: z
+          .strictObject({
+            first: absPath('照片'),
+            second: absPath('照片'),
+            first_s: z.number().min(0.2).max(10).describe('第一张停留秒数（如平静 1.4）。'),
+            second_s: z.number().min(0.2).max(10).describe('第二张停留秒数（如嘟嘴 1）。'),
+            cycles: z.number().int().min(1).max(20).describe('循环几次（如 4，共 9.6 秒）。'),
+          })
+          .optional()
+          .describe('两张照片交替循环；preview_frames 的间隔别取一个循环的整数倍，否则每帧落在同一相位。'),
+        replace: z.boolean().optional().describe('替换同名模特，默认 false（同名时报 PREVIEW_MODEL_EXISTS）。'),
+      },
+      run: async (a) => text(await d.addPreviewModel(a)),
+    },
+    {
+      name: 'scene_set_layer',
+      description:
+        '改已保存工程的 Assets/main.scene 里对象的渲染图层（layer）和摄像机能看见哪些图层（layerVisibleMask），官方 DSL 改不了这两项（报 Invalid property name layer）。用于把一些对象只给某个摄像机画（如擦痕遮罩只画进渲染纹理）。只改对象各自那一行，其余内容原样；改完重新解析核对，对不上就不写（报 SCENE_EDIT_NOT_APPLIED）。改之前的文件备份到 ~/.xiangsu-mcp-ext/scene-backups/（每个工程留最近 10 份）。工程窗口开着时拒绝（报 PROJECT_OPEN：编辑器保存时会覆盖文件）：先 save_project、project_close，改完再 project_open。对象写法同 scene_tree 的 project_dir 模式（#序号、名称或层级路径）。',
+      shape: {
+        project_dir: absPath('工程目录').describe('工程目录的绝对路径（含 Assets/main.scene）。'),
+        objects: z
+          .array(z.strictObject({ object: z.string().min(1), layer: z.number().int().min(0).max(63).describe('图层 0–63，默认的对象都在 0。') }))
+          .max(200)
+          .optional(),
+        cameras: z
+          .array(z.strictObject({ object: z.string().min(1).describe('带 Camera 组件的对象。'), visible_layers: z.array(z.number().int().min(0).max(63)).min(1).describe('这个摄像机画哪些图层。') }))
+          .max(20)
+          .optional(),
+      },
+      run: async ({ project_dir, objects, cameras }) => {
+        const real = (p) => {
+          try {
+            return fs.realpathSync(p);
+          } catch (_) {
+            return path.resolve(p);
+          }
+        };
+        if ((await openPaths()).some((p) => real(p) === real(project_dir))) throw Error(`PROJECT_OPEN: ${project_dir} is open in an editor window, which would overwrite main.scene on its next save; save_project and project_close it first`);
+        return text(setSceneLayers(project_dir, { objects, cameras }));
+      },
+    },
+    {
+      name: 'preview_audio_test',
+      description:
+        '给预览喂模拟声音，验声音玩法（编辑器里没有真人声音，音量读数一直是 0、关键词不会命中）：先开启编辑器内置 Agent 的「试玩」会话（预览会重载一次，重载时注入把模拟输入转成 AudioDetection 结果的运行时），按 steps 依次喂音量 volume（检测器原始值 0–1，人声参考：轻 0.05、中 0.10、响 0.15）、音高 pitch_hz（45–650）、关键词命中 keywords 或未命中 keyword_miss，每步持续 duration_ms，期间按 frames 均匀截预览图；结束后清掉输入、关闭会话（预览再重载一次，回到没有注入的状态）。2026-11-14 实测：脚本里 VolumeDetector.getResult() 在喂 0.12 的 2.5 秒里读到 0.12，前后都是 0。脚本收到的值用官方 get_script_logs 看。会话期间预览从头重载，特效状态会重置；lead_ms 是重载后先等多久再喂第一步（默认 1000）。',
+      shape: {
+        ...target,
+        steps: z
+          .array(
+            z.strictObject({
+              volume: z.number().min(0).max(1).optional(),
+              pitch_hz: z.number().min(45).max(650).optional(),
+              keywords: z.array(z.string().min(1)).min(1).optional().describe('模拟检测器命中这些关键词（和脚本注册的关键词一致）。'),
+              keyword_miss: z.literal(true).optional().describe('模拟一次关键词未命中。'),
+              duration_ms: z.number().int().min(100).max(30000).describe('这一步持续多久。'),
+              frames: z.number().int().min(0).max(6).optional().describe('这一步里均匀截几张预览图，默认 2。'),
+            }),
+          )
+          .min(1)
+          .max(10),
+        lead_ms: z.number().int().min(0).max(10000).optional(),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { steps, lead_ms = 1000, save_to } = a;
+        const inputs = steps.map((s, i) => {
+          if (s.keywords && s.keyword_miss) throw Error(`INVALID_ARGUMENTS: steps[${i}] has both keywords and keyword_miss`);
+          const input = { ...(s.volume !== undefined ? { volume: s.volume } : {}), ...(s.pitch_hz !== undefined ? { pitchHz: s.pitch_hz } : {}), ...(s.keywords ? { keywordEvent: { type: 'hit', keywords: s.keywords } } : {}), ...(s.keyword_miss ? { keywordEvent: { type: 'miss' } } : {}) };
+          if (!Object.keys(input).length) throw Error(`INVALID_ARGUMENTS: steps[${i}] needs volume, pitch_hz, keywords or keyword_miss`);
+          return input;
+        });
+        const projectPath = await projects.resolveProjectPath({ project_path: a.project_path, instance_id: a.instance_id });
+        const dir = save_to ? saveDir(save_to) : d.framesDir();
+        const total = lead_ms + steps.reduce((s, x) => s + x.duration_ms, 0);
+        const shots = [];
+        let stopped;
+        await holdFullRate(projectPath, AUDIO_SESSION_TIMEOUT_MS * 2 + total + HOLD_SLACK_MS);
+        try {
+          await d.callPlugin('preview_audio_session', { action: 'start' }, { projectPath, timeoutMs: AUDIO_SESSION_TIMEOUT_MS });
+          await d.sleep(lead_ms);
+          for (const [k, s] of steps.entries()) {
+            await d.callPlugin('preview_audio_input', { input: inputs[k], duration_ms: s.duration_ms }, { projectPath, timeoutMs: 15000 });
+            const t0 = Date.now();
+            const n = s.frames ?? 2;
+            for (let j = 0; j < n; j++) {
+              await d.sleep(Math.max(0, t0 + Math.round((s.duration_ms * (j + 1)) / (n + 1)) - Date.now()));
+              const img = await d.callPlugin('preview_frame', {}, { projectPath, timeoutMs: 15000 });
+              const file = path.join(dir, `step${k + 1}-frame-${j + 1}.jpg`);
+              fs.writeFileSync(file, Buffer.from(img.data, 'base64'));
+              shots.push({ step: k + 1, at_ms: Date.now() - t0, file });
+            }
+            await d.sleep(Math.max(0, t0 + s.duration_ms - Date.now()));
+          }
+        } finally {
+          await d.callPlugin('preview_audio_input', { clear: true }, { projectPath, timeoutMs: 15000 }).catch(() => {});
+          stopped = await d.callPlugin('preview_audio_session', { action: 'stop' }, { projectPath, timeoutMs: AUDIO_SESSION_TIMEOUT_MS }).catch((e) => ({ error: e.message }));
+          await releaseFullRate(projectPath);
+        }
+        const content = [];
+        for (const s of shots) content.push({ type: 'text', text: `第 ${s.step} 步，${s.at_ms} ms` }, { type: 'image', ...(await d.readImageFile(s.file)) });
+        const summary = { steps: steps.map((s, k) => ({ input: inputs[k], duration_ms: s.duration_ms, frames: shots.filter((x) => x.step === k + 1).map((x) => x.file) })), session_stopped: stopped, next: '用官方 get_script_logs 看脚本读到的值' };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
+      },
+    },
+    {
+      name: 'preview_actions',
+      description:
+        '官方 interact_by_dsl 不收的几条预览命令（它报 unsupported command，2026-11-14 实测），走编辑器内置 Agent 自己的预览命令：touch_move（按住时移动到 x, y，0–1，配合官方 touch_down / touch_up 做拖动轨迹）、seek_to_time（把预览视频跳到 time_ms 并继续播放，用来在固定时刻截图）、switch_gesture_video（换成编辑器给某个手势配好的预览视频并暂停，hand_action 取 Victory、OK、ThumbUp、HeartA、Fist、HandOpen、Namaste、Pistol、DoubleHand 等，以 PreviewResources.json 里配了 handAction 的条目为准，返回 captureTimesMs 是这个手势最清楚的时刻）。按顺序执行，遇到失败停下，每条返回 status。',
+      shape: {
+        ...target,
+        commands: z
+          .array(
+            z.discriminatedUnion('command_type', [
+              z.strictObject({ command_type: z.literal('touch_move'), params: z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }) }),
+              z.strictObject({ command_type: z.literal('seek_to_time'), params: z.strictObject({ time_ms: z.number().min(0) }) }),
+              z.strictObject({ command_type: z.literal('switch_gesture_video'), params: z.strictObject({ hand_action: z.string().min(1) }) }),
+            ]),
+          )
+          .min(1)
+          .max(20),
+      },
+      run: plugin('preview_actions', 30000),
+    },
+    {
+      name: 'ai_vfx_submit',
+      description:
+        '素材库「AI 生成 › 画面特效」（9.8.3 新增）：按描述 prompt 和参考素材（最多 10 张图片、1 段视频，视频最长 60 秒，超过编辑器会截取）在云端生成 1–10 秒的全屏画面特效，返回 task_id；任务走面板自己的 AIVisualEffectManager，面板里同样能看到。prompt 和参考素材至少给一样。参考视频要先过编辑器的上传审核（最长约 15 分钟），审核不过报 AI_VFX_REFERENCE_REJECTED。同时最多 10 个任务在跑。之后用 ai_vfx_tasks（task_id + wait_s）等它完成，看预览视频和 6 帧预览图，满意再 ai_vfx_import。会占用账号的 AI 模型使用次数，编辑器里查不到剩余次数。',
+      shape: {
+        ...target,
+        prompt: z.string().optional().describe('特效描述，如「从画面中心扩散出金色粒子光环，带一点胶片颗粒」。'),
+        reference_images: z.array(absPath('参考图')).max(10).optional().describe('参考图（PNG / JPG / JPEG）。'),
+        reference_video: absPath('参考视频').optional().describe('参考视频（MP4 / MOV）。'),
+        duration_s: z.number().int().min(1).max(10).optional().describe('时长（秒），默认 5。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('ai_vfx_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI_VFX_SUBMIT_TIMEOUT_MS }));
+      },
+    },
+    {
+      name: 'ai_vfx_tasks',
+      description: `素材库「画面特效」的生成任务（当前账号，与面板的生成记录同一份），最新的在前。不传 task_id 时按 offset / count 分页列出，带当前限制 limits；传 task_id 时只查这一个，再给 wait_s 就等到它不再生成中（最多 ${AI_VFX_MAX_WAIT_S} 秒）。status：running、succeeded（可导入）、imported、failed / audit_failed（failure 是编辑器给的原因）、canceled。完成的带本机的预览视频 preview_video_file（特效叠在编辑器的样例模特上）和一张横排 6 帧的预览图 preview_image_file（交给 image_view 看）。`,
+      shape: {
+        ...target,
+        task_id: z.string().min(1).optional(),
+        wait_s: z.number().int().min(0).max(AI_VFX_MAX_WAIT_S).optional(),
+        offset: z.number().int().min(0).optional(),
+        count: z.number().int().min(1).max(20).optional(),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        if (task_id !== undefined) return text(await d.callPlugin('ai_vfx_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 120000 }));
+        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        return text(await d.callPlugin('ai_vfx_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
+      },
+    },
+    {
+      name: 'ai_vfx_import',
+      description: '把一个 succeeded 的画面特效任务导入目标工程，等同面板里选中它后点「导入」：下载生成的特效包（ae2sg_export），按编辑器的方式转成表面图（Surface Graph）和材质导入工程，预览随即重载。返回 added_objects、package_folders。之后用 preview_frames 验收，save_project。',
+      shape: { ...target, task_id: z.string().min(1).describe('ai_vfx_submit / ai_vfx_tasks 返回的 task_id（须 succeeded 或 imported）。') },
+      run: plugin('ai_vfx_import', 300000),
+    },
+    {
+      name: 'ai_vfx_cancel',
+      description: '取消一个还在生成的画面特效任务，等同面板里的「取消」。取消没得到确认时编辑器会继续查询它的状态，返回 cancelled=false 和当前状态。',
+      shape: { ...target, task_id: z.string().min(1) },
+      run: async (a) => {
+        const { project_path, instance_id, task_id } = a;
+        return text(await d.callPlugin('ai_vfx_cancel', { task_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
+      },
+    },
+    {
+      name: 'custom_gan_styles',
+      description:
+        '素材库「AI 生成 › 实时变脸」（自己训练 AI 实时变脸）的风格和今天剩余的训练次数 quota：全身换装（一张全身服装参考图）、真人搞怪（脸部参考图，要从候选效果图里挑满 30 张再训练，flow=select_30）、表情迁移、真人美化（脸部参考图，预览满意直接训练，flow=direct），每种带参考图建议和预计训练时长（3–12 小时）。流程：custom_gan_submit 生成预览（不消耗训练次数）→ custom_gan_tasks 看男女两张预览图 → custom_gan_train 训练（消耗 1 次）→ 训练完 custom_gan_import 导入工程。',
+      shape: { ...target },
+      run: async ({ project_path, instance_id }) => text(await d.callPlugin('custom_gan_styles', {}, await homeWindow({ project_path, instance_id }))),
+    },
+    {
+      name: 'custom_gan_submit',
+      description: '「实时变脸」第一步「生成」：上传一张参考图（PNG / JPG / JPEG，不超过 10 MB，主体清晰无遮挡），按风格在云端生成编辑器样例男女脸上的预览，返回 task_id；不消耗训练次数。面板同时只允许一个预览在生成，有在跑的报 CUSTOM_GAN_RUNNING。之后 custom_gan_tasks（task_id + wait_s）等预览完成。',
+      shape: {
+        ...target,
+        style: z.string().min(1).describe('风格名或 preset，取 custom_gan_styles 的 style / preset（如「表情迁移」或 emotions）。'),
+        image_path: absPath('参考图'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('custom_gan_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
+      },
+    },
+    {
+      name: 'custom_gan_tasks',
+      refs: true,
+      description: `「实时变脸」的任务（当前账号，与面板的记录同一份），最新的在前。每条有 stage：preview（预览，完成后带男女预览图 female_image_ref / male_image_ref）、select（真人搞怪的候选效果图：candidates 每张的 index、image_ref、是否已选）、train（训练中或训练完，完成的带男女预览视频 video_female_ref / video_male_ref、模型是否已下载到本机）；status 是 running / finished / failed / discarded。传 task_id 时只查这一个，再给 wait_s 就等到它不再 running（最多 ${CUSTOM_GAN_MAX_WAIT_S} 秒；训练要几个小时，隔一段时间再查）。`,
+      shape: {
+        ...target,
+        task_id: z.string().min(1).optional(),
+        wait_s: z.number().int().min(0).max(CUSTOM_GAN_MAX_WAIT_S).optional(),
+        offset: z.number().int().min(0).optional(),
+        count: z.number().int().min(1).max(20).optional(),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
+        const win = await homeWindow({ project_path, instance_id });
+        if (task_id !== undefined) return text(await d.callPlugin('custom_gan_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 120000 }));
+        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+        return text(await d.callPlugin('custom_gan_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
+      },
+    },
+    {
+      name: 'custom_gan_train',
+      description: `「实时变脸」训练，等同面板的「去训练」（会消耗 1 次当天的训练次数，次数用完报 CUSTOM_GAN_NO_QUOTA；调用前先和用户确认预览图满意）。表情迁移、真人美化、全身换装：预览完成后直接训练。真人搞怪（preset fun）分两步，和面板一样：先不带 selected 调用，生成候选效果图（不消耗次数）；等 custom_gan_tasks 里 stage=select 完成后，挑满 ${CUSTOM_GAN_SELECT_COUNT} 张，把 index 传给 selected 再调用一次，正式训练。训练要 3–12 小时，用 custom_gan_tasks 隔段时间看。`,
+      shape: {
+        ...target,
+        task_id: z.string().min(1),
+        selected: z.array(z.number().int().min(0)).length(CUSTOM_GAN_SELECT_COUNT).optional().describe(`真人搞怪：挑中的 ${CUSTOM_GAN_SELECT_COUNT} 张候选图的 index。`),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, ...params } = a;
+        return text(await d.callPlugin('custom_gan_train', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
+      },
+    },
+    {
+      name: 'custom_gan_import',
+      description: '把训练完成的「实时变脸」模型导入目标工程，等同面板勾选它后点「导入」：先下载模型文件和男女预览视频（与面板训练完成卡片一样），再按 AI 实时变脸素材导入并放进场景（可撤销）。返回 added_objects、package_folders 和预览视频路径。帧率提醒：AI 实时变脸是特效检测里固定的大头开销。',
+      shape: { ...target, task_id: z.string().min(1) },
+      run: plugin('custom_gan_import', CUSTOM_GAN_IMPORT_TIMEOUT_MS),
+    },
+    {
+      name: 'image_upscale',
+      description: '图片超清，和编辑器图片编辑器的「超清」按钮同一个云端请求（不打开窗口）：返回放大后的 PNG（存到 out_dir 或临时目录）和一张缩小的预览。用来把小图、截帧放大做图标或贴图。是否扣额度以编辑器为准，编辑器里没有相关提示。',
+      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG。'), out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。') },
+      run: async (a) => imageAi(a, 'image_upscale', {}, 'upscaled'),
+    },
+    {
+      name: 'image_repaint',
+      description:
+        '图片局部消除 / 重绘，和编辑器图片编辑器的「消除笔」「局部重绘」同一个云端请求（不打开窗口）：用 mask（一张图，亮且不透明的地方是要改的区域，自动拉伸到原图大小）或 boxes（按原图比例的矩形）标出区域，本工具按编辑器的方式把区域涂成绿色棋盘格再提交。不给 prompt 是「消除」（把区域里的东西去掉、补背景），给 prompt 是「重绘」（按描述画区域里的内容）。返回结果 PNG、标记后的提交图 marked_file 和预览。',
+      shape: {
+        ...target,
+        image_path: absPath('图片'),
+        mask: absPath('遮罩').optional(),
+        boxes: z
+          .array(z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
+          .max(20)
+          .optional(),
+        prompt: z.string().optional().describe('重绘的描述；省略时为消除。'),
+        out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。'),
+      },
+      run: async (a) => {
+        if (!a.mask && !a.boxes?.length) throw Error('INVALID_ARGUMENTS: mark the area with mask or boxes');
+        const { markedCanvas, png } = await graphics();
+        const dir = a.out_dir ? saveDir(a.out_dir) : d.framesDir();
+        const stem = path.basename(a.image_path, path.extname(a.image_path));
+        const { canvas, marked_ratio } = await markedCanvas(a.image_path, { mask: a.mask, boxes: a.boxes });
+        const marked = path.join(dir, `${stem}_marked.png`);
+        fs.writeFileSync(marked, await png(canvas));
+        return imageAi({ ...a, image_path: marked }, 'image_repaint', { prompt: a.prompt }, a.prompt?.trim() ? 'repainted' : 'removed', { dir, stem, marked_file: marked, marked_ratio });
+      },
+    },
+    {
+      name: 'image_matting',
+      description: `AI 抠图，和编辑器图片编辑器的「抠图」同一个云端请求（不打开窗口）：返回透明底的主体 subject，以及按部位分开的 ${IMAGE_MATTING_PARTS.filter((p) => p !== 'subject').join('、')}（照片里有才返回），PNG 存到 out_dir 或临时目录，附主体的预览。用来做贴纸、图标素材。`,
+      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG。'), out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。') },
+      run: async (a) => {
+        const { previewJpeg } = await graphics();
+        const { project_path, instance_id, image_path, out_dir } = a;
+        const got = await d.callPlugin('image_matting', { image_path }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: IMAGE_AI_TIMEOUT_MS });
+        const dir = out_dir ? saveDir(out_dir) : d.framesDir();
+        const stem = path.basename(image_path, path.extname(image_path));
+        const files = {};
+        for (const [part, src] of Object.entries(got.parts)) {
+          files[part] = path.join(dir, `${stem}_${part}.png`);
+          fs.copyFileSync(src, files[part]);
+        }
+        const summary = { files, ...(out_dir ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 out_dir' }) };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, { type: 'image', mimeType: 'image/jpeg', data: (await previewJpeg(files.subject)).toString('base64') }] };
+      },
     },
     {
       name: 'face_warp_list',

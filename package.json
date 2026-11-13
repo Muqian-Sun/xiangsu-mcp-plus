@@ -3,7 +3,7 @@
   "version": "0.9.0",
   "mcpName": "io.github.Muqian-Sun/xiangsu-mcp-plus",
   "type": "module",
-  "description": "Unofficial MCP server for Douyin AR (像塑) on macOS: proxies the official MCP and adds the official asset library, add-object menu, AI combine workflows, AI makeup extraction, AI 3D generation, AR video stickers, delivery (icon, effect checks, filling in and submitting the submit window, phone preview), Douyin music, inspirations, tasks and rank boards, review status, FaceWarpX intensity and project windows. For learning and personal creation only; do not use it to copy other creators' works.",
+  "description": "Unofficial MCP server for Douyin AR (像塑) on macOS: proxies the official MCP and adds the official asset library, add-object menu, AI combine workflows, AI makeup extraction, AI 3D generation, AR video stickers, delivery (icon, effect checks, filling in and submitting the submit window, phone preview), Douyin music, inspirations, tasks and rank boards, review status, FaceWarpX intensity, project windows, asset scripts (icons with captions, synthesized sound effects, outlined text and panels, preview models, scene layers), 9.8.3 visual-effect generation and custom real-time face training, image editor AI tools and simulated preview audio. For learning and personal creation only; do not use it to copy other creators' works.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@napi-rs/canvas": "^1.1.1",
     "pngjs": "^7.0.0",
     "qrcode": "^1.5.4",
     "undici": "^7.30.2",

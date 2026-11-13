@@ -32,9 +32,13 @@ const aimakeup = require('./features/aimakeup.cjs');
 const makeup = require('./features/makeup.cjs');
 const dev = require('./features/dev.cjs');
 const quiet = require('./features/quiet.cjs');
+const previewinput = require('./features/previewinput.cjs');
+const aivfx = require('./features/aivfx.cjs');
+const customgan = require('./features/customgan.cjs');
+const imageedit = require('./features/imageedit.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, previewinput, aivfx, customgan, imageedit, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -75,4 +79,6 @@ module.exports = {
   AR_VIDEO_HISTORY_PAGE: arvideo.HISTORY_PAGE,
   AI_MAKEUP_IMAGE_LIMIT: aimakeup.IMAGE_LIMIT,
   AI_MAKEUP_HISTORY_PAGE: aimakeup.HISTORY_PAGE,
+  CUSTOM_GAN_SELECT_COUNT: customgan.SELECT_COUNT,
+  IMAGE_MATTING_PARTS: imageedit.PARTS,
 };
