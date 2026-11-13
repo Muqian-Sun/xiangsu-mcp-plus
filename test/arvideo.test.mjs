@@ -148,7 +148,13 @@ function setup(opts = {}) {
         return { projectPath: project.path, sceneObjectCount: 1, selectedPlaneGuid: 'plane-1' };
       },
     },
-    [M.nav]: { isARVideoEntryEnabled: () => opts.enabled ?? true },
+    [M.nav]: {
+      getDefaultNavList: () => [
+        [{ id: 'dyeh_latest', name: '最新' }],
+        [{ id: 'ai_makeup', name: '妆容' }, ...(opts.enabled === false ? [] : [{ id: 'ar_video', name: 'AR 视频贴片' }])],
+      ],
+    },
+    [M.navConst]: { NavItemKey: { ARVideo: 'ar_video' } },
     [M.ffmpeg]: {
       ffmpegExec: async (args) => {
         calls.ffmpeg.push(args);
