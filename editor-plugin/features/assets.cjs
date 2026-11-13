@@ -234,7 +234,8 @@ const REQUIRED = {
     [M.arVideoAudit, 'isAuditPending'],
     [M.arVideoAnalytics, 'arVideoInputFields'],
     [M.arVideoProject, 'importARVideosToCurrentProject'],
-    [M.nav, 'isARVideoEntryEnabled'],
+    [M.nav, 'getDefaultNavList'],
+    [M.navConst, 'NavItemKey.ARVideo'],
     [M.ffmpeg, 'ffmpegExec'],
   ],
 };

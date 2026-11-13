@@ -64,9 +64,15 @@ const methods = {
     };
   },
 
+  // 9.8.1 gated the panel behind isARVideoEntryEnabled (switch dyeh_enable_ar_video_entry); 9.8.3 dropped
+  // both and lists the panel in the asset library's navigation, which is what is checked here.
   arVideoEnsureEnabled() {
     this.ensureCompatible('arVideo');
-    if (!this.mod(M.nav).isARVideoEntryEnabled()) throw Error('AR_VIDEO_DISABLED: 素材库里没有「AR 视频」入口（编辑器开关 dyeh_enable_ar_video_entry 没有打开）');
+    const key = this.mod(M.navConst).NavItemKey.ARVideo;
+    const listed = this.mod(M.nav)
+      .getDefaultNavList()
+      .some((group) => group.some((item) => [item, ...(item.children || [])].some((e) => e.id === key)));
+    if (!listed) throw Error('AR_VIDEO_DISABLED: 素材库导航里没有「AR 视频贴片」入口');
   },
 
   // Waits until the editor's audit of an uploaded video has passed; the editor rejects it itself on timeout.
