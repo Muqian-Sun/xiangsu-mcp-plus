@@ -1282,7 +1282,7 @@ export function createServer(deps = {}) {
     {
       name: 'brief_today',
       description:
-        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 hit_reasons、track_board、pick_samples、failure_lessons、hot_topics、inspirations_new、tasks_open、task_usage，查一个题材词扎不扎堆用 topic_crowd。',
+        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 按选题流程写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话；focus 每个方向倒推自哪几个爆款 from_hits、人为什么想玩 interest（四类之一）、借的像塑热点 hotspot 和怎么放进钩子 angle、赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid、候选绑定 bind（tasks 任务标题、inspirations 灵感标题、check 绑之前要逐条对上的要求；标题都是输入里有的，绑前照样用 tasks_open / task_requirements / inspirations_new 核对）；avoid 别做的赛道；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。more 写了选题时按什么顺序细看：hit_reasons → hot_topics、topic_crowd → track_board、pick_samples、failure_lessons → tasks_open、task_requirements、inspirations_new。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
@@ -1337,15 +1337,21 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspirations_new',
-      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时取一次灵感列表「全部」页签前 300 条）：new 是第一次采到（baseline_at）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间）。看详情用 inspiration_detail。',
+      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时取一次灵感列表「全部」页签前 300 条）：new 是第一次采到（baseline_at）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间），和绑之前要对的详情 detail（玩法说明 description、要的特效类型 effect_types、激励说明 bonus_text、奖励 award_text、关联热点 hotspot、前 3 张参考图 images 和总张数 images_total、取详情的时间 at，每 3 天刷一次；还没取到是 null）。参考图交给 image_view 看；要灵感下的作品和视频用 inspiration_detail。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/inspirations')),
     },
     {
       name: 'tasks_open',
-      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。只看我们放了作品的用 task_usage。',
+      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、绑之前要逐条对上的要求 requirements（「任务说明」「参与要求」里的征集类型、主题要求、配置要求、不符合任务标准这类原文，没取到详情是 null）、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。奖项详情、灵感玩法等全文用 task_requirements；只看我们放了作品的用 task_usage。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/open-tasks')),
+    },
+    {
+      name: 'task_requirements',
+      description: '一个任务的全部说明（运营平台 /api/agent/tasks/{item_id}/requirements，不用开编辑器）：标题、截止、同类型条款、取详情的时间 at、content（每条 block 块名、title 小标题、text 原文：任务说明、参与要求、奖项详情、灵感玩法……）。绑任务前逐条对要求用；内容块里的参考图和推荐工程用 task_detail。只有没截止的任务和我们绑过的任务有详情，没有时返回 error。',
+      shape: { item_id: z.string().regex(/^\d+$/).describe('tasks_open 返回的 item_id。') },
+      run: async ({ item_id }) => text(await d.platformRequest(`/api/agent/tasks/${item_id}/requirements`)),
     },
     {
       name: 'topic_crowd',

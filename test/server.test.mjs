@@ -116,6 +116,7 @@ const OWN = [
   'task_bind',
   'task_detail',
   'task_receive',
+  'task_requirements',
   'task_usage',
   'tasks_list',
   'tasks_open',

@@ -82,14 +82,15 @@
 | `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）；同页重复的特效合成一条、标签合并，服务端翻页会出现上一页的特效 |
 | `pipeline_works` | 运营平台（`xiangsu.muqian.chat`）：全部作品走到精选的哪一步，分上线、精选、精选奖三条线和要处理 / 等结果 / 已结束三组，驳回和落选原因原文，按我们历史估的出结果时间，任务和灵感评定，曝光 / 投稿 / 收益；账号限制、提交节奏、各块数据的健康 |
 | `pipeline_work` | 运营平台：一个作品的时间线、按天趋势、数据卡片、能力、流量标签、审核记录、收益、用户视频和全部变化 |
-| `brief_today` | 运营平台：开工简报，会话开始读一次——账号能不能交、新变化、从爆款倒推的为什么想玩和 AI 写的今天主攻赛道（推断）、赛道表、从我们结果算出的规律、失败经验、热点、新灵感和新任务、任务占用 |
+| `brief_today` | 运营平台：开工简报，会话开始读一次——账号能不能交、新变化、从爆款倒推的为什么想玩和 AI 按选题流程写的今天主攻方向（倒推自哪几个爆款、借哪个热点、候选绑定和要对上的要求，推断）、赛道表、从我们结果算出的规律、失败经验、热点、新灵感和新任务、任务占用 |
 | `hit_reasons` | 运营平台：年轻喜爱、每日投稿、热玩互动、跟拍榜前 20 和最近入选的精选，每个带用户视频标题、点赞、封面和 AI 归纳的为什么想玩（推断） |
 | `track_board` | 运营平台：全部赛道（细分类型）平台近 30 天 / 7 天精选数，我们做了几个、进审、入选、落选、进审率，最近入选的样例和用到的能力 |
 | `pick_samples` | 运营平台：官方精选作品明细，按赛道、类型、最近几天筛 |
 | `failure_lessons` | 运营平台：全部失败经验（驳回、测试未通过、精选落选、首轮没过、没进审），每条带平台原话、次数、涉及作品 |
 | `hot_topics` | 运营平台：像塑热点，和一天前比的涨落、站内同题材几个、扎堆还是还早，和每个热点下的灵感（只有像塑自己的热点，不含站外热榜） |
-| `inspirations_new` | 运营平台：新出现的灵感和现在挂着的【创新】灵感 |
-| `tasks_open` | 运营平台：活动中心没截止的全部任务，发布、截止、领没领、同类型条款、我们放了哪些作品 |
+| `inspirations_new` | 运营平台：新出现的灵感和现在挂着的【创新】灵感，带玩法说明、要的特效类型、奖励和前 3 张参考图 |
+| `tasks_open` | 运营平台：活动中心没截止的全部任务，发布、截止、领没领、同类型条款、要对上的要求原文、我们放了哪些作品 |
+| `task_requirements` | 运营平台：一个任务的全部说明原文（任务说明、参与要求、奖项详情、灵感玩法），不用开编辑器 |
 | `topic_crowd` | 运营平台：查一个题材词在站内有几个同题材的特效和模板（平台去搜，工具最多等 60 秒） |
 | `task_usage` | 运营平台：我们绑过、还没截止的任务，每个作品的平台分类和评定，有没有同类型条款 |
 | `account_status` | 运营平台：账号限制和解除时间、提交节奏、像塑登录态、资料和数字、收入、等级成长、拍视频激励、精选作者计划、最近 50 条站内信 |
@@ -154,13 +155,13 @@
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.key_files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，和用户确认后 `submit_confirm`（同一个 `name`）送审，看返回的 `effect_id` 和 `listed`。要参加任务的，`tasks_list` → `task_receive` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
-- 出方向：先 `hit_reasons` 从爆款倒推人为什么想玩（看视频标题，封面交给 `image_view` 看怎么拍）→ `hot_topics` 看像塑热点的涨落和扎堆 → `topic_crowd` 查候选题材在站内扎不扎堆；新灵感、新任务用 `inspirations_new`、`tasks_open`。
+- 出方向：先 `hit_reasons` 看头部做的是什么、用户怎么拍、为什么想玩（封面交给 `image_view`）→ 带着这些找热点：`hot_topics` 看像塑热点的涨落和扎堆，`topic_crowd` 查候选题材在站内扎不扎堆 → `track_board`、`pick_samples` 对照精选 → 绑任务和灵感：`tasks_open` 的 `requirements`（全文 `task_requirements`）和 `inspirations_new` 的 `detail` 逐条对上要求才绑。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 或 `same_style` 的用返回的 `template_id` 走 `works_download` / `works_open`（`same_style` 下载到的是 `same_style` 里那个特效的工程，不是榜上这个特效本身的）。
 - 拆别人的爆款：`rank_list` 或 `effect_search`（如「美妆」）→ `effect_detail` 看受众、平台判定的类型和用了哪些编辑器能力 → `effect_videos` 看别人怎么拍、标题怎么写（`image_view` 拿视频地址）→ `works_by_effect` 找能下载的工程。
 - 学做法：`tutorials_list` 看官方教程分类，或 `tutorial_search` 按关键词找；拍视频推作品用 `account_status` 的 `shoot_activity` 看本期激励任务，`shoot_scripts` 看官方拍摄脚本。
 - 查审核和精选：`pipeline_works` 看每个作品到了哪一步（被驳回的在 `online.reason` 里写着原因），刚提交、刚上线时先 `pipeline_refresh`；一个作品的时间线、审核记录原文用 `pipeline_work`；会话开始用 `changes_since` 看新变化，告诉完用户再 `changes_ack`；被驳回的在编辑器「拍摄特效管理」里点「编辑」改完重新提交。
-- 看作品表现和账号：`pipeline_work` 看一个作品的数据卡片、按天趋势、收益和用户视频；`account_status` 看账号、收入、等级和站内信；会话开始和出方向前 `brief_today`，细看用 `hit_reasons`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`inspirations_new`、`tasks_open`、`task_usage`；提交前看 `account_status` 的限制和提交节奏。
+- 看作品表现和账号：`pipeline_work` 看一个作品的数据卡片、按天趋势、收益和用户视频；`account_status` 看账号、收入、等级和站内信；会话开始和出方向前 `brief_today`，细看用 `hit_reasons`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`inspirations_new`、`tasks_open`、`task_requirements`、`task_usage`；提交前看 `account_status` 的限制和提交节奏。
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。
 - 复刻妆面：`ai_makeup_submit`（参考图）→ `image_view` 看 `preview_file` 和参考原图 → `ai_makeup_import`（可只导部分部位）→ `library_search` / `library_apply` 用官方单品补 AI 妆容没给到的部位、套 AI 脸和滤镜 → `makeup_compare`（可对参考图）调强度、`preview_frames` 验收 → `save_project`。
 - 调强度：`makeup_compare` 在同一张脸上比「关掉这层」「0.3 / 0.6」、面板不透明度、AI 脸 Transparency 等，看眼下、脸颊等区域的亮度和颜色变了多少。
