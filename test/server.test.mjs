@@ -13,6 +13,7 @@ import { fetchImage, fetchImageBytes, readImageFile } from '../src/images.mjs';
 import { MediaRefs, Spill } from '../src/outputs.mjs';
 
 const OWN = [
+  'account_status',
   'ai3d_animation_submit',
   'ai3d_cancel',
   'ai3d_gs_segment',
@@ -38,6 +39,8 @@ const OWN = [
   'baidu_hot_list',
   'bilibili_hot_search',
   'bilibili_popular',
+  'changes_ack',
+  'changes_since',
   'custom_gan_import',
   'custom_gan_styles',
   'custom_gan_submit',
@@ -85,13 +88,13 @@ const OWN = [
   'music_list',
   'music_search',
   'object_remove',
-  'ops_account',
   'ops_feedback',
   'ops_market',
   'ops_refresh',
   'ops_tracks',
-  'ops_work',
-  'ops_works',
+  'pipeline_refresh',
+  'pipeline_work',
+  'pipeline_works',
   'preview_actions',
   'preview_audio_test',
   'preview_frames',

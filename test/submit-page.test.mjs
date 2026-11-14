@@ -484,7 +484,7 @@ test('submit_confirm presses nothing for a window filled for another name, or wh
   assert.equal(running.page.stats.presses, 0);
 });
 
-const NOT_LISTED = "; the account's newest 10 effects have no 「测试特效名」 yet, but it may still show up, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)";
+const NOT_LISTED = "; the account's newest 10 effects have no 「测试特效名」 yet, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)";
 
 test('submit_confirm passes on the failure the page reports, with its toast, once the account does not list the effect', async () => {
   const { page, lib, open, native, lookups } = await prepared({ report: 'fail' });
@@ -538,7 +538,7 @@ test('submit_confirm says to check the dashboard when it cannot read the account
   );
   await assert.rejects(
     lib.submitConfirm({ name: fill.name }),
-    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\), so call ops_refresh and look at ops_works before submitting again \(the submit window is left open\)$/,
+    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\), so call pipeline_refresh and look at pipeline_works before submitting again \(the submit window is left open\)$/,
   );
   assert.equal(open().length, 1);
 });
