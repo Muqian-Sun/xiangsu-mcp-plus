@@ -1342,6 +1342,20 @@ export function createServer(deps = {}) {
       run: async () => text(await d.platformRequest('/api/agent/inspirations')),
     },
     {
+      name: 'inspirations_find',
+      description: '按题材词在全部挂着的灵感里找（运营平台 /api/agent/inspirations/find，不用开编辑器）：平台每 6 小时把灵感列表「全部」翻完、24 小时内见过的都算挂着，【创新】、热点下的、普通的都在里面。q 里几个词用空格隔开，都要出现在标题、标签、关联热点或玩法说明里（没取到详情的只按标题、标签、热点找）；不传 q 就按 kind 列。【创新】在前、激励没过期的更前，再热点下的、普通的，一次最多 40 条，matched 是一共找到几条。每条有 inspiration_id、标题、标签、kind、关联热点、封面、first_seen_at，和 detail（玩法说明、激励 incentive：截止 deadline、过期没有 expired、要同时绑的任务 tasks 和它还开没开、奖金区间 reward；参考图前 3 张）。current 是挂着的一共几条，with_detail 是其中取到详情的。更早、已经不在列表里的灵感用 inspiration_search 搜。',
+      shape: {
+        q: z.string().trim().max(30).optional().describe('题材词，几个词用空格隔开，如「前任 撤回」「火锅」。'),
+        kind: z.enum(['innovation', 'hotspot', 'plain']).optional().describe('只看某一类：innovation【创新】，hotspot 挂在热点下的，plain 普通的。'),
+      },
+      run: async ({ q, kind }) => {
+        const p = new URLSearchParams();
+        if (q) p.set('q', q);
+        if (kind) p.set('kind', kind);
+        return text(await d.platformRequest(`/api/agent/inspirations/find${p.size ? `?${p}` : ''}`));
+      },
+    },
+    {
       name: 'tasks_open',
       description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、绑之前要逐条对上的要求 requirements（「任务说明」「参与要求」里的征集类型、主题要求、配置要求、不符合任务标准这类原文，没取到详情是 null）、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。奖项详情、灵感玩法等全文用 task_requirements；只看我们放了作品的用 task_usage。',
       shape: {},
