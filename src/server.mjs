@@ -1357,7 +1357,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'tasks_open',
-      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、绑之前要逐条对上的要求 requirements（「任务说明」「参与要求」里的征集类型、主题要求、配置要求、不符合任务标准这类原文，没取到详情是 null）、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。奖项详情、灵感玩法等全文用 task_requirements；只看我们放了作品的用 task_usage。',
+      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、绑之前要逐条对上的要求 requirements（「任务说明」「参与要求」里的征集类型、主题要求、配置要求、不符合任务标准这类原文，没取到详情是 null）、激励要求同时绑它的灵感 inspirations（激励没过期的：inspiration_id、标题、封面、截止 deadline）、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。奖项详情、灵感玩法等全文用 task_requirements；只看我们放了作品的用 task_usage。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/open-tasks')),
     },
