@@ -68,6 +68,9 @@ test('each platform tool reads its endpoint without opening the editor', async (
   await call('failure_lessons');
   await call('hot_topics');
   await call('task_usage');
+  await call('hit_reasons');
+  await call('inspirations_new');
+  await call('tasks_open');
   assert.deepEqual(seen, [
     ['GET', '/api/agent/works', undefined],
     ['GET', '/api/agent/works/92765390', undefined],
@@ -83,11 +86,38 @@ test('each platform tool reads its endpoint without opening the editor', async (
     ['GET', '/api/agent/lessons', undefined],
     ['GET', '/api/agent/hotspots', undefined],
     ['GET', '/api/agent/tasks', undefined],
+    ['GET', '/api/agent/hits', undefined],
+    ['GET', '/api/agent/inspirations', undefined],
+    ['GET', '/api/agent/open-tasks', undefined],
   ]);
   assert.equal((await client.callTool({ name: 'pipeline_work', arguments: { effect_id: '../x' } })).isError, true, 'effect_id must be digits');
   assert.equal((await client.callTool({ name: 'changes_since', arguments: { types: 'stage;drop' } })).isError, true, 'types is a comma list of words');
   assert.equal((await client.callTool({ name: 'pick_samples', arguments: { kind: 'video' } })).isError, true, 'kind is effect or template');
-  assert.equal(seen.length, 14);
+  assert.equal(seen.length, 17);
+});
+
+test('topic_crowd hands the word to the platform and polls until the search is done, giving up after a minute', async () => {
+  const seen = [];
+  let answers = [{ status: 'pending', request_id: 7 }, { status: 'pending', request_id: 7 }, { status: 'done', matched: 3 }];
+  const slept = [];
+  const client = await connect({
+    listInstances: () => assert.fail('no editor needed'),
+    callPlugin: async () => assert.fail('no plugin needed'),
+    sleep: async (ms) => { slept.push(ms); },
+    platformRequest: async (pathname, method = 'GET', body) => (seen.push([method, pathname, body]), answers.shift() ?? { status: 'pending', request_id: 7 }),
+  });
+  const call = async (args) => JSON.parse((await client.callTool({ name: 'topic_crowd', arguments: args })).content[0].text);
+  assert.deepEqual(await call({ q: ' 前任撤回 ' }), { status: 'done', matched: 3 });
+  assert.deepEqual(seen, [
+    ['POST', '/api/agent/topic', { q: '前任撤回' }],
+    ['GET', `/api/agent/topic?q=${encodeURIComponent('前任撤回')}`, undefined],
+    ['GET', `/api/agent/topic?q=${encodeURIComponent('前任撤回')}`, undefined],
+  ]);
+  answers = [];
+  slept.length = 0;
+  assert.equal((await call({ q: '冬眠' })).status, 'pending');
+  assert.equal(slept.reduce((a, b) => a + b, 0), 60000);
+  assert.equal((await client.callTool({ name: 'topic_crowd', arguments: { q: '' } })).isError, true);
 });
 
 test('the old dashboard tools are gone: every ops_* tool moved to the platform', async () => {

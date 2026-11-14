@@ -278,6 +278,10 @@ async function imageContent(d, { url, file }) {
   }
 }
 
+// topic_crowd 交给平台后等它搜完：拍的，平台采集进程 15 秒内开始，特效和模板各两页十来秒。
+const TOPIC_POLL_MS = 3000;
+const TOPIC_WAIT_MS = 60000;
+
 export function createServer(deps = {}) {
   const d = {
     callPlugin,
@@ -1278,7 +1282,7 @@ export function createServer(deps = {}) {
     {
       name: 'brief_today',
       description:
-        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；像塑热点前 6 个 hotspots（标题、热度、灵感数）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 track_board、pick_samples、failure_lessons、hot_topics、task_usage。',
+        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 hit_reasons、track_board、pick_samples、failure_lessons、hot_topics、inspirations_new、tasks_open、task_usage，查一个题材词扎不扎堆用 topic_crowd。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
@@ -1314,7 +1318,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'hot_topics',
-      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度、第一次看到的时间，前 10 个带热点下的灵感（标题、标签、玩法说明）。只有像塑自己的热点，不含站外热榜。',
+      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度 heat、和约一天前比的热度涨落 heat_delta 和名次涨落 rank_delta、刚上榜 is_new、站内同题材的特效和模板 crowd（matched 几个、effects、templates、投稿最高的几个 top，每天按热点标题搜一次）、label（扎堆：同题材 6 个以上；还早：2 个以下又在涨；有人做；没查），前 10 个带热点下的灵感（标题、标签、玩法说明）；rising 是一天涨得最快的 5 个 topic_id。只有像塑自己的热点，不含站外热榜。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/hotspots')),
     },
@@ -1323,6 +1327,38 @@ export function createServer(deps = {}) {
       description: '我们绑过、还没截止的任务（运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tasks')),
+    },
+    {
+      name: 'hit_reasons',
+      description:
+        '从爆款倒推「为什么想玩」（运营平台 /api/agent/hits，每天取一次）：出方向的第一步。items 是年轻喜爱榜、每日投稿榜、热玩互动榜、跟拍榜各前 20 和最近入选的 20 个官方精选（去重，上了几个榜的排前面），每个有名字、app_effect_id、effect_id、图标、在哪几个榜第几 boards（young / publish / play / follow / picks）、投稿、平台给的类型 category、点赞最高的 10 条用户视频 videos（标题、点赞、跟拍、作者、封面 cover_url、播放地址 video_url），和 AI 归纳的 ai（why 人为什么想玩、hook 四类之一：和自己或身边的人有关 / 自己动手马上有反馈 / 有悬念结果不固定 / 戳中正在聊的情绪和梗、evidence 引用的视频标题、how_shot 用户怎么拍）；ai.patterns 是几个爆款共同的点。AI 部分是推断（inference=true），依据只有视频标题；要看用户实际怎么拍，把封面交给 image_view，或用 effect_videos 取视频。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/hits')),
+    },
+    {
+      name: 'inspirations_new',
+      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时取一次灵感列表「全部」页签前 300 条）：new 是第一次采到（baseline_at）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间）。看详情用 inspiration_detail。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/inspirations')),
+    },
+    {
+      name: 'tasks_open',
+      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。只看我们放了作品的用 task_usage。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/open-tasks')),
+    },
+    {
+      name: 'topic_crowd',
+      description: '查一个题材词在站内扎不扎堆（运营平台 /api/agent/topic）：特效和模板各搜两页，作品名一半以上的相邻两字出现在题材词里才算同题材。返回 matched 同题材几个、effects、templates、投稿最高的几个 top、label（扎堆 6 个以上 / 很少 2 个以下 / 有人做）、搜的时间 at。24 小时内搜过的直接给；没有就交给平台采集进程去搜，这个工具最多等 60 秒，还没好返回 status=pending，过一会儿再调。',
+      shape: { q: z.string().trim().min(1).max(30).describe('题材词，如「前任撤回」「冬眠」。') },
+      run: async ({ q }) => {
+        let r = await d.platformRequest('/api/agent/topic', 'POST', { q });
+        for (let waited = 0; r.status === 'pending' && waited < TOPIC_WAIT_MS; waited += TOPIC_POLL_MS) {
+          await d.sleep(TOPIC_POLL_MS);
+          r = await d.platformRequest(`/api/agent/topic?q=${encodeURIComponent(q)}`);
+        }
+        return text(r);
+      },
     },
     {
       name: 'effect_detail',
