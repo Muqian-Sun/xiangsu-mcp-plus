@@ -15,9 +15,8 @@
 - 交付：设置并上传图标、特效检测（和编辑器里点「特效检测」一样，云端检测）、填好提交窗口（名称、触发提示、摄像头方向、灵感、任务，一直走到「提交审核」页并等检测跑完），确认后勾协议、点「提交审核」送审并读回特效 ID、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划官方精选），用编辑器里登录的账号读取；可收藏灵感、领取任务。
-- 热点和热梗：抖音实时热点榜（每条的分类、热度走势、站内已有特效数、热门视频，用像塑移动版的接口），以及不用登录的百度热搜、B 站热门视频和热搜词。
 - 看别人的特效、学做法：像塑移动版的全平台搜索（特效、模板、灵感、教程），任意特效的详情（等级、受众、平台判定的类型、用到的编辑器能力、作者）和用它拍的热门视频，排行榜上没分享工程的特效找「做同款」指向的首页工程；官方教程和官方拍摄脚本。
-- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（AI 写的主攻赛道建议、赛道表、入选样例、失败经验、热点、任务占用），都从运营平台（`xiangsu.muqian.chat/v2`，作品和站内信每 10 分钟、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
+- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（AI 写的主攻赛道建议、赛道表、入选样例、失败经验、热点、任务占用），都从运营平台（`xiangsu.muqian.chat`，作品和站内信每 10 分钟、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
 - 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。本服务开的窗口一律最小化在程序坞里、不抢前台（见下文约定）。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
@@ -77,23 +76,17 @@
 | `rank_hotspots` | 热点榜（按 `offset` / `count` 分页） |
 | `hotspot_inspirations` | 一个热点下的灵感，按热点页页签的顺序分页，每条标出页签 |
 | `hotspot_inspiration_images` | 把一个热点下全部灵感详情里的图片下载到临时目录（24 小时后删除），文件名带序号和灵感标题，另写 `index.json` 记下每张图属于哪条灵感；6 条并发，单张 30 秒超时、失败重试一次，失败的灵感列在 `failed` |
-| `douyin_hot_list` | 抖音实时热点榜（约 5 分钟一版）前 20 条：名次、名称、分类（娱乐、站内玩法、话题互动、二次元等）、热度 |
-| `douyin_hot_detail` | 一个抖音实时热点的上榜时间、近 7 天每天和今天每小时的热度、站内已有的特效数（「上线特效0个」说明还没人做） |
-| `douyin_hot_videos` | 一个抖音实时热点下的视频（接口原样顺序，不按热度）：播放地址、封面、点赞、作者昵称，分页 |
-| `baidu_hot_list` | 百度热搜榜：置顶条和 50 条热搜（分页，默认前 20 条），每条有摘要、热度、配图、链接（不用登录、不用开像塑） |
-| `bilibili_popular` | B 站「热门」视频：标题、链接、封面、分区、UP 主、播放 / 点赞 / 评论 / 弹幕、上热门的理由，分页（不用登录、不用开像塑） |
-| `bilibili_hot_search` | B 站热搜词和热度（不用登录、不用开像塑） |
 | `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），按 `cursor` 分页 |
 | `rank_subjects_search` | 按榜名在专题合集全部期里搜索 |
 | `rank_subject_detail` | 一个专题榜的全部特效 |
 | `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）；同页重复的特效合成一条、标签合并，服务端翻页会出现上一页的特效 |
-| `pipeline_works` | 运营平台（`xiangsu.muqian.chat/v2`）：全部作品走到精选的哪一步，分上线、精选、精选奖三条线和要处理 / 等结果 / 已结束三组，驳回和落选原因原文，按我们历史估的出结果时间，任务和灵感评定，曝光 / 投稿 / 收益；账号限制、提交节奏、各块数据的健康 |
+| `pipeline_works` | 运营平台（`xiangsu.muqian.chat`）：全部作品走到精选的哪一步，分上线、精选、精选奖三条线和要处理 / 等结果 / 已结束三组，驳回和落选原因原文，按我们历史估的出结果时间，任务和灵感评定，曝光 / 投稿 / 收益；账号限制、提交节奏、各块数据的健康 |
 | `pipeline_work` | 运营平台：一个作品的时间线、按天趋势、数据卡片、能力、流量标签、审核记录、收益、用户视频和全部变化 |
 | `brief_today` | 运营平台：开工简报，会话开始读一次——账号能不能交、新变化、AI 写的今天主攻赛道和理由（推断）、赛道表、从我们结果算出的规律、失败经验、热点、任务占用 |
 | `track_board` | 运营平台：全部赛道（细分类型）平台近 30 天 / 7 天精选数，我们做了几个、进审、入选、落选、进审率，最近入选的样例和用到的能力 |
 | `pick_samples` | 运营平台：官方精选作品明细，按赛道、类型、最近几天筛 |
 | `failure_lessons` | 运营平台：全部失败经验（驳回、测试未通过、精选落选、首轮没过、没进审），每条带平台原话、次数、涉及作品 |
-| `hot_topics` | 运营平台：抖音热榜（站内已有特效数、热度走势）和像塑热点及灵感 |
+| `hot_topics` | 运营平台：像塑热点和每个热点下的灵感（只有像塑自己的热点，不含站外热榜） |
 | `task_usage` | 运营平台：我们绑过、还没截止的任务，每个作品的平台分类和评定，有没有同类型条款 |
 | `account_status` | 运营平台：账号限制和解除时间、提交节奏、像塑登录态、资料和数字、收入、等级成长、拍视频激励、精选作者计划、最近 50 条站内信 |
 | `changes_since` | 运营平台：从「已经告诉过用户」的进度往后的变化（阶段、评定、通知、账号限制、登录态），带一句话和要不要用户动手 |
@@ -157,7 +150,7 @@
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.key_files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，和用户确认后 `submit_confirm`（同一个 `name`）送审，看返回的 `effect_id` 和 `listed`。要参加任务的，`tasks_list` → `task_receive` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
-- 找热梗：`douyin_hot_list` 看抖音正在火什么（分类「站内玩法」多是梗和跟拍玩法）→ `douyin_hot_detail` 看热度是在涨还是在落、站内有没有人做过特效 → `douyin_hot_videos` 看实际怎么拍；站外话题用 `baidu_hot_list`、`bilibili_popular`、`bilibili_hot_search`；梗的出处和用法用联网搜索查。
+- 找热点：`rank_hotspots` 看像塑热点榜 → `hotspot_inspirations` 看热点下的灵感；站内有没有人做过、做成什么样用 `effect_search`。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 或 `same_style` 的用返回的 `template_id` 走 `works_download` / `works_open`（`same_style` 下载到的是 `same_style` 里那个特效的工程，不是榜上这个特效本身的）。
 - 拆别人的爆款：`rank_list` 或 `effect_search`（如「美妆」）→ `effect_detail` 看受众、平台判定的类型和用了哪些编辑器能力 → `effect_videos` 看别人怎么拍、标题怎么写（`image_view` 拿视频地址）→ `works_by_effect` 找能下载的工程。
@@ -195,7 +188,7 @@
 - 像塑不上屏、不抢前台：本服务做的任何事都不把像塑带到前台。9.8.1 / 9.8.3 实测窗口进程第一次显示一个窗口、以及接手一个工程时（还没有窗口上屏）都会把自己切到前台，加载完工程后编辑器还会聚焦编辑窗口并激活应用。所以：开工程窗口（`project_open`、`project_new`、`works_open`、`task_bind`）前，MCP 服务在状态目录 `quiet-open/` 下给这个工程（新建工程用一个「新建」标记）写一个标记，接手它的窗口进程里，插件看到标记后，加载进度窗不上屏，编辑窗口和之后出现的窗口都最小化显示（没有最小化按钮的窗口先补上按钮，否则它不进程序坞），聚焦、置顶、激活一律跳过；`icon_open`、`effect_check`、`submit_prepare` 打开的窗口在任何窗口进程里同样处理（检测和提交页面在最小化时照常运行）。用户从程序坞点开编辑窗口后，这个进程就照编辑器原样行事。接手工程那一下的激活拦不住，这些工具运行期间 MCP 服务每 0.1 秒查一次前台，像塑一抢到就交还给最近一个在前台的其它应用（`open -b`，不需要辅助功能权限）；`project_close` 不再让首页窗口出来，关窗后首页补起的空闲窗口进程也会抢前台（实测有一次一直不还），所以关窗后在后台继续盯到它起来。实测每次被抢 70–450 ms，屏幕上不出现像塑窗口；像塑本来就在前台（用户正在用）时不盯。窗口没按最小化出现时报 `WINDOW_IN_FRONT`（工程已经开着）：多半是接手它的窗口进程在插件更新之前就已启动，关掉它或重启像塑。最小化的窗口不绘制场景视图（挪到屏幕外显示也不行，macOS 会把它的一角留在屏幕上，拍到的仍是一片纯色），所以这时 `get_scene_view` 拒绝调用（`SCENE_VIEW_NOT_DRAWN`），`capture_preview` / `preview_frames` 照常从渲染结果截图。工程加载时编辑器自己会打开的窗口（如上次开着的「AI 合成」窗口）也最小化在程序坞里。旧版本工程的升级对话框仍会弹出。用户自己在像塑里打开的工程不受影响。
 - 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方 `edit_by_dsl` 的 `delete_render_group` 命令。
 - 素材库的搜索接口只匹配标题，很多素材的名字里没有人们会搜的词（美妆 › 腮红里是「雾堇胭」「红玫瑰」，没有素材叫「滤镜」），所以 `library_search` 还会展开名字与搜索词相同的面板或子分类，以及「子分类 + 面板」组合（「复古滤镜」）；「面板 + 其它词」（「韩系滤镜」）只在该面板里按标题搜「韩系」。名字只是包含搜索词的子分类不展开，列在 `related_categories`。每个面板或子分类最多取 300 条（实测子分类 17–125 条）。什么都没匹配到时返回 `hint`。
-- `works_*`、`inspiration_*`、`task_*`、`rank_*`、`effect_detail`、`effect_videos`、`effect_search`、`inspiration_search`、`tutorial_search`、`tutorials_list`、`shoot_scripts`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。运营平台的工具不用开像塑：它们用平台给 agent 的只读令牌请求平台，令牌从 `~/.config/xiangsu-ops/token` 读（环境变量 `XIANGSU_PLATFORM_TOKEN_FILE` 可改路径，令牌由运营平台仓库的 `deploy/set-secrets.sh` 生成），平台地址默认 `https://xiangsu.muqian.chat/v2`（`XIANGSU_PLATFORM_URL` 可改）；没有令牌报 `OPS_TOKEN_MISSING`，平台答错误时报 `OPS_HTTP_<状态码>` 带平台的原因。作品类的回答带最近一次取到作品列表的时间 `data_at` 和是否正在重取 `refreshing`。
+- `works_*`、`inspiration_*`、`task_*`、`rank_*`、`effect_detail`、`effect_videos`、`effect_search`、`inspiration_search`、`tutorial_search`、`tutorials_list`、`shoot_scripts`、`library_list` / `library_search` / `library_images`、`menu_list` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。运营平台的工具不用开像塑：它们用平台给 agent 的只读令牌请求平台，令牌从 `~/.config/xiangsu-ops/token` 读（环境变量 `XIANGSU_PLATFORM_TOKEN_FILE` 可改路径，令牌由运营平台仓库的 `deploy/set-secrets.sh` 生成），平台地址默认 `https://xiangsu.muqian.chat`（`XIANGSU_PLATFORM_URL` 可改）；没有令牌报 `OPS_TOKEN_MISSING`，平台答错误时报 `OPS_HTTP_<状态码>` 带平台的原因。作品类的回答带最近一次取到作品列表的时间 `data_at` 和是否正在重取 `refreshing`。
 - 返回资料的方式：
   - 列表默认每页 20 条（服务端上限更小的按上限），只给挑选时要看的字段；要细节用对应的详情工具。
   - 列表里的图片、视频、音频不给地址，给短引用 `*_ref` / `*_refs`（`img:12`、`video:3`、`audio:5`），交给 `image_view`：一个签名 CDN 地址有几百字，实测占列表每条的 43%–93%。引用记在 MCP 服务里，这次运行期间有效（最多记 2 万个，超出时忘掉最久没用的）；详情工具（`inspiration_detail`、`menu_list` 的 `details`）给的是这个对象自己的图，仍给地址；`effect_detail` 的图标和视频是签名长地址，也给短引用。

@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
 import { fetchImage, fetchImageBytes, readImageFile, sniffImage } from './images.mjs';
-import { BILIBILI_POPULAR_MAX, baiduHotList, bilibiliHotSearch, bilibiliPopular, fetchJson } from './hotlists.mjs';
 import { Projects, activateApp, frontApp, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { BLEND_MODES, dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
@@ -286,7 +285,6 @@ export function createServer(deps = {}) {
     fetchImage,
     fetchImageBytes,
     readImageFile,
-    fetchJson,
     platformRequest: (pathname, method = 'GET', body) => platformRequest(pathname, { method, body }),
     openWithApp,
     frontApp,
@@ -339,7 +337,6 @@ export function createServer(deps = {}) {
   const seenGrowth = new Seen('UNKNOWN_GROWTH_TASK', 'growth_tasks_list', 'task_id');
   const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list or music_search', 'music_id');
   // 实时热点 entries carry t and v that their detail and video requests must send back.
-  const seenHots = new Seen('UNKNOWN_HOT', 'douyin_hot_list', 'hot_id');
   // Subjects found by ai3d_gs_segment, kept here so ai3d_gs_submit only needs the segment task id.
   const segments = new Map();
 
@@ -1116,7 +1113,7 @@ export function createServer(deps = {}) {
     {
       name: 'rank_hotspots',
       refs: true,
-      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。抖音全站的实时热点榜见 douyin_hot_list。',
+      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。',
       shape: { ...target, ...pageShape },
       run: community('rank_hotspots'),
     },
@@ -1189,56 +1186,6 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'douyin_hot_list',
-      description:
-        '抖音实时热点榜（像塑移动版「实时热点」同一接口，约 5 分钟一版）：前 20 条的 hot_id、名次、名称、分类 categories（娱乐、站内玩法、话题互动、二次元等；「站内玩法」多是正在火的梗、手势舞和跟拍玩法）、热度文字。榜单版本时间 updated_at。看一个热点的热度走势和站内已有特效数用 douyin_hot_detail，看它的热门视频用 douyin_hot_videos。像塑官方挑过、适合做特效的话题见 rank_hotspots。',
-      shape: { ...target },
-      run: async ({ project_path, instance_id }) => text(seenHots.keep(await d.callPlugin('douyin_hot_list', {}, await homeWindow({ project_path, instance_id })))),
-    },
-    {
-      name: 'douyin_hot_detail',
-      description:
-        '一个抖音实时热点的详情（像塑移动版「热点详情」页同一接口）：名称、分类、上榜时间 listed_at_text、站内已有的特效数 effects_text（如「上线特效0个，等级特效0个」，0 说明还没人做）、近 7 天每天的热度 days 和今天每小时的热度 hours（heat 数值、heat_text 页面文字）。hot_id 须来自本会话的 douyin_hot_list。服务端偶尔答「网络开小差了」，隔几秒再调。',
-      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
-      run: async ({ project_path, instance_id, hot_id }) => {
-        const { raw } = seenHots.get(hot_id);
-        return text(await d.callPlugin('douyin_hot_detail', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })));
-      },
-    },
-    {
-      name: 'douyin_hot_videos',
-      refs: true,
-      description: '一个抖音实时热点下的视频（像塑移动版「热点详情」页同一接口，按接口原样的顺序，不是按热度排的，点赞常常只有几十）：视频 ID、播放地址 video_ref、封面 cover_ref、点赞数、作者昵称，按 offset / count 分页。用来看这个梗、玩法实际怎么拍。hot_id 须来自本会话的 douyin_hot_list。',
-      shape: { ...target, hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。'), ...pageShape },
-      run: async ({ project_path, instance_id, hot_id, offset = 0, count = 20 }) => {
-        const { raw } = seenHots.get(hot_id);
-        return text(pageOf(await d.callPlugin('douyin_hot_videos', { hot_id, ...raw }, await homeWindow({ project_path, instance_id })), offset, count));
-      },
-    },
-    {
-      name: 'baidu_hot_list',
-      refs: true,
-      description: '百度热搜榜（top.baidu.com，不用登录、不用开像塑）：置顶条 pinned 和 50 条热搜，按 offset / count 分页（默认前 20 条），每条有名次、词、摘要、热度、配图 image_ref、链接 link，榜单更新时间 updated_at。看站外正在发生的社会、娱乐话题。',
-      shape: { ...pageShape },
-      run: async ({ offset = 0, count = 20 }) => text(pageOf(await baiduHotList(d.fetchJson), offset, count)),
-    },
-    {
-      name: 'bilibili_popular',
-      refs: true,
-      description: 'B 站「热门」视频（不用登录、不用开像塑）：标题、BV 号、链接、封面 cover_ref、分区、UP 主、播放 / 点赞 / 评论 / 弹幕数、时长、发布时间、上热门的理由（如「百万播放」）。按 page 翻页。看年轻人在 B 站追的梗和内容。',
-      shape: {
-        page: z.number().int().min(1).optional().describe('页码，默认 1，取上一页的 next_page。'),
-        count: z.number().int().min(1).max(BILIBILI_POPULAR_MAX).optional().describe(`每页数量，默认 20（最大 ${BILIBILI_POPULAR_MAX}）。`),
-      },
-      run: async (a) => text(await bilibiliPopular(a, d.fetchJson)),
-    },
-    {
-      name: 'bilibili_hot_search',
-      description: 'B 站搜索框下的热搜词（不用登录、不用开像塑）：名次、关键词、展示名、热度分，更新时间 updated_at。',
-      shape: {},
-      run: async () => text(await bilibiliHotSearch(d.fetchJson)),
-    },
-    {
       name: 'rank_subjects',
       refs: true,
       description: '像塑移动版「专题合集」里按主题的榜单，最新的在前，按 cursor 翻页：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。按榜名搜用 rank_subjects_search，一个榜的全部特效用 rank_subject_detail。',
@@ -1280,28 +1227,28 @@ export function createServer(deps = {}) {
     {
       name: 'pipeline_works',
       description:
-        '我们全部作品走到精选的哪一步（新版运营平台 xiangsu.muqian.chat/v2 的 /api/agent/works；它每 10 分钟取一次作品列表和站内信、每小时取一次数据卡片，不连编辑器）。每个作品分三条线，各带 stage、label、since（时间）和 at_kind（platform 平台给的时间、detected 我们发现的时间、derived 按规则算出的时间）：上线 online（reviewing 审核中、testing 测试中、online 已上线、rejected 审核未通过 / test_failed 测试未通过，reason 是驳回原因原文、gone 已下线或删除）；精选 pick（waiting 上线不满 3 天或绑定还在评定中、还可能进精选审核，missed 上线满 3 天且绑定评完仍没进，round1 精选首轮审核中，round2 首轮没过在二审，picked 入选，pick_rejected 落选、reason 是平台原话、几条用「；」隔开，template 模板不发精选审核消息，none 没上线）；精选奖 reward（pending / locked 要拍宣传视频解锁，unlocked 已解锁）。group 分组：act 要用户处理、wait 等结果、done 已结束；action 是要用户做的事。eta 是这一步大概什么时候出结果：ours 是我们自己作品的历史（样本数 n、中位、最慢，样本不到 3 个为 null），ours_range 是按中位和最慢推的时间，ours_passed 表示已经等过最慢的样本，official / official_by 是官方说法和日子。bindings 是绑定的任务和灵感各自的评定 label；metrics 是累计曝光、投稿、收益和最近一天的增量；successor_id 表示被驳回后已经重新提交。还带 summary（各组、各精选阶段个数）、stats（各段耗时的历史分布）、账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（next_allowed_at 之前不开提交窗口，被限制时为 null）、各块数据的健康 health（ok=false 的块写着原因和上次成功的时间，auth 是像塑登录态）、data_at 最近一次取到作品列表的时间、refreshing 是否正在重取。',
+        '我们全部作品走到精选的哪一步（运营平台 xiangsu.muqian.chat 的 /api/agent/works；它每 10 分钟取一次作品列表和站内信、每小时取一次数据卡片，不连编辑器）。每个作品分三条线，各带 stage、label、since（时间）和 at_kind（platform 平台给的时间、detected 我们发现的时间、derived 按规则算出的时间）：上线 online（reviewing 审核中、testing 测试中、online 已上线、rejected 审核未通过 / test_failed 测试未通过，reason 是驳回原因原文、gone 已下线或删除）；精选 pick（waiting 上线不满 3 天或绑定还在评定中、还可能进精选审核，missed 上线满 3 天且绑定评完仍没进，round1 精选首轮审核中，round2 首轮没过在二审，picked 入选，pick_rejected 落选、reason 是平台原话、几条用「；」隔开，template 模板不发精选审核消息，none 没上线）；精选奖 reward（pending / locked 要拍宣传视频解锁，unlocked 已解锁）。group 分组：act 要用户处理、wait 等结果、done 已结束；action 是要用户做的事。eta 是这一步大概什么时候出结果：ours 是我们自己作品的历史（样本数 n、中位、最慢，样本不到 3 个为 null），ours_range 是按中位和最慢推的时间，ours_passed 表示已经等过最慢的样本，official / official_by 是官方说法和日子。bindings 是绑定的任务和灵感各自的评定 label；metrics 是累计曝光、投稿、收益和最近一天的增量；successor_id 表示被驳回后已经重新提交。还带 summary（各组、各精选阶段个数）、stats（各段耗时的历史分布）、账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（next_allowed_at 之前不开提交窗口，被限制时为 null）、各块数据的健康 health（ok=false 的块写着原因和上次成功的时间，auth 是像塑登录态）、data_at 最近一次取到作品列表的时间、refreshing 是否正在重取。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/works')),
     },
     {
       name: 'pipeline_work',
       description:
-        '一个作品的完整信息（新版运营平台 /api/agent/works/:id）：pipeline_works 里那一行，加上时间线 timeline（提交、测试、上线、进精选审核、首轮没过、入选 / 落选、精选奖、加热、完成任务、绑定评定、判没进审，每步的时间、时间来源和距上一步几秒）、按天的累计曝光和投稿 days、数据卡片 figures（页面原样文字）、用到的能力 functions、流量标签 traffic（精选加热带实发和计划曝光）、上线审核记录 reviews（驳回原因原文）、收益明细 revenue、热门用户视频 videos 和作者自己拍没拍过 author_shot、这个作品的全部变化 events。effect_id 来自 pipeline_works。',
+        '一个作品的完整信息（运营平台 /api/agent/works/:id）：pipeline_works 里那一行，加上时间线 timeline（提交、测试、上线、进精选审核、首轮没过、入选 / 落选、精选奖、加热、完成任务、绑定评定、判没进审，每步的时间、时间来源和距上一步几秒）、按天的累计曝光和投稿 days、数据卡片 figures（页面原样文字）、用到的能力 functions、流量标签 traffic（精选加热带实发和计划曝光）、上线审核记录 reviews（驳回原因原文）、收益明细 revenue、热门用户视频 videos 和作者自己拍没拍过 author_shot、这个作品的全部变化 events。effect_id 来自 pipeline_works。',
       shape: { effect_id: z.string().regex(/^\d+$/).describe('pipeline_works 返回的 effect_id。') },
       run: async ({ effect_id }) => text(await d.platformRequest(`/api/agent/works/${effect_id}`)),
     },
     {
       name: 'account_status',
       description:
-        '账号（新版运营平台 /api/agent/account）：是否被限制提交 restricted 和限制详情 restriction（until 解除时间；until_source=notice 是限制通知里写的，default 是通知没写、按 24 小时算；平台解除时不发通知）、提交节奏 submit_pace（今天交了几个、上次提交时间、下次最早可交 next_allowed_at）、像塑登录态 auth（到期时间 expires_at、是否失效 logged_out、快到期 warn）、资料和数字 profile（昵称、等级、粉丝、开拍总计、本月提交、上线、收入）、收入 revenue、等级成长 growth（每级目标和进度）、本期拍视频激励 shoot_activity（任务、连续打卡档位）、精选作者计划 author_plan、最近 50 条和作品或账号有关的站内信 messages（推广不列）、对不上作品的站内信 unmatched_messages。',
+        '账号（运营平台 /api/agent/account）：是否被限制提交 restricted 和限制详情 restriction（until 解除时间；until_source=notice 是限制通知里写的，default 是通知没写、按 24 小时算；平台解除时不发通知）、提交节奏 submit_pace（今天交了几个、上次提交时间、下次最早可交 next_allowed_at）、像塑登录态 auth（到期时间 expires_at、是否失效 logged_out、快到期 warn）、资料和数字 profile（昵称、等级、粉丝、开拍总计、本月提交、上线、收入）、收入 revenue、等级成长 growth（每级目标和进度）、本期拍视频激励 shoot_activity（任务、连续打卡档位）、精选作者计划 author_plan、最近 50 条和作品或账号有关的站内信 messages（推广不列）、对不上作品的站内信 unmatched_messages。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/account')),
     },
     {
       name: 'changes_since',
       description:
-        '从「已经告诉过用户」的进度往后的变化（新版运营平台 /api/agent/changes）：作品阶段变了（审核中、上线、驳回、进精选审核、首轮没过、入选、落选、判没进审、精选奖待解锁 / 已解锁）、绑定的任务和灵感评定变了、完成任务和获奖公布、精选加热、账号限制开始和到解除时间、像塑登录失效或快过期。每条有 id、type（stage、binding、notice、restriction、auth）、at 和 at_kind、作品 effect_id 和 name、一句话 text、needs_you（要用户动手）。会话开始时调一次，把变化（尤其 needs_you 的）告诉用户，告诉完再用 changes_ack 传这次返回的 up_to；不 ack 下次还会拿到。has_more 为 true 时传 after=up_to 接着取。进度是所有 agent 对话共用的，别的对话告诉过的这里不再出现。还带账号是否被限制和提交节奏。',
+        '从「已经告诉过用户」的进度往后的变化（运营平台 /api/agent/changes）：作品阶段变了（审核中、上线、驳回、进精选审核、首轮没过、入选、落选、判没进审、精选奖待解锁 / 已解锁）、绑定的任务和灵感评定变了、完成任务和获奖公布、精选加热、账号限制开始和到解除时间、像塑登录失效或快过期。每条有 id、type（stage、binding、notice、restriction、auth）、at 和 at_kind、作品 effect_id 和 name、一句话 text、needs_you（要用户动手）。会话开始时调一次，把变化（尤其 needs_you 的）告诉用户，告诉完再用 changes_ack 传这次返回的 up_to；不 ack 下次还会拿到。has_more 为 true 时传 after=up_to 接着取。进度是所有 agent 对话共用的，别的对话告诉过的这里不再出现。还带账号是否被限制和提交节奏。',
       shape: {
         after: z.number().int().min(0).optional().describe('从哪个事件 id 之后取，默认是「已经告诉过用户」的进度。'),
         limit: z.number().int().min(1).max(200).optional().describe('最多几条，默认 50。'),
@@ -1324,26 +1271,26 @@ export function createServer(deps = {}) {
     {
       name: 'pipeline_refresh',
       description:
-        '让新版运营平台现在就重取一次作品列表、站内信和到点的数据卡片（POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；平时每 10 分钟取一次。5 分钟内最多一次：太近时 started=false 带 next_allowed_at，正在重取时 started=false。交给采集进程后 15 秒内开始，一遍几秒到一两分钟，之后再调 pipeline_works 看 data_at 变没变、refreshing 是否还是 true。',
+        '让运营平台现在就重取一次作品列表、站内信和到点的数据卡片（POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；平时每 10 分钟取一次。5 分钟内最多一次：太近时 started=false 带 next_allowed_at，正在重取时 started=false。交给采集进程后 15 秒内开始，一遍几秒到一两分钟，之后再调 pipeline_works 看 data_at 变没变、refreshing 是否还是 true。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/refresh', 'POST')),
     },
     {
       name: 'brief_today',
       description:
-        '开工简报（新版运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；热点 hot（抖音热榜前 10：热度、站内已有特效数 effects、走势 trend；像塑热点前 6）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 track_board、pick_samples、failure_lessons、hot_topics、task_usage。',
+        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；像塑热点前 6 个 hotspots（标题、热度、灵感数）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 track_board、pick_samples、failure_lessons、hot_topics、task_usage。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
     {
       name: 'track_board',
-      description: '全部赛道（细分类型）的精选情况（新版运营平台 /api/agent/tracks）：每个赛道的上级分类 parent、平台近 30 天精选数和近 7 天 / 前 7 天、我们做了几个、进审、入选、落选、没进审、还在等、进审率，我们每个作品的阶段 our_works，最近入选的样例 samples（名称、入选日、标签、投稿、用到的能力 functions、图标）。按平台精选数排。模板合成一行「模板」。',
+      description: '全部赛道（细分类型）的精选情况（运营平台 /api/agent/tracks）：每个赛道的上级分类 parent、平台近 30 天精选数和近 7 天 / 前 7 天、我们做了几个、进审、入选、落选、没进审、还在等、进审率，我们每个作品的阶段 our_works，最近入选的样例 samples（名称、入选日、标签、投稿、用到的能力 functions、图标）。按平台精选数排。模板合成一行「模板」。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tracks')),
     },
     {
       name: 'pick_samples',
-      description: '官方精选作品明细（新版运营平台 /api/agent/picks，每天采一次精选榜和入选作品详情）：名称、app_effect_id、特效或模板 kind、赛道 track（平台判定的细分类型）、标签 labels、入选日 reviewed_on、投稿、用到的编辑器能力 functions、图标地址。可按赛道、类型、最近几天筛，按入选日倒序。要看某个作品的视频用 effect_videos，工程用 works_by_effect。',
+      description: '官方精选作品明细（运营平台 /api/agent/picks，每天采一次精选榜和入选作品详情）：名称、app_effect_id、特效或模板 kind、赛道 track（平台判定的细分类型）、标签 labels、入选日 reviewed_on、投稿、用到的编辑器能力 functions、图标地址。可按赛道、类型、最近几天筛，按入选日倒序。要看某个作品的视频用 effect_videos，工程用 works_by_effect。',
       shape: {
         track: z.string().max(40).optional().describe('赛道（细分类型），如「脸控游戏」「玩法测试」「模板」，取自 brief_today / track_board 的 track。'),
         kind: z.enum(['effect', 'template']).optional().describe('effect 特效，template 模板；不传两种都要。'),
@@ -1361,19 +1308,19 @@ export function createServer(deps = {}) {
     },
     {
       name: 'failure_lessons',
-      description: '全部失败经验（新版运营平台 /api/agent/lessons，只用平台数据算）：上线审核驳回（按平台给的原因标题归，如「名称与效果不相关」）、测试未通过、精选落选（平台原话，几条分开）、精选首轮没过、没进精选审核（按赛道归）。每条有类别 kind / label、原因 reason、次数 count、涉及作品 works（按先后）、首次和最近一次的时间、一段平台原文 sample_text。同一个原因反复出现的，出方向和起名时要避开。真机试玩的教训不在这里，在规则文件里。',
+      description: '全部失败经验（运营平台 /api/agent/lessons，只用平台数据算）：上线审核驳回（按平台给的原因标题归，如「名称与效果不相关」）、测试未通过、精选落选（平台原话，几条分开）、精选首轮没过、没进精选审核（按赛道归）。每条有类别 kind / label、原因 reason、次数 count、涉及作品 works（按先后）、首次和最近一次的时间、一段平台原文 sample_text。同一个原因反复出现的，出方向和起名时要避开。真机试玩的教训不在这里，在规则文件里。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/lessons')),
     },
     {
       name: 'hot_topics',
-      description: '热点（新版运营平台 /api/agent/hotspots）：抖音热榜 douyin（排名、名称、分类、热度、站内已有几个特效 effects、走势 trend：up 在涨 / down 在落 / new 刚上榜 / flat，上榜时间；热榜每小时、每条详情每天取一次）和像塑热点 hotspots（排名、标题、说明、热度、第一次看到的时间、热点下的灵感：标题、标签、玩法说明）。站内特效少、还在涨的热点最值得接。',
+      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度、第一次看到的时间，前 10 个带热点下的灵感（标题、标签、玩法说明）。只有像塑自己的热点，不含站外热榜。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/hotspots')),
     },
     {
       name: 'task_usage',
-      description: '我们绑过、还没截止的任务（新版运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
+      description: '我们绑过、还没截止的任务（运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tasks')),
     },
