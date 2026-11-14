@@ -27,7 +27,7 @@ test('the read-only token comes from its file, trimmed; a missing or empty file 
   assert.equal(readPlatformToken(file), 'abc123');
 });
 
-test('a platform request keeps the /v2 base path, sends a JSON body on POST and reports the platform error', async () => {
+test('a platform request keeps a base path, sends a JSON body on POST and reports the platform error', async () => {
   const seen = [];
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), method: init.method, auth: init.headers.authorization, type: init.headers['content-type'], body: init.body });
