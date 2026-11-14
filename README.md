@@ -16,7 +16,7 @@
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划官方精选），用编辑器里登录的账号读取；可收藏灵感、领取任务。
 - 看别人的特效、学做法：像塑移动版的全平台搜索（特效、模板、灵感、教程），任意特效的详情（等级、受众、平台判定的类型、用到的编辑器能力、作者）和用它拍的热门视频，排行榜上没分享工程的特效找「做同款」指向的首页工程；官方教程和官方拍摄脚本。
-- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（AI 写的主攻赛道建议、赛道表、入选样例、失败经验、热点、任务占用），都从运营平台（`xiangsu.muqian.chat`，作品和站内信每 10 分钟、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
+- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（从爆款倒推的为什么想玩、AI 写的主攻赛道建议、赛道表、入选样例、失败经验、热点的涨落和扎堆、新灵感和新任务、任务占用）和查题材扎不扎堆，都从运营平台（`xiangsu.muqian.chat`，作品和站内信每 10 分钟、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
 - 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。本服务开的窗口一律最小化在程序坞里、不抢前台（见下文约定）。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
@@ -82,11 +82,15 @@
 | `rank_innovation` | 创新计划官方精选（`kind=template` / `effect`）；同页重复的特效合成一条、标签合并，服务端翻页会出现上一页的特效 |
 | `pipeline_works` | 运营平台（`xiangsu.muqian.chat`）：全部作品走到精选的哪一步，分上线、精选、精选奖三条线和要处理 / 等结果 / 已结束三组，驳回和落选原因原文，按我们历史估的出结果时间，任务和灵感评定，曝光 / 投稿 / 收益；账号限制、提交节奏、各块数据的健康 |
 | `pipeline_work` | 运营平台：一个作品的时间线、按天趋势、数据卡片、能力、流量标签、审核记录、收益、用户视频和全部变化 |
-| `brief_today` | 运营平台：开工简报，会话开始读一次——账号能不能交、新变化、AI 写的今天主攻赛道和理由（推断）、赛道表、从我们结果算出的规律、失败经验、热点、任务占用 |
+| `brief_today` | 运营平台：开工简报，会话开始读一次——账号能不能交、新变化、从爆款倒推的为什么想玩和 AI 写的今天主攻赛道（推断）、赛道表、从我们结果算出的规律、失败经验、热点、新灵感和新任务、任务占用 |
+| `hit_reasons` | 运营平台：年轻喜爱、每日投稿、热玩互动、跟拍榜前 20 和最近入选的精选，每个带用户视频标题、点赞、封面和 AI 归纳的为什么想玩（推断） |
 | `track_board` | 运营平台：全部赛道（细分类型）平台近 30 天 / 7 天精选数，我们做了几个、进审、入选、落选、进审率，最近入选的样例和用到的能力 |
 | `pick_samples` | 运营平台：官方精选作品明细，按赛道、类型、最近几天筛 |
 | `failure_lessons` | 运营平台：全部失败经验（驳回、测试未通过、精选落选、首轮没过、没进审），每条带平台原话、次数、涉及作品 |
-| `hot_topics` | 运营平台：像塑热点和每个热点下的灵感（只有像塑自己的热点，不含站外热榜） |
+| `hot_topics` | 运营平台：像塑热点，和一天前比的涨落、站内同题材几个、扎堆还是还早，和每个热点下的灵感（只有像塑自己的热点，不含站外热榜） |
+| `inspirations_new` | 运营平台：新出现的灵感和现在挂着的【创新】灵感 |
+| `tasks_open` | 运营平台：活动中心没截止的全部任务，发布、截止、领没领、同类型条款、我们放了哪些作品 |
+| `topic_crowd` | 运营平台：查一个题材词在站内有几个同题材的特效和模板（平台去搜，工具最多等 60 秒） |
 | `task_usage` | 运营平台：我们绑过、还没截止的任务，每个作品的平台分类和评定，有没有同类型条款 |
 | `account_status` | 运营平台：账号限制和解除时间、提交节奏、像塑登录态、资料和数字、收入、等级成长、拍视频激励、精选作者计划、最近 50 条站内信 |
 | `changes_since` | 运营平台：从「已经告诉过用户」的进度往后的变化（阶段、评定、通知、账号限制、登录态），带一句话和要不要用户动手 |
@@ -150,13 +154,13 @@
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.key_files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，和用户确认后 `submit_confirm`（同一个 `name`）送审，看返回的 `effect_id` 和 `listed`。要参加任务的，`tasks_list` → `task_receive` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
-- 找热点：`rank_hotspots` 看像塑热点榜 → `hotspot_inspirations` 看热点下的灵感；站内有没有人做过、做成什么样用 `effect_search`。
+- 出方向：先 `hit_reasons` 从爆款倒推人为什么想玩（看视频标题，封面交给 `image_view` 看怎么拍）→ `hot_topics` 看像塑热点的涨落和扎堆 → `topic_crowd` 查候选题材在站内扎不扎堆；新灵感、新任务用 `inspirations_new`、`tasks_open`。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 或 `same_style` 的用返回的 `template_id` 走 `works_download` / `works_open`（`same_style` 下载到的是 `same_style` 里那个特效的工程，不是榜上这个特效本身的）。
 - 拆别人的爆款：`rank_list` 或 `effect_search`（如「美妆」）→ `effect_detail` 看受众、平台判定的类型和用了哪些编辑器能力 → `effect_videos` 看别人怎么拍、标题怎么写（`image_view` 拿视频地址）→ `works_by_effect` 找能下载的工程。
 - 学做法：`tutorials_list` 看官方教程分类，或 `tutorial_search` 按关键词找；拍视频推作品用 `account_status` 的 `shoot_activity` 看本期激励任务，`shoot_scripts` 看官方拍摄脚本。
 - 查审核和精选：`pipeline_works` 看每个作品到了哪一步（被驳回的在 `online.reason` 里写着原因），刚提交、刚上线时先 `pipeline_refresh`；一个作品的时间线、审核记录原文用 `pipeline_work`；会话开始用 `changes_since` 看新变化，告诉完用户再 `changes_ack`；被驳回的在编辑器「拍摄特效管理」里点「编辑」改完重新提交。
-- 看作品表现和账号：`pipeline_work` 看一个作品的数据卡片、按天趋势、收益和用户视频；`account_status` 看账号、收入、等级和站内信；会话开始和出方向前 `brief_today`，细看用 `track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`；提交前看 `account_status` 的限制和提交节奏。
+- 看作品表现和账号：`pipeline_work` 看一个作品的数据卡片、按天趋势、收益和用户视频；`account_status` 看账号、收入、等级和站内信；会话开始和出方向前 `brief_today`，细看用 `hit_reasons`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`inspirations_new`、`tasks_open`、`task_usage`；提交前看 `account_status` 的限制和提交节奏。
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。
 - 复刻妆面：`ai_makeup_submit`（参考图）→ `image_view` 看 `preview_file` 和参考原图 → `ai_makeup_import`（可只导部分部位）→ `library_search` / `library_apply` 用官方单品补 AI 妆容没给到的部位、套 AI 脸和滤镜 → `makeup_compare`（可对参考图）调强度、`preview_frames` 验收 → `save_project`。
 - 调强度：`makeup_compare` 在同一张脸上比「关掉这层」「0.3 / 0.6」、面板不透明度、AI 脸 Transparency 等，看眼下、脸颊等区域的亮度和颜色变了多少。
