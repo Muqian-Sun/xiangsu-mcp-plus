@@ -29,6 +29,8 @@ const OWN = [
   'ai_vfx_import',
   'ai_vfx_submit',
   'ai_vfx_tasks',
+  'ai_video_node',
+  'ai_video_results',
   'ar_video_cancel',
   'ar_video_import',
   'ar_video_submit',
@@ -213,9 +215,14 @@ test('own tools route to the plugin window by project_path or official instance_
   assert.deepEqual(seen[3], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
   await client.callTool({ name: 'ai_combine_apply', arguments: { instance_id: '1', graph_id: 'g-1' } });
   assert.deepEqual(seen[4], { method: 'ai_combine_apply', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/A', timeoutMs: 180000 } });
+  const video = { graph_id: 'g-1', prompt: '书页卷起来', model: 'Seedance 2.5', duration: 20, aspect_ratio: '9:16', resolution: '720p', input_node_id: 'Input-1' };
+  await client.callTool({ name: 'ai_video_node', arguments: { project_path: '/proj/B', ...video } });
+  assert.deepEqual(seen[5], { method: 'ai_video_node', params: video, opts: { projectPath: '/proj/B', timeoutMs: 120000 } });
+  await client.callTool({ name: 'ai_video_results', arguments: { project_path: '/proj/B', graph_id: 'g-1' } });
+  assert.deepEqual(seen[6], { method: 'ai_video_results', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/B', timeoutMs: undefined } });
   const unknown = await client.callTool({ name: 'menu_list', arguments: { instance_id: '7' } });
   assert.match(unknown.content[0].text, /UNKNOWN_INSTANCE: 7/);
-  assert.equal(seen.length, 5);
+  assert.equal(seen.length, 7);
 });
 
 test('invalid arguments are rejected before reaching the plugin', async () => {

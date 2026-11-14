@@ -165,6 +165,18 @@ const REQUIRED = {
     [M.aiGraphManager, 'AIGraphManager.prototype.editorPanelApply'],
     [M.events, 'BusinessEventManager.TypeGuard'],
   ],
+  aiVideo: [
+    [M.aiGraphManager, 'AIGraphManager.getInstance'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.getGraphById'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.switchGraphbyGuid'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.initNodeByName'],
+    [M.aiEffectController, 'default.getInstance'],
+    [M.aiEffectConst, 'BASE_MODEL_CATEGORY_ID_MAP.videoAllModelKey'],
+    [M.aiEffectConst, 'BACKUP_AUTHOR_INFO'],
+    [M.aiApiUtils, 'isBaseModelEntranceVisible'],
+    [M.ef, 'UndoSystem.instance.start'],
+    [M.ef, 'UndoSystem.instance.end'],
+  ],
   ai3d: [
     [M.ai3dConst, 'AIGen3DModelScene.Image'],
     [M.ai3dConst, 'AIGen3DModelScene.Animation'],
