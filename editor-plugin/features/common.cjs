@@ -65,6 +65,8 @@ const M = {
   aigcUtils: '@orion/Business/Utils/utils',
   lokiUtils: '@orion/Business/Utils/LokiAsset/utils',
   aiApiUtils: '@orion/Business/AIEffectWindow/controller/apiUtils',
+  aiEffectController: '@orion/Business/AIEffectWindow/controller/AIEffectController',
+  aiEffectConst: '@orion/Business/AIEffectWindow/controller/const',
   resImport: '@orion/Business/ResItemExtraData/ResourceImportHandles',
   globalConfig: '@orion/config/LegacyGlobalConfig',
   arVideoManager: '@orion/Business/AssetsLibrary/Core/Control/ARVideoManager/ARVideoManager',

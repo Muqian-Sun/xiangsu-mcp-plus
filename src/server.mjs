@@ -1810,7 +1810,7 @@ export function createServer(deps = {}) {
     {
       name: 'ai_combine_new',
       description:
-        '新建一张「AI 组合效果」工作流（用户拍照后在云端按工作流出图或出视频），等同 AI 效果窗口的「新建工作流」：在本地建 AI Graph，只有「输入图」和「效果组合」两个节点且未连线；不联网、不扣额度、不建云端草稿。返回 ai_graph_id 和各节点的 node_id，交给官方 get_workflow_context / get_workflow_capabilities / apply_workflow_patch 添加生图节点、写 prompt、连线（官方 apply_workflow_patch 每次改完会把工作流保存成账号下的云端 AI 效果草稿），要看效果用官方 generate_workflow（扣额度）。改好后用 ai_combine_apply 放进场景。「添加对象」菜单里的 AI 组合效果只建空壳，不要用 menu_add。',
+        '新建一张「AI 组合效果」工作流（用户拍照后在云端按工作流出图或出视频），等同 AI 效果窗口的「新建工作流」：在本地建 AI Graph，只有「输入图」和「效果组合」两个节点且未连线；不联网、不扣额度、不建云端草稿。返回 ai_graph_id 和各节点的 node_id，交给官方 get_workflow_context / get_workflow_capabilities / apply_workflow_patch 添加生图节点、写 prompt、连线（图生视频节点官方工具建不了，用 ai_video_node）（官方 apply_workflow_patch 每次改完会把工作流保存成账号下的云端 AI 效果草稿），要看效果用官方 generate_workflow（扣额度）。改好后用 ai_combine_apply 放进场景。「添加对象」菜单里的 AI 组合效果只建空壳，不要用 menu_add。',
       shape: { ...target },
       run: plugin('ai_combine_new'),
     },
@@ -1820,6 +1820,30 @@ export function createServer(deps = {}) {
         '把一张 AI 工作流放进场景，等同 AI 效果窗口的「应用」（可撤销）：编辑器编译工作流、把工作流文件上传到特效平台，再添加「AI 组合效果」对象（场景里没有 2D 前景时一并建「2D 前景」「2D 摄像机」）。不扣额度，不新建草稿；工作流生成过预览视频时一并上传供审核。效果组合节点没有输入连线等情况下编辑器会拒绝，返回 AI_COMBINE_APPLY_FAILED 和编辑器的提示原文（如「请先连接效果组合器」）。返回 added_objects（新对象名和 object_path）和 draft_id（工作流已存成云端草稿时才有，否则为 null）。之后 save_project。',
       shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
       run: plugin('ai_combine_apply', 180000),
+    },
+    {
+      name: 'ai_video_node',
+      description:
+        '在 AI 工作流里加或改一个「视频生成」节点，即 AI 效果窗口的「图生视频」（Seedance 系列：照片 + 提示词生成一段视频）；官方 apply_workflow_patch 只能建生图节点。不传 node_id 时新建：按节点编辑面板的做法用所选模型初始化，把图里的「输入图」连到它的第一个图片口、它的输出连到「效果组合」的空输入口，摆在两者之间（图里有多个输入图时要传 input_node_id，效果组合没有空口时报 COMBINATION_PORT_TAKEN，都在改图之前报）。传 node_id 时只改这个节点的参数；换模型时从新模型的默认参数开始，提示词沿用。参数按所选模型的面板核对，各模型不同（如 Seedance 2.0 Mini 时长 5–15 秒、分辨率 480p / 720p，Seedance 2.5 时长 4–30 秒、多 1080p），不合法时报错并列出可选值。改完照官方补丁的做法把工作流存成云端草稿（saved；没存上时 save_error 是原因）。不联网生成、不扣额度。之后照常：upload_workflow_image + apply_workflow_patch（update_node_params）给输入图绑照片，generate_workflow 看效果（扣模型次数），ai_combine_apply 放进场景。返回 node_id、created、model（id、name）、params（节点存的参数）、新建时的 connected。',
+      shape: {
+        ...target,
+        graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。'),
+        node_id: z.string().min(1).optional().describe('要改的视频生成节点（get_workflow_context 里 type 为 Video 的 id）；省略时新建一个。'),
+        model: z.string().min(1).optional().describe('模型的显示名，如「Seedance 2.0 Mini」「Seedance 2.0 Fast」「Seedance 2.0」「Seedance 2.5」；新建时默认 Seedance 2.0 Mini，改节点时省略则不换模型。写错时报 UNKNOWN_VIDEO_MODEL 并列出可选的。'),
+        prompt: z.string().min(1).optional().describe('提示词：描述要生成的画面和动作。新建时必填。'),
+        duration: z.number().positive().optional().describe('视频时长（秒），范围看模型；省略时用模型默认（Mini 是 10）。'),
+        aspect_ratio: z.string().min(1).optional().describe('视频比例，如 9:16、16:9、1:1；省略时用模型默认（9:16）。'),
+        resolution: z.string().min(1).optional().describe('分辨率，如 480p、720p；省略时用模型默认（480p）。'),
+        input_node_id: z.string().min(1).optional().describe('新建时要连的输入图节点；图里只有一个输入图时可省略。'),
+      },
+      run: plugin('ai_video_node', 120000),
+    },
+    {
+      name: 'ai_video_results',
+      description:
+        '读 AI 工作流里「视频生成」节点和「效果组合」节点的生成结果（官方 generate_workflow 成功后用；官方 download_workflow_node_asset 只认生图节点）：每个节点的状态 state（waiting / success 等）和生成的视频 videos：本机文件 local_path（编辑器 AI 效果窗口预览用的那份缓存，没有下载时加的水印；缓存被清掉时为 null，重新生成才有）、宽高、时长 duration_s。看效果用 ffmpeg 抽帧再 image_view。只读，不联网。',
+      shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
+      run: plugin('ai_video_results'),
     },
     {
       name: 'ai_makeup_submit',
