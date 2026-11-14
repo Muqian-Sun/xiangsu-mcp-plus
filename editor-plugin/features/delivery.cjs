@@ -410,10 +410,10 @@ const methods = {
       try {
         found = await liveEffect(this, name);
       } catch (e) {
-        throw Error(`${pageProblem}; reading the account's effects to see whether it went through anyway failed (${e.message}), so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
+        throw Error(`${pageProblem}; reading the account's effects to see whether it went through anyway failed (${e.message}), so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)`);
       }
       if (!found) {
-        throw Error(`${pageProblem}; the account's newest ${RECENT_EFFECTS} effects have no 「${name}」 yet, but it may still show up, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
+        throw Error(`${pageProblem}; the account's newest ${RECENT_EFFECTS} effects have no 「${name}」 yet, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)`);
       }
       effectId = found.effect_id;
     }

@@ -29,7 +29,7 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
-import { opsRequest } from './opsdata.mjs';
+import { opsRequest, platformRequest } from './opsdata.mjs';
 import { DEFAULT_FONT } from './editorres.mjs';
 import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
 import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
@@ -288,6 +288,7 @@ export function createServer(deps = {}) {
     readImageFile,
     fetchJson,
     opsRequest: (pathname, method = 'GET') => opsRequest(pathname, { method }),
+    platformRequest: (pathname, method = 'GET', body) => platformRequest(pathname, { method, body }),
     openWithApp,
     frontApp,
     activateApp,
@@ -490,7 +491,7 @@ export function createServer(deps = {}) {
       const { items } = await d.callPlugin('my_effects', { count: SUBMITTED_LOOKUP }, { projectPath });
       const hit = effect_id ? items.find((e) => e.effect_id === effect_id) : items.find((e) => e.name === name);
       if (hit) return { listed: hit };
-      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; call ops_refresh, then look at ops_works in a minute` };
+      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; call pipeline_refresh, then look at pipeline_works in a minute` };
     } catch (e) {
       return { listed: null, listed_error: e.message };
     }
@@ -913,7 +914,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_confirm',
       description:
-        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点之前还看一眼账号最新的 10 个作品：已有同名、在审核中或审核过了的（审核未通过的不算）就不点，报 SUBMIT_ALREADY_SUBMITTED，防止重复提交；作品列表读不到报 SUBMIT_LOOKUP_FAILED，也不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到账号最新的作品列表里找这条特效放在 listed（审核状态等；没找到时 listed 为 null 并在 listed_note 说明）。页面没确认成功时（报了失败原因、停止提交却没给结果、5 分钟内没给结果）作品可能其实已经交上了，先到作品列表里找同名的这一条：找到就照成功处理，另把页面当时的情况放在 page_problem；没找到才报错，窗口保持打开，页面报了失败原因的报 SUBMIT_FAILED，其余报 SUBMIT_RESULT_UNKNOWN。这两种报错之后作品也可能稍后才出现，不要直接重新提交：先 ops_refresh 再用 ops_works 看有没有这条特效，确实没有再和用户商量重交，本工具不会自动重试。',
+        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点之前还看一眼账号最新的 10 个作品：已有同名、在审核中或审核过了的（审核未通过的不算）就不点，报 SUBMIT_ALREADY_SUBMITTED，防止重复提交；作品列表读不到报 SUBMIT_LOOKUP_FAILED，也不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到账号最新的作品列表里找这条特效放在 listed（审核状态等；没找到时 listed 为 null 并在 listed_note 说明）。页面没确认成功时（报了失败原因、停止提交却没给结果、5 分钟内没给结果）作品可能其实已经交上了，先到作品列表里找同名的这一条：找到就照成功处理，另把页面当时的情况放在 page_problem；没找到才报错，窗口保持打开，页面报了失败原因的报 SUBMIT_FAILED，其余报 SUBMIT_RESULT_UNKNOWN。这两种报错之后作品也可能稍后才出现，不要直接重新提交：先 pipeline_refresh 再用 pipeline_works 看有没有这条特效，确实没有再和用户商量重交，本工具不会自动重试。',
       shape: {
         ...target,
         name: z.string().min(1).describe('要提交的特效名称，须和 submit_prepare 填进窗口、返回在 filled.name 里的一致。'),
@@ -1013,7 +1014,7 @@ export function createServer(deps = {}) {
     {
       name: 'growth_tasks_list',
       refs: true,
-      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度看 ops_account 的 growth。',
+      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度看 account_status 的 growth。',
       shape: { ...target, ...pageShape },
       run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenGrowth.keep(await d.callPlugin('growth_tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
     },
@@ -1021,7 +1022,7 @@ export function createServer(deps = {}) {
       name: 'task_detail',
       refs: true,
       description:
-        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（去重后最多前 20 个，总数在 recommended_template_total，全部见 save_to；目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list 或 ops_account 的 tasks（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看所有任务里自己作品的评定，用 ops_account 的 tasks 一次取全。',
+        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（去重后最多前 20 个，总数在 recommended_template_total，全部见 save_to；目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看自己所有作品各自绑的任务和灵感评成了什么，用 pipeline_works 每个作品的 bindings 一次取全（ref_id 是作品数据卡片里的编号，和 tasks_list 的 task_id 不一定是一套，对不上时按任务名对）。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
@@ -1278,18 +1279,55 @@ export function createServer(deps = {}) {
       run: community('rank_innovation'),
     },
     {
-      name: 'ops_works',
+      name: 'pipeline_works',
       description:
-        '我们全部作品的精选流水线（运营看板 /api/agent/works，看板每小时从像塑取一次数）：每个作品的阶段 stage（submitted 审核中、blocked 被驳回、offline 已下线、fresh 上线不到 12 小时还可能进精选审核、missed 上线超过 12 小时没进精选审核、template 模板没有精选审核消息、round1 一审中、round2 首轮没过在二审、picked 入选、pick_rejected 没入选）和 stage_label、审核状态 status / status_text、类型 kind、平台细分类型 category 和大类 group、提交和上线时间、进审时间和上线后几秒进的 entry、审核已等几个工作日和预计出结果日 review、二审通知时间 second_at、出结果时间和落选原因 reason、精选加热 boost、精选奖待解锁 / 已解锁金额、驳回原因 refuse_reasons、任务评定 task（state：pending 待评定、unfinished 未完成、done 已完成、off_theme 主题不符合）、灵感绑定 inspiration（state：ok 成功、failed 不符合灵感主题、pending 评定中）、累计曝光 / 投稿 / 跟拍、自己拍没拍过 shot。summary 是各阶段个数、进审率（只算过了 12 小时的特效）、上线到进审的中位秒数、进审到出结果用了几个工作日。还带账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（今天交了几个、下次最早可交 next_allowed_at；被限制时为 null）。fetched_at 是看板取数时间，refreshing 表示正在重取；刚提交、刚上线要看最新状态时先 ops_refresh。',
+        '我们全部作品走到精选的哪一步（新版运营平台 xiangsu.muqian.chat/v2 的 /api/agent/works；它每 10 分钟取一次作品列表和站内信、每小时取一次数据卡片，不连编辑器）。每个作品分三条线，各带 stage、label、since（时间）和 at_kind（platform 平台给的时间、detected 我们发现的时间、derived 按规则算出的时间）：上线 online（reviewing 审核中、testing 测试中、online 已上线、rejected 审核未通过 / test_failed 测试未通过，reason 是驳回原因原文、gone 已下线或删除）；精选 pick（waiting 上线不满 3 天或绑定还在评定中、还可能进精选审核，missed 上线满 3 天且绑定评完仍没进，round1 精选首轮审核中，round2 首轮没过在二审，picked 入选，pick_rejected 落选、reason 是平台原话、几条用「；」隔开，template 模板不发精选审核消息，none 没上线）；精选奖 reward（pending / locked 要拍宣传视频解锁，unlocked 已解锁）。group 分组：act 要用户处理、wait 等结果、done 已结束；action 是要用户做的事。eta 是这一步大概什么时候出结果：ours 是我们自己作品的历史（样本数 n、中位、最慢，样本不到 3 个为 null），ours_range 是按中位和最慢推的时间，ours_passed 表示已经等过最慢的样本，official / official_by 是官方说法和日子。bindings 是绑定的任务和灵感各自的评定 label；metrics 是累计曝光、投稿、收益和最近一天的增量；successor_id 表示被驳回后已经重新提交。还带 summary（各组、各精选阶段个数）、stats（各段耗时的历史分布）、账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（next_allowed_at 之前不开提交窗口，被限制时为 null）、各块数据的健康 health（ok=false 的块写着原因和上次成功的时间，auth 是像塑登录态）、data_at 最近一次取到作品列表的时间、refreshing 是否正在重取。',
       shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/works')),
+      run: async () => text(await d.platformRequest('/api/agent/works')),
     },
     {
-      name: 'ops_work',
+      name: 'pipeline_work',
       description:
-        '一个作品的全部运营信息（运营看板 /api/agent/works/:id）：ops_works 里那一行，加上数据卡片 figures（累计曝光、投稿、播放、跟拍、平台判定的类型、特效等级、年轻喜爱度等，页面原样文字）、用到的能力 functions、流量标签 traffic_tags、时间线 timeline（提交、进测试、上线、进精选审核、首轮没过、入选 / 没入选、加热、精选奖，每步距上一步几秒）、上线审核记录 reviews（驳回原因原文）、看板的规则诊断 findings、搜索词排名 search（AI 定的用户会搜的词、我们排第几、同题材投稿）、按天的累计曝光和投稿 trend、试拍 trial_total、收益明细 revenue、热门用户视频 videos。effect_id 来自 ops_works。',
-      shape: { effect_id: z.string().regex(/^\d+$/).describe('ops_works 返回的 effect_id。') },
-      run: async ({ effect_id }) => text(await d.opsRequest(`/api/agent/works/${effect_id}`)),
+        '一个作品的完整信息（新版运营平台 /api/agent/works/:id）：pipeline_works 里那一行，加上时间线 timeline（提交、测试、上线、进精选审核、首轮没过、入选 / 落选、精选奖、加热、完成任务、绑定评定、判没进审，每步的时间、时间来源和距上一步几秒）、按天的累计曝光和投稿 days、数据卡片 figures（页面原样文字）、用到的能力 functions、流量标签 traffic（精选加热带实发和计划曝光）、上线审核记录 reviews（驳回原因原文）、收益明细 revenue、热门用户视频 videos 和作者自己拍没拍过 author_shot、这个作品的全部变化 events。effect_id 来自 pipeline_works。',
+      shape: { effect_id: z.string().regex(/^\d+$/).describe('pipeline_works 返回的 effect_id。') },
+      run: async ({ effect_id }) => text(await d.platformRequest(`/api/agent/works/${effect_id}`)),
+    },
+    {
+      name: 'account_status',
+      description:
+        '账号（新版运营平台 /api/agent/account）：是否被限制提交 restricted 和限制详情 restriction（until 解除时间；until_source=notice 是限制通知里写的，default 是通知没写、按 24 小时算；平台解除时不发通知）、提交节奏 submit_pace（今天交了几个、上次提交时间、下次最早可交 next_allowed_at）、像塑登录态 auth（到期时间 expires_at、是否失效 logged_out、快到期 warn）、资料和数字 profile（昵称、等级、粉丝、开拍总计、本月提交、上线、收入）、收入 revenue、等级成长 growth（每级目标和进度）、本期拍视频激励 shoot_activity（任务、连续打卡档位）、精选作者计划 author_plan、最近 50 条和作品或账号有关的站内信 messages（推广不列）、对不上作品的站内信 unmatched_messages。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/account')),
+    },
+    {
+      name: 'changes_since',
+      description:
+        '从「已经告诉过用户」的进度往后的变化（新版运营平台 /api/agent/changes）：作品阶段变了（审核中、上线、驳回、进精选审核、首轮没过、入选、落选、判没进审、精选奖待解锁 / 已解锁）、绑定的任务和灵感评定变了、完成任务和获奖公布、精选加热、账号限制开始和到解除时间、像塑登录失效或快过期。每条有 id、type（stage、binding、notice、restriction、auth）、at 和 at_kind、作品 effect_id 和 name、一句话 text、needs_you（要用户动手）。会话开始时调一次，把变化（尤其 needs_you 的）告诉用户，告诉完再用 changes_ack 传这次返回的 up_to；不 ack 下次还会拿到。has_more 为 true 时传 after=up_to 接着取。进度是所有 agent 对话共用的，别的对话告诉过的这里不再出现。还带账号是否被限制和提交节奏。',
+      shape: {
+        after: z.number().int().min(0).optional().describe('从哪个事件 id 之后取，默认是「已经告诉过用户」的进度。'),
+        limit: z.number().int().min(1).max(200).optional().describe('最多几条，默认 50。'),
+        types: z.string().regex(/^[a-z,]+$/).optional().describe('只看这几类，逗号分隔：stage、binding、notice、restriction、auth。'),
+      },
+      run: async ({ after, limit, types }) => {
+        const q = new URLSearchParams();
+        if (after !== undefined) q.set('after', String(after));
+        if (limit !== undefined) q.set('limit', String(limit));
+        if (types) q.set('types', types);
+        return text(await d.platformRequest(`/api/agent/changes${q.size ? `?${q}` : ''}`));
+      },
+    },
+    {
+      name: 'changes_ack',
+      description: '把「已经告诉过用户」的进度推到 up_to（changes_since 返回的 up_to）。只往前推，不超过最新的变化；返回新的进度 told。只在真的把这些变化告诉用户之后调。',
+      shape: { up_to: z.number().int().min(0).describe('changes_since 返回的 up_to。') },
+      run: async ({ up_to }) => text(await d.platformRequest('/api/agent/changes/ack', 'POST', { up_to })),
+    },
+    {
+      name: 'pipeline_refresh',
+      description:
+        '让新版运营平台现在就重取一次作品列表、站内信和到点的数据卡片（POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；平时每 10 分钟取一次。5 分钟内最多一次：太近时 started=false 带 next_allowed_at，正在重取时 started=false。交给采集进程后 15 秒内开始，一遍几秒到一两分钟，之后再调 pipeline_works 看 data_at 变没变、refreshing 是否还是 true。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/refresh', 'POST')),
     },
     {
       name: 'ops_tracks',
@@ -1306,23 +1344,16 @@ export function createServer(deps = {}) {
       run: async () => text(await d.opsRequest('/api/agent/market')),
     },
     {
-      name: 'ops_account',
-      description:
-        '账号情况（运营看板 /api/agent/account）：资料和数字 profile（昵称、粉丝、特效作者 / 模板作者等级、开拍总计、本月提交、本月上线、本月收入、累计收入）、收入 revenue、等级成长 growth（本级和下一级的目标、进度、奖励）、精选作者计划 author_plan、本期拍视频激励 shoot_activity（任务、连续打卡档位）、按任务分组的任务评定 tasks（截止时间、奖励公布时间、每个作品的 state）、最近 50 条站内信 messages（审核、上线、精选审核和结果、任务完成、获奖公布、账号处罚，推广不列）；还带账号是否被限制提交和提交节奏，同 ops_works。',
-      shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/account')),
-    },
-    {
       name: 'ops_feedback',
       description:
-        '运营给制作方的反馈（运营看板 /api/agent/feedback，和看板「给制作的反馈」页同一份）：账号是否被限制 account、提交节奏 submit_pace（next_allowed_at 之前不开提交窗口）、最近 14 天被驳回的原因 rejections、精选结果 picks、各大类我们做了几个进审几个 review_entry、上线到进审多久和一直没进的 pick_entry、整体问题 issues、图标和同类头部不一样的地方 icon_gaps、搜题材词搜不搜得到 search、一句话结论 summary。每次开提交窗口前读一次。',
+        '运营给制作方的反馈（旧版运营看板 /api/agent/feedback，新版运营平台第 2 期做完前还用它）：账号是否被限制 account、提交节奏 submit_pace（next_allowed_at 之前不开提交窗口）、最近 14 天被驳回的原因 rejections、精选结果 picks、各大类我们做了几个进审几个 review_entry、上线到进审多久和一直没进的 pick_entry、整体问题 issues、图标和同类头部不一样的地方 icon_gaps、搜题材词搜不搜得到 search、一句话结论 summary。每次开提交窗口前读一次。',
       shape: {},
       run: async () => text(await d.opsRequest('/api/agent/feedback')),
     },
     {
       name: 'ops_refresh',
       description:
-        '让运营看板现在就重取一次账号和作品数据（运营看板 POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；看板平时每小时取一次。5 分钟内最多一次：太近时 started=false，带 next_allowed_at。一遍取数十几到二十几秒，之后再调 ops_works 看 fetched_at 变没变、refreshing 是否还是 true。',
+        '让旧版运营看板现在就重取一次账号和作品数据（旧版 POST /api/agent/refresh），只影响 ops_feedback、ops_tracks 读到的数据；作品进度用 pipeline_refresh。看板平时每小时取一次。5 分钟内最多一次：太近时 started=false，带 next_allowed_at。一遍取数十几到二十几秒，之后再调 ops_feedback 看 generated_at 变没变。',
       shape: {},
       run: async () => text(await d.opsRequest('/api/agent/refresh', 'POST')),
     },
@@ -1331,7 +1362,7 @@ export function createServer(deps = {}) {
       refs: true,
       description:
         '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、图标 icon_ref、几条示例视频（video_ref 和封面 cover_ref）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
-      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、ops_works 返回的 app_effect_id。') },
+      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、pipeline_works 返回的 app_effect_id。') },
       run: community('effect_detail'),
     },
     {
@@ -1341,7 +1372,7 @@ export function createServer(deps = {}) {
         '用一个特效拍的抖音视频（像塑移动版「作品详情」页的视频卡片，别人的特效也能看）：累计点赞和跟拍（页面原样文字），以及几条热门视频 videos（实测 5 条）：抖音视频 ID item_id、标题、作者、点赞、跟拍、封面 cover_ref 和视频 video_ref（交给 image_view 拿地址）。看别人怎么拍、文案怎么写。自己刚上线、还没人拍的特效列表是空的。',
       shape: {
         ...target,
-        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、ops_works 等返回的 effect_id）。'),
+        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、pipeline_works 等返回的 effect_id）。'),
         app_effect_id: z.string().regex(/^\d+$/).describe('同一个特效的 app_effect_id。'),
       },
       run: community('effect_videos'),
