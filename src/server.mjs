@@ -1337,7 +1337,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspirations_new',
-      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时取一次灵感列表「全部」页签前 300 条）：new 是第一次采到（baseline_at）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间），和绑之前要对的详情 detail（玩法说明 description、要的特效类型 effect_types、激励说明 bonus_text、奖励 award_text、关联热点 hotspot、前 3 张参考图 images 和总张数 images_total、取详情的时间 at，每 3 天刷一次；还没取到是 null）。参考图交给 image_view 看；要灵感下的作品和视频用 inspiration_detail。',
+      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时取一次灵感列表「全部」页签前 300 条）：new 是第一次采到（baseline_at）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间），和绑之前要对的详情 detail（玩法说明 description；激励 incentive：从说明里的【激励说明】解析的截止 deadline、过期没有 expired、要同时绑的任务 tasks（title 和它现在还开没开 open）、奖金区间 reward，说明里没写激励时是 null；平台的大类 effect_types（只有手速比拼、脸部/五官变形、基础脸/头饰三种，测一测也标手速比拼，不当要求用）；bonus_text、奖励 award_text、关联热点 hotspot、前 3 张参考图 images 和总张数 images_total、取详情的时间 at，每 3 天刷一次；还没取到是 null）。激励要求同时绑的任务没开（open=false）或激励过期了，就别为激励绑。参考图交给 image_view 看；要灵感下的作品和视频用 inspiration_detail。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/inspirations')),
     },
