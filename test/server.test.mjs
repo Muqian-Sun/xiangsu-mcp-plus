@@ -72,6 +72,7 @@ const OWN = [
   'inspiration_detail',
   'inspiration_list',
   'inspiration_search',
+  'inspirations_find',
   'inspirations_new',
   'library_apply',
   'library_images',

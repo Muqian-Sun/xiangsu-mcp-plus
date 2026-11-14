@@ -72,6 +72,8 @@ test('each platform tool reads its endpoint without opening the editor', async (
   await call('inspirations_new');
   await call('tasks_open');
   await call('task_requirements', { item_id: '108062' });
+  await call('inspirations_find', { q: '前任 撤回', kind: 'innovation' });
+  await call('inspirations_find');
   assert.deepEqual(seen, [
     ['GET', '/api/agent/works', undefined],
     ['GET', '/api/agent/works/92765390', undefined],
@@ -91,12 +93,15 @@ test('each platform tool reads its endpoint without opening the editor', async (
     ['GET', '/api/agent/inspirations', undefined],
     ['GET', '/api/agent/open-tasks', undefined],
     ['GET', '/api/agent/tasks/108062/requirements', undefined],
+    ['GET', `/api/agent/inspirations/find?${new URLSearchParams({ q: '前任 撤回', kind: 'innovation' })}`, undefined],
+    ['GET', '/api/agent/inspirations/find', undefined],
   ]);
   assert.equal((await client.callTool({ name: 'pipeline_work', arguments: { effect_id: '../x' } })).isError, true, 'effect_id must be digits');
   assert.equal((await client.callTool({ name: 'changes_since', arguments: { types: 'stage;drop' } })).isError, true, 'types is a comma list of words');
   assert.equal((await client.callTool({ name: 'pick_samples', arguments: { kind: 'video' } })).isError, true, 'kind is effect or template');
   assert.equal((await client.callTool({ name: 'task_requirements', arguments: { item_id: '1/../x' } })).isError, true, 'item_id must be digits');
-  assert.equal(seen.length, 18);
+  assert.equal((await client.callTool({ name: 'inspirations_find', arguments: { kind: 'video' } })).isError, true, 'kind is one of three');
+  assert.equal(seen.length, 20);
 });
 
 test('topic_crowd hands the word to the platform and polls until the search is done, giving up after a minute', async () => {
