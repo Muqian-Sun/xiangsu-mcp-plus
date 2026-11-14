@@ -29,7 +29,7 @@ import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
-import { opsRequest, platformRequest } from './opsdata.mjs';
+import { platformRequest } from './opsdata.mjs';
 import { DEFAULT_FONT } from './editorres.mjs';
 import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
 import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
@@ -287,7 +287,6 @@ export function createServer(deps = {}) {
     fetchImageBytes,
     readImageFile,
     fetchJson,
-    opsRequest: (pathname, method = 'GET') => opsRequest(pathname, { method }),
     platformRequest: (pathname, method = 'GET', body) => platformRequest(pathname, { method, body }),
     openWithApp,
     frontApp,
@@ -1330,32 +1329,53 @@ export function createServer(deps = {}) {
       run: async () => text(await d.platformRequest('/api/agent/refresh', 'POST')),
     },
     {
-      name: 'ops_tracks',
+      name: 'brief_today',
       description:
-        '按赛道（平台大类，如测一测、游戏玩法、人像美化、基础头饰、模板）看精选（运营看板 /api/agent/tracks）：每个赛道我们做了几个 ours、进过精选审核几个 entered、进审率 entry_rate、在审 / 入选 / 没入选 / 没进 / 刚上线各几个、我们每个作品的阶段 works；平台近 30 天这个赛道精选了几个 market_picks_30d、最近入选的作品 recent_picks（名称、细分类型、标签、入选日、投稿、用到的能力）、这个赛道里官方偏爱的细分类型 prefer（精选占比比头部明显高的 prefer=true）。只列我们做过或平台近 30 天精选过的赛道，按平台精选数排。选题、定赛道时先看这里。',
+        '开工简报（新版运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话、focus 每个赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid，avoid 别做的赛道，hot_angles 能接的热点；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；热点 hot（抖音热榜前 10：热度、站内已有特效数 effects、走势 trend；像塑热点前 6）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。要细看再用 track_board、pick_samples、failure_lessons、hot_topics、task_usage。',
       shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/tracks')),
+      run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
     {
-      name: 'ops_market',
-      description:
-        '平台每日快照的分析（运营看板 /api/agent/market，每天取一次榜单、精选、热点）：类型热度 category_heat（年轻喜爱榜和投稿榜前 50 去重后每个细分类型几个、近两周每天的个数 series、和前一天比、平均投稿、我们有的）、上升最快 risers、各榜前 20 boards、头部常用能力 function_heat、官方偏爱的类型 official_prefer、近 30 天精选特效和模板 picks、像塑热点和下面的灵感 hotspots（新上的 fresh、热度变化 heat_delta）、热点灵感按类型吃不吃得开排好的 hot_inspirations、抖音热榜 douyin（上榜时间、近几天热度）、所有作品放在一起看的整体诊断 overall_findings。要按分类筛榜、按词搜同类、看某个特效详情时仍用 rank_list、effect_search、effect_detail 现查。',
+      name: 'track_board',
+      description: '全部赛道（细分类型）的精选情况（新版运营平台 /api/agent/tracks）：每个赛道的上级分类 parent、平台近 30 天精选数和近 7 天 / 前 7 天、我们做了几个、进审、入选、落选、没进审、还在等、进审率，我们每个作品的阶段 our_works，最近入选的样例 samples（名称、入选日、标签、投稿、用到的能力 functions、图标）。按平台精选数排。模板合成一行「模板」。',
       shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/market')),
+      run: async () => text(await d.platformRequest('/api/agent/tracks')),
     },
     {
-      name: 'ops_feedback',
-      description:
-        '运营给制作方的反馈（旧版运营看板 /api/agent/feedback，新版运营平台第 2 期做完前还用它）：账号是否被限制 account、提交节奏 submit_pace（next_allowed_at 之前不开提交窗口）、最近 14 天被驳回的原因 rejections、精选结果 picks、各大类我们做了几个进审几个 review_entry、上线到进审多久和一直没进的 pick_entry、整体问题 issues、图标和同类头部不一样的地方 icon_gaps、搜题材词搜不搜得到 search、一句话结论 summary。每次开提交窗口前读一次。',
-      shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/feedback')),
+      name: 'pick_samples',
+      description: '官方精选作品明细（新版运营平台 /api/agent/picks，每天采一次精选榜和入选作品详情）：名称、app_effect_id、特效或模板 kind、赛道 track（平台判定的细分类型）、标签 labels、入选日 reviewed_on、投稿、用到的编辑器能力 functions、图标地址。可按赛道、类型、最近几天筛，按入选日倒序。要看某个作品的视频用 effect_videos，工程用 works_by_effect。',
+      shape: {
+        track: z.string().max(40).optional().describe('赛道（细分类型），如「脸控游戏」「玩法测试」「模板」，取自 brief_today / track_board 的 track。'),
+        kind: z.enum(['effect', 'template']).optional().describe('effect 特效，template 模板；不传两种都要。'),
+        days: z.number().int().min(1).max(90).optional().describe('最近几天入选的，默认 30。'),
+        limit: z.number().int().min(1).max(200).optional().describe('最多几个，默认 30。'),
+      },
+      run: async ({ track, kind, days, limit }) => {
+        const q = new URLSearchParams();
+        if (track) q.set('track', track);
+        if (kind) q.set('kind', kind);
+        if (days !== undefined) q.set('days', String(days));
+        if (limit !== undefined) q.set('limit', String(limit));
+        return text(await d.platformRequest(`/api/agent/picks${q.size ? `?${q}` : ''}`));
+      },
     },
     {
-      name: 'ops_refresh',
-      description:
-        '让旧版运营看板现在就重取一次账号和作品数据（旧版 POST /api/agent/refresh），只影响 ops_feedback、ops_tracks 读到的数据；作品进度用 pipeline_refresh。看板平时每小时取一次。5 分钟内最多一次：太近时 started=false，带 next_allowed_at。一遍取数十几到二十几秒，之后再调 ops_feedback 看 generated_at 变没变。',
+      name: 'failure_lessons',
+      description: '全部失败经验（新版运营平台 /api/agent/lessons，只用平台数据算）：上线审核驳回（按平台给的原因标题归，如「名称与效果不相关」）、测试未通过、精选落选（平台原话，几条分开）、精选首轮没过、没进精选审核（按赛道归）。每条有类别 kind / label、原因 reason、次数 count、涉及作品 works（按先后）、首次和最近一次的时间、一段平台原文 sample_text。同一个原因反复出现的，出方向和起名时要避开。真机试玩的教训不在这里，在规则文件里。',
       shape: {},
-      run: async () => text(await d.opsRequest('/api/agent/refresh', 'POST')),
+      run: async () => text(await d.platformRequest('/api/agent/lessons')),
+    },
+    {
+      name: 'hot_topics',
+      description: '热点（新版运营平台 /api/agent/hotspots）：抖音热榜 douyin（排名、名称、分类、热度、站内已有几个特效 effects、走势 trend：up 在涨 / down 在落 / new 刚上榜 / flat，上榜时间；热榜每小时、每条详情每天取一次）和像塑热点 hotspots（排名、标题、说明、热度、第一次看到的时间、热点下的灵感：标题、标签、玩法说明）。站内特效少、还在涨的热点最值得接。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/hotspots')),
+    },
+    {
+      name: 'task_usage',
+      description: '我们绑过、还没截止的任务（新版运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/tasks')),
     },
     {
       name: 'effect_detail',
