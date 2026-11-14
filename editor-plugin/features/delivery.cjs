@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { M, scratchDir, exportEffectPackage, nextEvent } = require('./common.cjs');
 const { submitPageBridge, perfPageBridge } = require('./webpages.cjs');
+const { FAILED_STATUSES } = require('./community.cjs');
 
 // IconPreviewManager.iconTypeToProjectIconPathMap keys (IconType: Female 0, Male 1, Common 2).
 const ICON_TYPES = { female: 0, male: 1, common: 2 };
@@ -30,6 +31,8 @@ const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称'
 // closeMs is picked: closed submit windows were gone within 0.5 s live. resultMs is picked: after 提交审核
 // the page uploads the package and the project before it submits.
 const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000, resultMs: 300000 };
+// Picked: a repeated submission follows the first within minutes, so the newest effects hold the first.
+const RECENT_EFFECTS = 10;
 const checkPending = (c) => c.endsWith('中...');
 const checkPassed = (c) => c.endsWith('通过') && !/[未不]通过$/.test(c);
 
@@ -191,6 +194,23 @@ async function submitOutcome(run) {
   return { ...out, timed_out: true };
 }
 
+// Why the page left the submission unconfirmed, or null when it confirmed it (an effect id, or its
+// 提交成功 view).
+function unconfirmed(out) {
+  if (out.result && out.result.unreadable !== undefined) return `SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse`;
+  if (out.result && out.result.effectId === undefined) return `SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}`;
+  if (out.result || out.submitted) return null;
+  if (out.timed_out) return `SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms`;
+  return 'SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result';
+}
+
+// The account's effect named `name` that is in review or past it (one whose review failed does not
+// count), among its newest.
+async function liveEffect(lib, name) {
+  const { items } = await lib.myEffects({ count: RECENT_EFFECTS });
+  return items.find((e) => e.name === name && !FAILED_STATUSES.includes(e.status)) || null;
+}
+
 const methods = {
   // `png_path` is a square PNG prepared by the MCP server; it becomes the project's icon for each of
   // `types`, the same files the icon creation window saves, and is uploaded the way that window's 完成
@@ -349,8 +369,11 @@ const methods = {
 
   // Presses 提交审核 in the submit window submit_prepare left open, which sends the effect to review.
   // `name` must match the window's summary, so a window filled for something else is not submitted.
-  // Nothing is pressed while the page's checks run or fail. A submission that reports no result in
-  // resultMs may still go through, so it is never pressed a second time here.
+  // Nothing is pressed while the page's checks run or fail, or while the account already has a live
+  // effect of that name. A submission the page does not confirm can still have gone through (seen live
+  // on 2026-11-14: the page stopped submitting without a result, and the effect was already in review),
+  // so it is looked up among the account's effects before it is reported unconfirmed, and never pressed
+  // a second time here.
   submitConfirm(args) {
     return this.withQuietWindows(() => this.runSubmitConfirm(args));
   },
@@ -368,20 +391,31 @@ const methods = {
     if (review.checks.some(checkPending)) throw Error(`SUBMIT_CHECKS_RUNNING: the page's checks were still running after ${PAGE_TIMING.checksMs} ms; call submit_confirm again later`);
     const failing = review.checks.filter((c) => !checkPassed(c));
     if (failing.length) throw Error(`SUBMIT_CHECKS_FAILED: ${failing.join(' | ')}; fix the effect and run submit_prepare again`);
+    let prior;
+    try {
+      prior = await liveEffect(this, name);
+    } catch (e) {
+      throw Error(`SUBMIT_LOOKUP_FAILED: the account's effects could not be read to rule out submitting 「${name}」 twice (${e.message}); nothing was pressed, call submit_confirm again`);
+    }
+    if (prior) {
+      throw Error(`SUBMIT_ALREADY_SUBMITTED: the account already has 「${name}」 (effect ${prior.effect_id}, ${prior.status_text || prior.status}, created ${prior.created_at}); nothing was pressed, close the window with submit_close`);
+    }
     const { ticked } = await run({ action: 'confirm', settle_ms: PAGE_TIMING.settleMs });
     const out = await submitOutcome(run);
-    const page = quote(out.toasts);
-    if (out.result && out.result.unreadable !== undefined) {
-      throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse; call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
-    }
-    if (out.result && out.result.effectId === undefined) {
-      throw Error(`SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}${page} (the submit window is left open)`);
-    }
-    if (!out.result && !out.submitted) {
-      if (out.timed_out) {
-        throw Error(`SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms${page}; it may still go through, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
+    let effectId = out.result ? String(out.result.effectId) : null;
+    let pageProblem = unconfirmed(out);
+    if (pageProblem) {
+      pageProblem += quote(out.toasts);
+      let found;
+      try {
+        found = await liveEffect(this, name);
+      } catch (e) {
+        throw Error(`${pageProblem}; reading the account's effects to see whether it went through anyway failed (${e.message}), so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
       }
-      throw Error(`SUBMIT_FAILED: the page stopped submitting without a result${page} (the submit window is left open)`);
+      if (!found) {
+        throw Error(`${pageProblem}; the account's newest ${RECENT_EFFECTS} effects have no 「${name}」 yet, but it may still show up, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)`);
+      }
+      effectId = found.effect_id;
     }
     let closed = true;
     let close_error;
@@ -393,13 +427,14 @@ const methods = {
     }
     return {
       submitted: true,
-      effect_id: out.result ? String(out.result.effectId) : null,
+      effect_id: effectId,
       name: review.name,
       trigger_hint: review.trigger_hint,
       agreement_ticked: ticked,
       success_text: out.success_text,
       needs_real_name: out.needs_real_name,
       window_closed: closed,
+      ...(pageProblem ? { page_problem: pageProblem } : {}),
       ...(close_error ? { close_error } : {}),
     };
   },

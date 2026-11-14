@@ -1307,4 +1307,4 @@ const METHODS = {
   douyin_hot_videos: 'douyinHotVideos',
 };
 
-module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, DOUYIN_APP_ID, request, requireId, str, first, iso, appEffectId, slimInspiration };
+module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, DOUYIN_APP_ID, FAILED_STATUSES, request, requireId, str, first, iso, appEffectId, slimInspiration };

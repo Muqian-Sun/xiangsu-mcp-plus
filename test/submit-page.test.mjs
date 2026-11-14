@@ -232,8 +232,9 @@ const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDe
 
 // A fake editor whose SubmitEffect opens a new window showing `page` (added to App._windows, as the
 // editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
-// evaluateJavascript, answers come back as orionJSB:// queries.
-function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], closes = true } = {}) {
+// evaluateJavascript, answers come back as orionJSB:// queries. `effects(n)` answers the n-th (from 0)
+// my_effects lookup with the account's newest effects.
+function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], closes = true, effects = () => [] } = {}) {
   const depths = [];
   const business = new Bus();
   const legacy = new Bus();
@@ -281,8 +282,10 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], cl
     return modules[n];
   });
   lib.submitChecks = async () => ({ ok: true, issues: [] });
+  const lookups = [];
+  lib.myEffects = async (args) => ({ items: effects(lookups.push(args) - 1) });
   const open = () => globalThis.App._windows.filter((w) => w.constructor.name === windowName && !w.isClosed);
-  return { lib, sources, handlers, open, depths, native };
+  return { lib, sources, handlers, open, depths, native, lookups };
 }
 
 const fill = { name: '测试特效名', trigger_hint: '张嘴试试', camera: 'back', inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' };
@@ -409,7 +412,11 @@ async function prepared(options, editorOptions) {
 }
 
 test('submit_confirm presses 提交审核 once, reads the effect id the page reports and closes the window', async () => {
-  const { page, lib, open, native } = await prepared();
+  const older = [
+    { effect_id: '6990', name: '测试特效名', status: 101, status_text: '审核未通过' },
+    { effect_id: '6980', name: '别的特效', status: 103, status_text: '已上线' },
+  ];
+  const { page, lib, open, native, lookups } = await prepared({}, { effects: () => older });
   const out = await lib.submitConfirm({ name: fill.name });
   assert.deepEqual(out, {
     submitted: true,
@@ -424,6 +431,28 @@ test('submit_confirm presses 提交审核 once, reads the effect id the page rep
   assert.equal(page.stats.presses, 1);
   assert.deepEqual(native, [[SUBMIT_REPORT, { effectId: '7001' }]], 'the report still reaches the editor');
   assert.equal(open().length, 0);
+  assert.deepEqual(lookups, [{ count: 10 }], 'one look at the account before pressing; a rejected effect of the same name does not stop it');
+});
+
+test('submit_confirm presses nothing when the account already has the effect in review or online', async () => {
+  const live = { effect_id: '92931061', name: '测试特效名', status: 100, status_text: '审核中', created_at: '2026-11-14T03:35:10.000Z' };
+  const twice = await prepared({}, { effects: () => [live] });
+  await assert.rejects(
+    twice.lib.submitConfirm({ name: fill.name }),
+    /SUBMIT_ALREADY_SUBMITTED: the account already has 「测试特效名」 \(effect 92931061, 审核中, created 2026-11-14T03:35:10.000Z\); nothing was pressed/,
+  );
+  assert.equal(twice.page.stats.presses, 0);
+  assert.equal(twice.open().length, 1);
+  const unread = await prepared(
+    {},
+    {
+      effects: () => {
+        throw Error('GET_MY_EFFECTS_FAILED');
+      },
+    },
+  );
+  await assert.rejects(unread.lib.submitConfirm({ name: fill.name }), /SUBMIT_LOOKUP_FAILED: .*\(GET_MY_EFFECTS_FAILED\); nothing was pressed/);
+  assert.equal(unread.page.stats.presses, 0);
 });
 
 test('submit_confirm ticks the agreement for an account that has not agreed', async () => {
@@ -455,24 +484,62 @@ test('submit_confirm presses nothing for a window filled for another name, or wh
   assert.equal(running.page.stats.presses, 0);
 });
 
-test('submit_confirm passes on the failure the page reports, with its toast, and leaves the window open', async () => {
-  const { page, lib, open, native } = await prepared({ report: 'fail' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试 \(the submit window is left open\)/);
+const NOT_LISTED = "; the account's newest 10 effects have no 「测试特效名」 yet, but it may still show up, so call ops_refresh and look at ops_works before submitting again (the submit window is left open)";
+
+test('submit_confirm passes on the failure the page reports, with its toast, once the account does not list the effect', async () => {
+  const { page, lib, open, native, lookups } = await prepared({ report: 'fail' });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试${NOT_LISTED}` });
   assert.deepEqual(native, [[SUBMIT_REPORT, { failReason: '服务繁忙' }]]);
   assert.equal(page.stats.presses, 1);
   assert.equal(open().length, 1);
+  assert.equal(lookups.length, 2, 'looked up before pressing and after the page failed');
 });
 
-test('submit_confirm fails when the page stops submitting without a report', async () => {
+test('submit_confirm reports an unknown outcome when the page stops submitting without a report', async () => {
   const { page, lib } = await prepared({ report: 'stop' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_FAILED: the page stopped submitting without a result; the page says: 网络异常/);
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; the page says: 网络异常，请检查网络后重试${NOT_LISTED}` });
   assert.equal(page.stats.presses, 1);
 });
 
 test('submit_confirm reports an unknown outcome when the page never answers, and does not press again', async () => {
   const { page, lib, open } = await prepared({ report: 'silent' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), /SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms; it may still go through, so call ops_refresh and look at ops_works/);
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms${NOT_LISTED}` });
   assert.equal(page.stats.presses, 1);
+  assert.equal(open().length, 1);
+});
+
+test('submit_confirm takes a submission the page did not confirm as done when the account lists it, and closes the window', async () => {
+  const live = { effect_id: '92931061', name: '测试特效名', status: 100, status_text: '审核中' };
+  for (const [report, problem] of [
+    ['stop', 'SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; the page says: 网络异常，请检查网络后重试'],
+    ['fail', 'SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试'],
+    ['silent', 'SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms'],
+  ]) {
+    const { page, lib, open } = await prepared({ report }, { effects: (n) => (n === 0 ? [] : [live]) });
+    const out = await lib.submitConfirm({ name: fill.name });
+    assert.equal(out.submitted, true, report);
+    assert.equal(out.effect_id, '92931061', report);
+    assert.equal(out.page_problem, problem);
+    assert.equal(out.window_closed, true, report);
+    assert.equal(open().length, 0, report);
+    assert.equal(page.stats.presses, 1, report);
+  }
+});
+
+test('submit_confirm says to check the dashboard when it cannot read the account after an unconfirmed submission', async () => {
+  const { lib, open } = await prepared(
+    { report: 'stop' },
+    {
+      effects: (n) => {
+        if (n > 0) throw Error('GET_MY_EFFECTS_FAILED');
+        return [];
+      },
+    },
+  );
+  await assert.rejects(
+    lib.submitConfirm({ name: fill.name }),
+    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\), so call ops_refresh and look at ops_works before submitting again \(the submit window is left open\)$/,
+  );
   assert.equal(open().length, 1);
 });
 
