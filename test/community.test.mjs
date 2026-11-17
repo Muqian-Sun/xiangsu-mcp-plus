@@ -1875,3 +1875,81 @@ test('my_task_status reads 我的作品 of every received task, in order, and co
   assert.equal(out.items[1].icon_url, 'https://cdn/c.png');
 });
 
+
+// Trimmed from the 实时热点 and 热点详情 answers (2026-11-09).
+const HOT_LIST = {
+  t: 3000,
+  c: 20,
+  v: '20261109162500',
+  ls: [
+    { id: '2735474', n: '今天是太阳雨纯爱党天菜', r: 1, cs: ['娱乐'], h_v: '763万', t: 2, v: '20261109162500' },
+    { id: '2734604', n: '你到底喜不喜欢我卡点', r: 2, cs: ['站内玩法'], h_v: '761万', t: 3, v: '20261109162000' },
+  ],
+};
+const HOT_DETAIL = {
+  id: '2734604',
+  n: '你到底喜不喜欢我卡点',
+  o_at: '11-07 17:50',
+  b_s_text: '',
+  b_e_text: '上线特效0个，等级特效0个',
+  d_ts: [
+    { date: '2026-11-06', h_v: '0', h_v_text: '0' },
+    { date: '2026-11-07', h_v: '4569413', h_v_text: '456万' },
+  ],
+  h_ts: [{ date: '2026-11-09 16:00', h_v: '7614155', h_v_text: '761万' }],
+  co_st: 0,
+  tag_name: '站内玩法',
+};
+const HOT_ROUTES = {
+  'GET /effectcam/v1/real_time_hots': ok(HOT_LIST),
+  'GET /effectcam/v1/hot_detail': ok(HOT_DETAIL),
+};
+
+test("douyin_hot_list reads the 实时热点 list and keeps each entry's t and v for its detail", async () => {
+  const { lib, to } = setup(HOT_ROUTES);
+  assert.deepEqual(await lib.douyinHotList(), {
+    updated_at: '2026-11-09T08:25:00.000Z',
+    items: [
+      { hot_id: '2735474', rank: 1, name: '今天是太阳雨纯爱党天菜', categories: ['娱乐'], heat_text: '763万' },
+      { hot_id: '2734604', rank: 2, name: '你到底喜不喜欢我卡点', categories: ['站内玩法'], heat_text: '761万' },
+    ],
+    raw: [
+      { t: 2, v: '20261109162500' },
+      { t: 3, v: '20261109162000' },
+    ],
+  });
+  assert.deepEqual(to('/effectcam/v1/real_time_hots')[0].query, {});
+  const empty = setup({ 'GET /effectcam/v1/real_time_hots': noData });
+  assert.deepEqual(await empty.lib.douyinHotList(), { updated_at: null, items: [], raw: [] });
+});
+
+test("douyin_hot_detail reads a hotspot's heat by day and hour and its effect counts", async () => {
+  const { lib, to } = setup(HOT_ROUTES);
+  assert.deepEqual(await lib.douyinHotDetail({ hot_id: '2734604', t: 3, v: '20261109162000' }), {
+    hot_id: '2734604',
+    name: '你到底喜不喜欢我卡点',
+    category: '站内玩法',
+    listed_at_text: '11-07 17:50',
+    effects_text: '上线特效0个，等级特效0个',
+    effects: 0,
+    effects_leveled: 0,
+    status_text: null,
+    days: [
+      { at: '2026-11-06', heat: 0, heat_text: '0' },
+      { at: '2026-11-07', heat: 4569413, heat_text: '456万' },
+    ],
+    hours: [{ at: '2026-11-09 16:00', heat: 7614155, heat_text: '761万' }],
+    unread: { co_st: 0 },
+  });
+  assert.deepEqual(to('/effectcam/v1/hot_detail')[0].query, { id: '2734604', t: '3', v: '20261109162000', d: '' });
+  await assert.rejects(lib.douyinHotDetail({ t: 3, v: 'x' }), /INVALID_HOT_ID/);
+});
+
+test('douyin_hot_detail counts the effects the site already has, and answers null when the text is absent', async () => {
+  const some = setup({ ...HOT_ROUTES, 'GET /effectcam/v1/hot_detail': ok({ ...HOT_DETAIL, b_e_text: '上线特效3个，等级特效1个' }) });
+  const d = await some.lib.douyinHotDetail({ hot_id: '2734604', t: 3, v: '20261109162000' });
+  assert.deepEqual([d.effects, d.effects_leveled], [3, 1]);
+  const none = setup({ ...HOT_ROUTES, 'GET /effectcam/v1/hot_detail': ok({ ...HOT_DETAIL, b_e_text: '' }) });
+  const e = await none.lib.douyinHotDetail({ hot_id: '2734604', t: 3, v: '20261109162000' });
+  assert.deepEqual([e.effects, e.effects_leveled, e.effects_text], [null, null, null]);
+});
