@@ -44,6 +44,8 @@ const OWN = [
   'custom_gan_submit',
   'custom_gan_tasks',
   'custom_gan_train',
+  'douyin_hot_detail',
+  'douyin_hot_list',
   'effect_check',
   'effect_detail',
   'effect_search',

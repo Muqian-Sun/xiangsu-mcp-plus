@@ -1117,7 +1117,7 @@ export function createServer(deps = {}) {
     {
       name: 'rank_hotspots',
       refs: true,
-      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。',
+      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。抖音全站的实时热榜见 douyin_hot_list。',
       shape: { ...target, ...pageShape },
       run: community('rank_hotspots'),
     },
@@ -1282,7 +1282,7 @@ export function createServer(deps = {}) {
     {
       name: 'brief_today',
       description:
-        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 按选题流程写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话；focus 每个方向倒推自哪几个爆款 from_hits、人为什么想玩 interest（四类之一）、借的像塑热点 hotspot 和怎么放进钩子 angle、赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid、候选绑定 bind（tasks 任务标题、inspirations 灵感标题、check 绑之前要逐条对上的要求；标题都是输入里有的，绑前照样用 tasks_open / task_requirements / inspirations_new 核对）；avoid 别做的赛道；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。more 写了选题时按什么顺序细看：hit_reasons → hot_topics、topic_crowd → track_board、pick_samples、failure_lessons → tasks_open、task_requirements、inspirations_new。',
+        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 按选题流程写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话；focus 每个方向倒推自哪几个爆款 from_hits、人为什么想玩 interest（四类之一）、借的热点 hotspot（抖音热榜或像塑热点）和怎么放进钩子 angle、赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid、候选绑定 bind（tasks 任务标题、inspirations 灵感标题、check 绑之前要逐条对上的要求；标题都是输入里有的，绑前照样用 tasks_open / task_requirements / inspirations_new 核对）；avoid 别做的赛道；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；抖音热榜前 6 个 douyin（重点方向，只给分类里有「站内玩法」的、和做特效有关的：名称、分类、热度、走势 trend）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。more 写了选题时按什么顺序细看：douyin_hot_list → hit_reasons → hot_topics、topic_crowd → track_board、pick_samples、failure_lessons → tasks_open、task_requirements、inspirations_new。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
@@ -1318,7 +1318,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'hot_topics',
-      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度 heat、和约一天前比的热度涨落 heat_delta 和名次涨落 rank_delta、刚上榜 is_new、站内同题材的特效和模板 crowd（matched 几个、effects、templates、投稿最高的几个 top，每天按热点标题搜一次）、label（扎堆：同题材 6 个以上；还早：2 个以下又在涨；有人做；没查），前 10 个带热点下的灵感（标题、标签、玩法说明）；rising 是一天涨得最快的 5 个 topic_id。只有像塑自己的热点，不含站外热榜。',
+      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度 heat、和约一天前比的热度涨落 heat_delta 和名次涨落 rank_delta、刚上榜 is_new、站内同题材的特效和模板 crowd（matched 几个、effects、templates、投稿最高的几个 top，每天按热点标题搜一次）、label（扎堆：同题材 6 个以上；还早：2 个以下又在涨；有人做；没查），前 10 个带热点下的灵感（标题、标签、玩法说明）；rising 是一天涨得最快的 5 个 topic_id。只有像塑自己的热点；抖音热榜（重点方向，只列站内玩法分类的）用 douyin_hot_list。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/hotspots')),
     },
@@ -1327,6 +1327,20 @@ export function createServer(deps = {}) {
       description: '我们绑过、还没截止的任务（运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tasks')),
+    },
+    {
+      name: 'douyin_hot_list',
+      description:
+        '抖音热榜（运营平台 /api/agent/douyin-hot，每小时取一版；重点方向：我们发到抖音，抖音会推我们的视频）：只列和做特效有关的，判据是分类 categories 里有「站内玩法」（抖音标的玩法类热点，如 2026-11-17 榜上的「茉茉手势舞」「在美术馆和另一个自己同框了」）；分类里没有站内玩法的（只标了娱乐、时尚、话题互动、二次元等）不给。updated_at 榜单版本时间、at 取到的时间、total 榜上一共几条、related 其中站内玩法分类的几条；items 按名次，每个有 hot_id、名次 rank、名称 name、分类 categories、热度 heat_text、走势 trend（up 在涨、down 在落、new 刚上榜、flat 平，没取到详情为 null）、上榜时间 listed_at，站内已有特效 effects 和等级特效 effects_leveled 只作参考（实测一直是 0，不能说明有没有人做，查扎不扎堆用 topic_crowd）。不用开编辑器。看一个热点的热度曲线用 douyin_hot_detail；像塑自己的热点用 hot_topics。',
+      shape: {},
+      run: async () => text(await d.platformRequest('/api/agent/douyin-hot')),
+    },
+    {
+      name: 'douyin_hot_detail',
+      description:
+        '一条抖音热点的详情（运营平台 /api/agent/douyin-hot/:hot_id）：名次、名称、分类、热度、走势 trend、上榜时间 listed_at、和做特效有关没有 related（分类里有站内玩法）、站内已有特效 effects 和等级特效 effects_leveled（只作参考）、第一次看到的时间 first_seen_at，以及平台原样的 detail（按天 days 和按小时 hours 的热度点、effects_text、status_text）。hot_id 取 douyin_hot_list 的。',
+      shape: { hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
+      run: async ({ hot_id }) => text(await d.platformRequest(`/api/agent/douyin-hot/${hot_id}`)),
     },
     {
       name: 'hit_reasons',

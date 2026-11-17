@@ -1,8 +1,8 @@
 // The operations platform (xiangsu.muqian.chat, repo 运营平台) collects the account's effect list and messages
-// every 10 minutes, the data cards hourly and the platform's picks, 像塑 hotspots and tasks daily, and works them into
-// conclusions. The agent tools (pipeline_works, account_status, changes_since, brief_today, track_board, pick_samples,
-// failure_lessons, hot_topics, task_usage …) read its read-only /api/agent/* endpoints with its token; the old
-// dashboard's ops_* tools were retired once the platform covered them (2026-11-14).
+// every 10 minutes, the data cards and the 抖音 hot list hourly and the platform's picks, 像塑 hotspots and tasks
+// daily, and works them into conclusions. The agent tools (pipeline_works, account_status, changes_since, brief_today,
+// douyin_hot_list, track_board, pick_samples, failure_lessons, hot_topics, task_usage …) read its read-only
+// /api/agent/* endpoints with its token; the old dashboard's ops_* tools were retired once the platform covered them (2026-11-14).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

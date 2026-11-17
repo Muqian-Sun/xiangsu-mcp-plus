@@ -67,6 +67,8 @@ test('each platform tool reads its endpoint without opening the editor', async (
   await call('pick_samples', { track: '脸控游戏', kind: 'effect', days: 14, limit: 5 });
   await call('failure_lessons');
   await call('hot_topics');
+  assert.deepEqual(await call('douyin_hot_list'), { pathname: '/api/agent/douyin-hot' });
+  await call('douyin_hot_detail', { hot_id: '2734604' });
   await call('task_usage');
   await call('hit_reasons');
   await call('inspirations_new');
@@ -88,6 +90,8 @@ test('each platform tool reads its endpoint without opening the editor', async (
     ['GET', `/api/agent/picks?${new URLSearchParams({ track: '脸控游戏', kind: 'effect', days: '14', limit: '5' })}`, undefined],
     ['GET', '/api/agent/lessons', undefined],
     ['GET', '/api/agent/hotspots', undefined],
+    ['GET', '/api/agent/douyin-hot', undefined],
+    ['GET', '/api/agent/douyin-hot/2734604', undefined],
     ['GET', '/api/agent/tasks', undefined],
     ['GET', '/api/agent/hits', undefined],
     ['GET', '/api/agent/inspirations', undefined],
@@ -101,7 +105,7 @@ test('each platform tool reads its endpoint without opening the editor', async (
   assert.equal((await client.callTool({ name: 'pick_samples', arguments: { kind: 'video' } })).isError, true, 'kind is effect or template');
   assert.equal((await client.callTool({ name: 'task_requirements', arguments: { item_id: '1/../x' } })).isError, true, 'item_id must be digits');
   assert.equal((await client.callTool({ name: 'inspirations_find', arguments: { kind: 'video' } })).isError, true, 'kind is one of three');
-  assert.equal(seen.length, 20);
+  assert.equal(seen.length, 22);
 });
 
 test('topic_crowd hands the word to the platform and polls until the search is done, giving up after a minute', async () => {
