@@ -16,7 +16,7 @@
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划官方精选），用编辑器里登录的账号读取；可收藏灵感、领取任务。
 - 看别人的特效、学做法：像塑移动版的全平台搜索（特效、模板、灵感、教程），任意特效的详情（等级、受众、平台判定的类型、用到的编辑器能力、作者）和用它拍的热门视频，排行榜上没分享工程的特效找「做同款」指向的首页工程；官方教程和官方拍摄脚本。
-- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（从爆款倒推的为什么想玩、AI 写的主攻赛道建议、赛道表、入选样例、失败经验、热点的涨落和扎堆、新灵感和新任务、任务占用）和查题材扎不扎堆，都从运营平台（`xiangsu.muqian.chat`，作品和站内信每 10 分钟、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`hot_topics`、`task_usage`。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
+- 运营数据：自己作品的审核状态和驳回原因、精选进度（进没进精选审核、首轮 / 二审 / 结果、按我们历史估的出结果时间）、作品数据和按天趋势、收益、账号和等级、站内信、拍视频激励、从上次告诉用户以来的变化，以及给选方向用的开工简报（从爆款倒推的为什么想玩、AI 写的主攻赛道建议、赛道表、入选样例、失败经验、像塑热点的涨落和扎堆、抖音热榜里和做特效有关的、新灵感和新任务、任务占用）和查题材扎不扎堆，都从运营平台（`xiangsu.muqian.chat`，作品和站内信每 10 分钟、抖音热榜每小时、市场数据每天取一次）的只读接口读：`pipeline_*`、`account_status`、`changes_*`、`brief_today`、`track_board`、`pick_samples`、`failure_lessons`、`douyin_hot_list`、`hot_topics`、`task_usage`。抖音热榜是重点方向（我们发到抖音，抖音会推我们的视频），平台只把分类里有「站内玩法」的热点（和做特效有关的）给 agent。原来直接从编辑器读账号数据的 13 个工具 2026-11-13 下架，旧版看板的 `ops_*` 2026-11-14 下架；插件里对应的取数函数还在，运营平台部署时复用它们。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
 - 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。本服务开的窗口一律最小化在程序坞里、不抢前台（见下文约定）。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
@@ -87,7 +87,9 @@
 | `track_board` | 运营平台：全部赛道（细分类型）平台近 30 天 / 7 天精选数，我们做了几个、进审、入选、落选、进审率，最近入选的样例和用到的能力 |
 | `pick_samples` | 运营平台：官方精选作品明细，按赛道、类型、最近几天筛 |
 | `failure_lessons` | 运营平台：全部失败经验（驳回、测试未通过、精选落选、首轮没过、没进审），每条带平台原话、次数、涉及作品 |
-| `hot_topics` | 运营平台：像塑热点，和一天前比的涨落、站内同题材几个、扎堆还是还早，和每个热点下的灵感（只有像塑自己的热点，不含站外热榜） |
+| `douyin_hot_list` | 运营平台：抖音热榜（重点方向，我们发到抖音、抖音会推我们的视频），只列和做特效有关的——分类里有「站内玩法」的，带名次、分类、热度、走势、上榜时间，站内已有特效数只作参考 |
+| `douyin_hot_detail` | 运营平台：一条抖音热点的详情，上榜时间、按天和按小时的热度、站内已有特效数（参考） |
+| `hot_topics` | 运营平台：像塑热点，和一天前比的涨落、站内同题材几个、扎堆还是还早，和每个热点下的灵感（只有像塑自己的热点；抖音热榜用 `douyin_hot_list`） |
 | `inspirations_find` | 运营平台：按题材词在全部挂着的灵感里找（【创新】、热点下的、普通的），带玩法说明、激励截止和要同时绑的任务 |
 | `inspirations_new` | 运营平台：新出现的灵感和现在挂着的【创新】灵感，带玩法说明、激励截止和要同时绑的任务、奖励和前 3 张参考图 |
 | `tasks_open` | 运营平台：活动中心没截止的全部任务，发布、截止、领没领、同类型条款、要对上的要求原文、我们放了哪些作品 |
@@ -156,7 +158,7 @@
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_ref` / `gif_ref` → `works_download` → 按返回的 `outline.key_files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，和用户确认后 `submit_confirm`（同一个 `name`）送审，看返回的 `effect_id` 和 `listed`。要参加任务的，`tasks_list` → `task_receive` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
-- 出方向：先 `hit_reasons` 看头部做的是什么、用户怎么拍、为什么想玩（封面交给 `image_view`）→ 带着这些找热点：`hot_topics` 看像塑热点的涨落和扎堆，`topic_crowd` 查候选题材在站内扎不扎堆 → `track_board`、`pick_samples` 对照精选 → 绑任务和灵感：`tasks_open` 的 `requirements`（全文 `task_requirements`）和 `inspirations_find`（全部挂着的灵感，按题材词找）的 `detail` 逐条对上要求才绑。
+- 出方向：先 `douyin_hot_list` 看抖音热榜里站内玩法分类的热点（重点方向）和 `hit_reasons` 看头部做的是什么、用户怎么拍、为什么想玩（封面交给 `image_view`）→ 带着这些找热点：`hot_topics` 看像塑热点的涨落和扎堆，`topic_crowd` 查候选题材在站内扎不扎堆 → `track_board`、`pick_samples` 对照精选 → 绑任务和灵感：`tasks_open` 的 `requirements`（全文 `task_requirements`）和 `inspirations_find`（全部挂着的灵感，按题材词找）的 `detail` 逐条对上要求才绑。
 - 找选题：`rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects_search`（`keyword="测一测"`）或 `rank_subjects`（`kind="template"`）看各期主题榜，`rank_subject_detail` 看一个榜的全部特效；`rank_hotspots` → `hotspot_inspirations` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 或 `same_style` 的用返回的 `template_id` 走 `works_download` / `works_open`（`same_style` 下载到的是 `same_style` 里那个特效的工程，不是榜上这个特效本身的）。
 - 拆别人的爆款：`rank_list` 或 `effect_search`（如「美妆」）→ `effect_detail` 看受众、平台判定的类型和用了哪些编辑器能力 → `effect_videos` 看别人怎么拍、标题怎么写（`image_view` 拿视频地址）→ `works_by_effect` 找能下载的工程。
