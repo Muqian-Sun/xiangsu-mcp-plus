@@ -10,7 +10,7 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_TEXT = 500;
 
 export class CallLog {
-  constructor({ stateDir = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), now = () => new Date() } = {}) {
+  constructor({ stateDir = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus'), now = () => new Date() } = {}) {
     this.file = path.join(stateDir, 'logs', 'server.log');
     this.now = now;
   }

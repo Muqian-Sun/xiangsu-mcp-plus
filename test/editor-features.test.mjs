@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const STATE = tmpdir('xs-state-');
-process.env.XIANGSU_MCP_EXT_STATE = STATE;
+process.env.XIANGSU_MCP_PLUS_STATE = STATE;
 const { Library, M, CONFIG_PATH, MAX_MENU_PREVIEW } = require('../editor-plugin/library.cjs');
 
 class FaceWarpXItem {
@@ -334,7 +334,7 @@ test('project_launch asks the home process to open or create, validating the tar
   assert.deepEqual(calls.launched.map((c) => [c.op, c.p]), [['openLocal', projectDir], ['createNew', undefined]]);
   await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: 'relative' }), /INVALID_PATH/);
   await lib.projectLaunch({ operation: 'openTemplate', path: projectDir, template_id: 77 });
-  assert.deepEqual({ ...calls.launched.at(-1) }, { op: 'openTemplate', p: projectDir, extra: { enter_method: 'xiangsu_mcp_ext', template_id: '77' } });
+  assert.deepEqual({ ...calls.launched.at(-1) }, { op: 'openTemplate', p: projectDir, extra: { enter_method: 'xiangsu_mcp_plus', template_id: '77' } });
 });
 
 test('project_launch passes task activity fields as launch extras and validates them', async () => {

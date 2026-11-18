@@ -18,7 +18,7 @@ const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
 PAGE_TIMING.closeMs = 300;
 
 // How many tool calls that keep windows off screen (quiet.cjs) are running in this process.
-const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDepth ?? 0;
+const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-plus.quiet')]?.toolDepth ?? 0;
 
 class Bus {
   constructor() {

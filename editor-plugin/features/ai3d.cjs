@@ -216,7 +216,7 @@ const methods = {
     await this.ai3dRunningCheck('animation');
     const root = this.ai3dConst().AIGen3DFolder;
     fs.mkdirSync(root, { recursive: true });
-    const dir = fs.mkdtempSync(path.join(root, 'xiangsu-mcp-ext-upload-'));
+    const dir = fs.mkdtempSync(path.join(root, 'xiangsu-mcp-plus-upload-'));
     try {
       const cover = path.join(dir, 'cover.png');
       this.mod(M.preview).PreviewManager.getInstance().getFirstNonBlackFrame(video_path, cover);

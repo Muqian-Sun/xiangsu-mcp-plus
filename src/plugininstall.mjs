@@ -1,4 +1,4 @@
-// Installs the XiangsuMcpExt editor plugin into 像塑's local plugin folder on macOS. The plugin's
+// Installs the XiangsuMcpPlus editor plugin into 像塑's local plugin folder on macOS. The plugin's
 // index.js requires editor-plugin/runtime.cjs by absolute path, so that code must stay where it is:
 // a package run from npx's cache is copied to the state directory first.
 import fs from 'node:fs';
@@ -7,11 +7,11 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const PLUGIN_NAME = 'XiangsuMcpExt';
+export const PLUGIN_NAME = 'XiangsuMcpPlus';
 const PLUGIN_VERSION = '0.3.0';
 const MARKER = 'install.json';
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus');
 
 // The editor loads plugins from a folder per editor version, which exists once 像塑 has run.
 export function editorPluginRoot(appRoot = process.env.XIANGSU_APP ?? '/Applications/Douyin AR.app') {
@@ -71,8 +71,10 @@ export function ensurePlugin({ pluginRoot = editorPluginRoot(), pkgRoot = PKG_RO
 
   const code = stableCode(pkgRoot, version, stateRoot);
   const removed = [];
+  // Also drop the pre-rename XiangsuMcpExt folders so one machine does not load two bridges.
+  const dropNames = new Set([PLUGIN_NAME, 'XiangsuMcpExt']);
   for (const entry of fs.readdirSync(pluginRoot)) {
-    if (entry.split('@')[0] === PLUGIN_NAME) {
+    if (dropNames.has(entry.split('@')[0])) {
       fs.rmSync(path.join(pluginRoot, entry), { recursive: true, force: true });
       removed.push(entry);
     }
@@ -94,7 +96,7 @@ module.exports = class {
   );
   fs.writeFileSync(
     path.join(dest, 'plugin.manifest.json'),
-    JSON.stringify({ name: PLUGIN_NAME, version: PLUGIN_VERSION, description: 'Local RPC bridge for xiangsu-mcp-ext', requirements: { orionSDK: '', apis: {} }, entry: 'index.js', builderVersion: 1 }, null, 2),
+    JSON.stringify({ name: PLUGIN_NAME, version: PLUGIN_VERSION, description: 'Local RPC bridge for xiangsu-mcp-plus', requirements: { orionSDK: '', apis: {} }, entry: 'index.js', builderVersion: 1 }, null, 2),
   );
   fs.writeFileSync(path.join(dest, MARKER), JSON.stringify({ package: name, version, code }, null, 2));
 
@@ -104,7 +106,7 @@ module.exports = class {
     list = readJson(listPath);
     fs.copyFileSync(listPath, `${listPath}.bak-${Date.now()}`);
   }
-  list.plugins = (list.plugins || []).filter((p) => p.name !== PLUGIN_NAME);
+  list.plugins = (list.plugins || []).filter((p) => p.name !== PLUGIN_NAME && p.name !== 'XiangsuMcpExt');
   list.plugins.push({ name: PLUGIN_NAME, version: PLUGIN_VERSION, loadOnStartup: true });
   fs.writeFileSync(listPath, JSON.stringify(list, null, 2));
 

@@ -17,7 +17,7 @@ async function rpc(body, session) {
 
 const [tool, raw] = process.argv.slice(2);
 const imageDir = runImageDir('xs-official-call');
-const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'xiangsu-mcp-ext-dev', version: '0.1.0' } } });
+const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'xiangsu-mcp-plus-dev', version: '0.1.0' } } });
 await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }, init.session);
 const out = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool, arguments: raw ? JSON.parse(raw) : {} } }, init.session);
 if (out.body?.error) {

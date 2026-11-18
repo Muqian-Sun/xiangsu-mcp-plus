@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
+process.env.XIANGSU_MCP_PLUS_STATE = tmpdir('xs-state-');
 const { Library, M } = require('../editor-plugin/library.cjs');
 
 const ID = { Image: '7488219358821416986', Video: '7492709644196986918', Animation: '7596953578066034714' };

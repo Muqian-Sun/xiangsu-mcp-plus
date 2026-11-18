@@ -33,7 +33,7 @@ const methods = {
       if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) throw Error(`INVALID_PATH: ${operation} needs an absolute project folder`);
       if (!fs.existsSync(path.join(projectPath, 'effect.dyehpj'))) throw Error(`NOT_A_PROJECT: ${projectPath} has no effect.dyehpj`);
     }
-    const extra = { enter_method: 'xiangsu_mcp_ext' };
+    const extra = { enter_method: 'xiangsu_mcp_plus' };
     if (operation === 'openTemplate' && template_id !== undefined) extra.template_id = String(template_id);
     if (activity !== undefined) {
       const keys = ['activity_id', 'activity_name', 'activity_enter_from', 'activity_type', 'task_type'];

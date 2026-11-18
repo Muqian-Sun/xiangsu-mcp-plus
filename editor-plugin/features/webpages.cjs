@@ -3,8 +3,8 @@
 // Scripts are run in them through the window's webview and answer through the window's JS bridge, which
 // hands page queries (orionJSB://<scope>/<method>?<params>) to the handlers registered for that scope.
 
-const BRIDGE_SCOPE = 'XiangsuMcpExt';
-const SOURCE_URL = 'orion://inject/xiangsu-mcp-ext';
+const BRIDGE_SCOPE = 'XiangsuMcpPlus';
+const SOURCE_URL = 'orion://inject/xiangsu-mcp-plus';
 // Picked, not measured beyond the live runs on 2026-11-07, where every page script answered within 3 s.
 const CALL_TIMEOUT_MS = 15000;
 

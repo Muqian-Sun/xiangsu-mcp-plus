@@ -43,7 +43,7 @@ function markValid(key) {
 // Per process, across library reloads: the editor functions wrapped (so a reload wraps them, not the
 // previous wrappers), whether this process's project was opened by the MCP server, how many tool calls
 // that open windows are running.
-const STATE = Symbol.for('xiangsu-mcp-ext.quiet');
+const STATE = Symbol.for('xiangsu-mcp-plus.quiet');
 const state = () => (globalThis[STATE] ||= { originals: null, marked: false, toolDepth: 0 });
 
 function editWindow(lib) {

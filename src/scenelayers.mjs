@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { loadScene } from './scenefile.mjs';
 
-const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus');
 const ENTITY = '  - __class: Entity';
 const LAYER = /^    layer: (\d+)$/;
 const MASK = /^(        layerVisibleMask: \{__class: DynamicBitset, numBits: )(\d+)(, values: \[)([^\]]*)(\]\})$/;

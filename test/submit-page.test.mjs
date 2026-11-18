@@ -228,7 +228,7 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
 }
 
 // How many tool calls that keep windows off screen (quiet.cjs) are running in this process.
-const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-ext.quiet')]?.toolDepth ?? 0;
+const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-plus.quiet')]?.toolDepth ?? 0;
 
 // A fake editor whose SubmitEffect opens a new window showing `page` (added to App._windows, as the
 // editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
