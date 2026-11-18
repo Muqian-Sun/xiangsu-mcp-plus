@@ -25,8 +25,16 @@ export class CallLog {
     }
   }
 
-  call({ tool, ms, result, error, progress }) {
+  call({ tool, ms, result, error, progress, via, query, total }) {
     const text = error ?? (result && result.isError ? result.content?.[0]?.text : undefined);
-    this.write({ tool, ms, ok: text === undefined, ...(text === undefined ? {} : { error: String(text).slice(0, MAX_TEXT) }), progress });
+    this.write({
+      tool,
+      ...(via ? { via } : {}),
+      ...(query !== undefined ? { query, total } : {}),
+      ms,
+      ok: text === undefined,
+      ...(text === undefined ? {} : { error: String(text).slice(0, MAX_TEXT) }),
+      progress,
+    });
   }
 }

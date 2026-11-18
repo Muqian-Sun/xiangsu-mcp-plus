@@ -133,7 +133,7 @@ test('topic_crowd hands the word to the platform and polls until the search is d
 });
 
 test('the old dashboard tools are gone: every ops_* tool moved to the platform', async () => {
-  const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
+  const client = await connect({ flatTools: true, listInstances: () => [], callPlugin: async () => ({}) });
   const names = (await client.listTools()).tools.map((t) => t.name);
   assert.deepEqual(names.filter((n) => n.startsWith('ops_')), []);
 });

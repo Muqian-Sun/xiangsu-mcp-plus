@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import QRCode from 'qrcode';
 import { PNG } from 'pngjs';
+import { loadImage as loadCanvasImage } from '@napi-rs/canvas';
 import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp, OfficialUnreachable } from './official.mjs';
@@ -21,7 +22,7 @@ import { prepareIcon } from './icons.mjs';
 import { BLEND_MODES, dropUnset, formatObjects, formatTree, pickInspect, resolveComponentRefs, resolveObject, resolveRefs, sceneObjects } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers, pixelStats } from './makeup.mjs';
-import { DETAIL_SIGMA, decodePng, frameDiff, pixelBox, regionStats, sideBySide } from './measure.mjs';
+import { DETAIL_SIGMA, decodePng, frameDiff, lightMetrics, lightMetricsPreview, lightPresetRegions, pixelBox, regionStats, sideBySide } from './measure.mjs';
 import { FRAMES_TTL_MS, cropImage, framesDir, jpegToPng, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
@@ -33,6 +34,10 @@ import { DEFAULT_FONT } from './editorres.mjs';
 import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
 import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
 import { setSceneLayers } from './scenelayers.mjs';
+import { DIRECT_TOOLS, searchTools, withHiddenToolHints } from './tool-catalog.mjs';
+import { buildImageSheet } from './imagesheet.mjs';
+import { cropBuffer, exportAudio, imageMetaFromPng, isVideoPath, probeAudio, videoContactSheet } from './mediainfo.mjs';
+import { buildH5Bundle, subsetH5Font } from './h5.mjs';
 
 const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE, CUSTOM_GAN_SELECT_COUNT, IMAGE_MATTING_PARTS } = createRequire(
   import.meta.url,
@@ -266,9 +271,16 @@ class Seen {
 }
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
-const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs 字段，如 img:12、video:3）。看图时把引用放进 image_view 的 images 数组（参数名就是 images，如 images: ["img:12", "img:13"]）：图片直接显示，视频和音频返回原地址；引用在 MCP 服务这次运行期间有效。';
+const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs 字段，如 img:12、video:3）。看图/看视频画面时把引用放进 image_view 的 images 数组（参数名就是 images，如 images: ["img:12", "video:3"]）：图片直接显示并带宽高（PNG 含透明边界），视频抽 3×2 帧网格预览；音频探测与裁切用 audio_probe。引用在 MCP 服务这次运行期间有效。';
 const KIND_TEXT = { video: '视频', audio: '音频' };
+const cropBox = z.strictObject({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().gt(0).max(1),
+  height: z.number().gt(0).max(1),
+});
 const failure = (error) => ({ content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true });
+const invalidArguments = (name, error) => failure(`INVALID_ARGUMENTS(${name}): ${error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`);
 
 async function imageContent(d, { url, file }) {
   try {
@@ -283,6 +295,7 @@ const TOPIC_POLL_MS = 3000;
 const TOPIC_WAIT_MS = 60000;
 
 export function createServer(deps = {}) {
+  const flatTools = deps.flatTools ?? (process.env.XIANGSU_MCP_FLAT_TOOLS === '1');
   const d = {
     callPlugin,
     listInstances,
@@ -316,7 +329,13 @@ export function createServer(deps = {}) {
     progressMs: PROGRESS_MS,
     ...deps,
   };
-  const server = new Server({ name: 'xiangsu-mcp-ext', version: VERSION }, { capabilities: { tools: { listChanged: true } } });
+  const server = new Server(
+    { name: 'xiangsu-mcp-ext', version: VERSION },
+    {
+      capabilities: { tools: { listChanged: true } },
+      instructions: flatTools ? undefined : '常用像塑工具可直接调用。其它官方和扩展工具用 tool_search 查名字，tool_describe 查完整参数，然后用 tool_call 传原工具名和 arguments。已知原工具名时可直接查参数。',
+    },
+  );
   d.official = d.official ?? new OfficialMcp();
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
@@ -580,33 +599,280 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_view',
-      description: `查看图片。列表类工具（素材、作品、灵感、任务、排行榜、音乐等）返回的是短引用 *_ref / *_refs（如 img:12），详情类工具（inspiration_detail 的 images、menu_list details 的 image_url）返回地址，都放进参数 images（数组，如 images: ["img:12", "https://…"]；没有 ref / refs / url 参数）；也可以传本机图片文件的绝对路径（如 menu_list details 的 image_file）。视频和音频引用（video:3、audio:5）看不了画面，返回它的原地址。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
-      shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('其它工具返回的引用（img:12）、http(s) 图片地址，或本机图片文件的绝对路径。') },
-      run: async ({ images }) => {
+      description: `查看图片或视频画面。列表类工具返回的短引用 *_ref / *_refs（如 img:12、video:3），详情类工具的地址，或本机绝对路径，都放进参数 images。图片直接显示，说明里带 width×height（PNG 另给非透明像素边界 alpha_bbox）；视频引用 / 视频 URL / 本地 .mp4|.mov|.webm 用像塑自带 ffprobe+ffmpeg 返回媒体信息，并给一张均匀抽帧的 3×2 网格预览（角标为秒数）。音频引用请改用 audio_probe。可选 crop 按 0–1 比例裁剪返回的画面。一次最多 ${IMAGE_VIEW_MAX} 项；单项失败只在该项写明原因；体积过大时没给的列在 not_returned。`,
+      shape: {
+        images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('img:/video: 引用、http(s) 地址，或本机图片/视频绝对路径。'),
+        crop: cropBox.optional().describe('按画面比例（0–1）裁剪每张返回的画面；视频网格也会裁。'),
+      },
+      run: async ({ images, crop }) => {
         const content = [];
         let bytes = 0;
         let shown = 0;
-        for (const src of images) {
-          const hit = REF_PATTERN.test(src) ? d.refs.get(src) : null;
-          if (REF_PATTERN.test(src) && (!hit || hit.kind !== 'image')) {
-            const said = hit ? `${src} 是${KIND_TEXT[hit.kind]}，看不了画面，原地址：${hit.url}` : `图片读取失败：引用 ${src} 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具`;
-            content.push({ type: 'text', text: `第 ${shown + 1} 张：${src}` }, { type: 'text', text: said });
-            shown++;
-            continue;
+        const cleanups = [];
+        const materialize = async (where, hintExt) => {
+          if (/^https?:\/\//.test(where)) {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-iv-'));
+            const ext = hintExt || path.extname(new URL(where).pathname) || '.bin';
+            const file = path.join(dir, `m${ext}`);
+            const res = await fetch(where, { signal: AbortSignal.timeout(30000) });
+            if (!res.ok) throw Error(`HTTP ${res.status}`);
+            fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+            cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+            return file;
           }
-          const where = hit ? hit.url : src;
-          const remote = /^https?:\/\//.test(where);
-          const img =
-            remote || path.isAbsolute(where) ? await imageContent(d, remote ? { url: where } : { file: where }) : { type: 'text', text: '图片读取失败：不是引用、http(s) 地址或绝对路径' };
-          const size = img.data ? img.data.length : 0;
-          if (shown && bytes + size > IMAGE_VIEW_BYTES) break;
-          bytes += size;
-          shown++;
-          content.push({ type: 'text', text: `第 ${shown} 张：${src}` }, img);
+          if (path.isAbsolute(where)) return where;
+          throw Error('不是引用、http(s) 地址或绝对路径');
+        };
+        try {
+          for (const src of images) {
+            const hit = REF_PATTERN.test(src) ? d.refs.get(src) : null;
+            if (REF_PATTERN.test(src) && !hit) {
+              content.push({ type: 'text', text: `第 ${shown + 1} 张：${src}` }, { type: 'text', text: `图片读取失败：引用 ${src} 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具` });
+              shown++;
+              continue;
+            }
+            if (hit?.kind === 'audio') {
+              content.push({ type: 'text', text: `第 ${shown + 1} 张：${src}` }, { type: 'text', text: `${src} 是音频，看波形/响度/卡点用 audio_probe；原地址：${hit.url}` });
+              shown++;
+              continue;
+            }
+            const where = hit ? hit.url : src;
+            const asVideo = hit?.kind === 'video' || isVideoPath(where) || /\.(mp4|mov|webm)(\?|$)/i.test(where);
+            try {
+              if (asVideo) {
+                const file = await materialize(where, '.mp4');
+                const { meta, png } = await videoContactSheet(file);
+                let img = { type: 'image', data: png.toString('base64'), mimeType: 'image/png' };
+                let note = { ...meta };
+                if (crop) {
+                  const cropped = await cropBuffer(png, 'image/png', crop);
+                  img = { type: 'image', data: cropped.data, mimeType: cropped.mimeType };
+                  note = { ...note, crop, cropped: { width: cropped.width, height: cropped.height } };
+                }
+                const size = img.data.length;
+                if (shown && bytes + size > IMAGE_VIEW_BYTES) break;
+                bytes += size;
+                shown++;
+                content.push({ type: 'text', text: `第 ${shown} 张（视频）：${src}\n${JSON.stringify(note)}` }, img);
+                continue;
+              }
+              const remote = /^https?:\/\//.test(where);
+              let img = remote || path.isAbsolute(where) ? await imageContent(d, remote ? { url: where } : { file: where }) : { type: 'text', text: '图片读取失败：不是引用、http(s) 地址或绝对路径' };
+              if (img.data) {
+                const raw = Buffer.from(img.data, 'base64');
+                let meta = {};
+                try {
+                  if (img.mimeType === 'image/png') meta = imageMetaFromPng(raw);
+                  else {
+                    const im = await loadCanvasImage(raw);
+                    meta = { width: im.width, height: im.height };
+                  }
+                } catch (_) {
+                  // Synthetic / tiny fixtures in tests are not always real image bytes.
+                }
+                if (crop) {
+                  const cropped = await cropBuffer(raw, img.mimeType, crop);
+                  img = { type: 'image', data: cropped.data, mimeType: cropped.mimeType };
+                  meta = { ...meta, crop, cropped: { width: cropped.width, height: cropped.height } };
+                }
+                const size = img.data.length;
+                if (shown && bytes + size > IMAGE_VIEW_BYTES) break;
+                bytes += size;
+                shown++;
+                const detail = [
+                  meta.width || meta.height ? `${meta.width}×${meta.height}` : '',
+                  meta.alpha_bbox ? `alpha_bbox=${JSON.stringify(meta.alpha_bbox)}` : '',
+                  crop ? `crop=${JSON.stringify(crop)}` : '',
+                ].filter(Boolean).join(' ');
+                content.push({ type: 'text', text: detail ? `第 ${shown} 张：${src}（${detail}）` : `第 ${shown} 张：${src}` }, img);
+              } else {
+                shown++;
+                content.push({ type: 'text', text: `第 ${shown} 张：${src}` }, img);
+              }
+            } catch (e) {
+              shown++;
+              const where = (REF_PATTERN.test(src) ? d.refs.get(src)?.url : null) || src;
+              const asVideo = isVideoPath(where) || /\.(mp4|mov|webm)(\?|$)/i.test(where) || d.refs.get(src)?.kind === 'video';
+              content.push(
+                { type: 'text', text: `第 ${shown} 张：${src}` },
+                { type: 'text', text: asVideo ? `视频预览失败：${e.message}；原地址：${where}` : `图片读取失败：${e.message}` },
+              );
+            }
+          }
+          const rest = images.slice(shown);
+          if (rest.length) content.push({ type: 'text', text: JSON.stringify({ not_returned: rest, note: '超出单次体积上限，再调用一次 image_view 看这些' }, null, 2) });
+          return { content };
+        } finally {
+          for (const c of cleanups) c();
         }
-        const rest = images.slice(shown);
-        if (rest.length) content.push({ type: 'text', text: JSON.stringify({ not_returned: rest, note: '超出单次体积上限，再调用一次 image_view 看这些' }, null, 2) });
-        return { content };
+      },
+    },
+    {
+      name: 'image_sheet',
+      description:
+        '多图网格拼图（不开像塑）：把若干图片（img: 引用、URL 或本机路径）排成网格，可选裁掉 PNG 四周全透明边（trim_alpha）、统一缩放（resize）、写到 save_to。替代终端里的 PIL 拼图 / alpha 裁边 / 缩放脚本。最多 24 张。',
+      shape: {
+        items: z
+          .array(
+            z.strictObject({
+              src: z.string().min(1).describe('img: 引用、http(s) 地址或本机图片绝对路径。'),
+              label: z.string().max(40).optional(),
+              crop: cropBox.optional(),
+            }),
+          )
+          .min(1)
+          .max(24),
+        columns: z.number().int().min(1).max(8).optional().describe('列数；省略时按张数在 2–4 列间自适应。'),
+        tile_height: z.number().int().min(64).max(1200).optional().describe('每格高度，默认 360。'),
+        trim_alpha: z.boolean().optional().describe('裁掉每张 PNG 四周全透明边，并返回裁切前后尺寸与非透明占比。'),
+        resize: z.strictObject({ width: z.number().int().min(1).max(4096), height: z.number().int().min(1).max(4096) }).optional(),
+        save_to: z.string().min(1).optional().describe('输出 PNG 的绝对路径。'),
+      },
+      run: async ({ items, columns, tile_height, trim_alpha, resize, save_to }) => {
+        const cleanups = [];
+        try {
+          const loaded = [];
+          for (const it of items) {
+            const hit = REF_PATTERN.test(it.src) ? d.refs.get(it.src) : null;
+            if (REF_PATTERN.test(it.src) && (!hit || hit.kind !== 'image')) throw Error(`IMAGE_SHEET_BAD_SRC: ${it.src}`);
+            const where = hit ? hit.url : it.src;
+            let buf;
+            if (/^https?:\/\//.test(where)) {
+              const got = await d.fetchImageBytes(where);
+              buf = got.buf;
+            } else if (path.isAbsolute(where)) {
+              buf = await fs.promises.readFile(where);
+            } else throw Error(`IMAGE_SHEET_BAD_SRC: ${it.src}`);
+            loaded.push({ buf, label: it.label, crop: it.crop });
+          }
+          const sheet = await buildImageSheet({ items: loaded, columns, tile_height, trim_alpha, resize, save_to });
+          return {
+            content: [
+              { type: 'text', text: JSON.stringify({ size: sheet.size, columns: sheet.columns, tile_height: sheet.tile_height, trim: sheet.trim, save_to: sheet.save_to }, null, 2) },
+              { type: 'image', data: sheet.png.toString('base64'), mimeType: 'image/png' },
+            ],
+          };
+        } finally {
+          for (const c of cleanups) c();
+        }
+      },
+    },
+    {
+      name: 'makeup_light_metrics',
+      description:
+        '量妆容打光明暗（眉心、左右颊、鼻尖顶、鼻底、下巴的平均亮度 luma，以及下巴/两颊比值、左右颊差），并返回画好取样框的预览图。preset 取 H / G / ref（与原 light_metrics.py 坐标一致，按帧宽高缩放）；也可自定义 boxes。image_path 为帧的绝对路径；省略时对当前打开工程截一帧。',
+      shape: {
+        ...target,
+        image_path: z.string().min(1).optional().describe('PNG/JPEG 帧的绝对路径；省略则截当前预览帧。'),
+        preset: z.enum(['H', 'G', 'ref']).optional().describe('标准取样框；与 boxes 二选一。'),
+        boxes: z
+          .array(z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
+          .min(1)
+          .max(20)
+          .optional(),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        if (!a.preset && !a.boxes?.length) throw Error('LIGHT_METRICS_NEED_PRESET_OR_BOXES');
+        let pngBuf;
+        let label = a.image_path || 'preview';
+        if (a.image_path) {
+          if (!path.isAbsolute(a.image_path)) throw Error(`IMAGE_PATH_NOT_ABSOLUTE: ${a.image_path}`);
+          pngBuf = await fs.promises.readFile(a.image_path);
+          if (sniffImage(pngBuf) === 'image/jpeg') pngBuf = await d.jpegToPng(pngBuf);
+        } else {
+          const instance_id = await officialInstance(a);
+          const projectPath = await projects.resolveProjectPath({ instance_id });
+          const frame = await pngFrame(projectPath);
+          pngBuf = PNG.sync.write(frame);
+          label = 'preview_frame';
+        }
+        const img = decodePng(pngBuf);
+        const metrics = lightMetrics(img, { preset: a.preset, boxes: a.boxes });
+        const preview = await lightMetricsPreview(pngBuf, metrics);
+        const dir = a.save_to ? saveDir(a.save_to) : null;
+        if (dir) fs.writeFileSync(path.join(dir, 'light_metrics.jpg'), preview);
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ source: label, ...metrics, preview_saved: dir ? path.join(dir, 'light_metrics.jpg') : undefined }, null, 2) },
+            { type: 'image', data: preview.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      },
+    },
+    {
+      name: 'audio_probe',
+      description:
+        '探测音频（本地路径、audio: 引用或 URL）：时长、采样率、声道、编码、平均/峰值音量、静音区间、卡点峰值 onset_peaks_s。可选按秒裁切并导出到 export_path（.wav / .mp3）；mono_16k=true 时导出 16 kHz 单声道。用像塑自带 ffprobe+ffmpeg。',
+      shape: {
+        audio: z.string().min(1).describe('audio: 引用、http(s) 地址或本机音频绝对路径。'),
+        trim_start_s: z.number().min(0).optional(),
+        trim_end_s: z.number().min(0).optional(),
+        export_path: z.string().min(1).optional().describe('导出文件的绝对路径（.wav 或 .mp3）。'),
+        mono_16k: z.boolean().optional(),
+      },
+      run: async ({ audio, trim_start_s, trim_end_s, export_path, mono_16k }) => {
+        const hit = REF_PATTERN.test(audio) ? d.refs.get(audio) : null;
+        if (REF_PATTERN.test(audio) && (!hit || (hit.kind !== 'audio' && hit.kind !== 'video'))) {
+          throw Error(hit ? `AUDIO_PROBE_BAD_REF: ${audio} 是${KIND_TEXT[hit.kind] || hit.kind}` : `引用 ${audio} 已失效`);
+        }
+        const where = hit ? hit.url : audio;
+        let file = where;
+        let cleanup = null;
+        if (/^https?:\/\//.test(where)) {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-audio-'));
+          const ext = path.extname(new URL(where).pathname) || '.bin';
+          file = path.join(dir, `a${ext}`);
+          const res = await fetch(where, { signal: AbortSignal.timeout(60000) });
+          if (!res.ok) throw Error(`HTTP ${res.status}`);
+          fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+          cleanup = () => fs.rmSync(dir, { recursive: true, force: true });
+        } else if (!path.isAbsolute(where)) {
+          throw Error(`AUDIO_PATH_NOT_ABSOLUTE: ${where}`);
+        }
+        try {
+          const info = await probeAudio(file);
+          let exported;
+          if (export_path || trim_start_s !== undefined || trim_end_s !== undefined || mono_16k) {
+            const out = export_path || path.join(os.tmpdir(), `xs-audio-export-${Date.now()}.wav`);
+            exported = await exportAudio(file, { trim_start_s, trim_end_s, export_path: out, mono_16k });
+          }
+          return text({ ...info, export: exported });
+        } finally {
+          if (cleanup) cleanup();
+        }
+      },
+    },
+    {
+      name: 'h5_bundle_build',
+      description:
+        'H5 脚本动画打包发布：压缩 → 审计 → 兼容编译 → 连续两次打包核对 digest/sha256 → 解包复审 → 发布到 ArtifactStore。成功返回 import_h5_render_bundle 所需的 artifact_id / expected_digest / zip_relative_path；失败返回 outcome=error 的 diagnostics。依赖本机像塑 BuiltinResource skills；缺失时结构化报错。',
+      shape: {
+        source_dir: z.string().min(1).describe('H5 源码目录绝对路径。'),
+        brief_path: z.string().min(1).describe('brief.json 绝对路径。'),
+        project_path: z.string().min(1).describe('像塑工程目录绝对路径（zip 发布到其 ArtifactStore）。'),
+        instance_id: z.string().optional().describe('工程 persistent id；省略时用工程目录名。'),
+        request_id: z.string().min(1),
+        short_edge: z.number().int().min(360).max(1440).optional().describe('默认 720。'),
+        fps: z.number().int().min(1).max(60).optional().describe('默认 24。'),
+      },
+      run: async (a) => text(await buildH5Bundle(a)),
+    },
+    {
+      name: 'h5_font_subset',
+      description:
+        '按 source_dir/index.html（加 extra_text 与 ASCII 可打印字符）裁字体为 woff2，写到 source_dir/fonts/<output_name>.woff2 并复制 OFL.txt。缺字时返回 missing_chars 并报错。',
+      shape: {
+        font_path: z.string().min(1).describe('源字体绝对路径（.ttf/.otf）。'),
+        license_path: z.string().min(1).describe('OFL.txt 绝对路径。'),
+        source_dir: z.string().min(1).describe('H5 源码目录绝对路径。'),
+        output_name: z.string().min(1).describe('输出文件名，如 brand.woff2。'),
+        extra_text: z.string().optional().describe('页面动态文案里会出现、但 index.html 里没有的字符。'),
+      },
+      run: async (a) => {
+        const out = await subsetH5Font(a);
+        if (out.outcome === 'error') return failure(`H5_FONT_MISSING_CHARS: ${out.missing_chars.join('')}`);
+        return text(out);
       },
     },
     {
@@ -1647,7 +1913,9 @@ export function createServer(deps = {}) {
           .array(z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1), ref: refBox }))
           .min(1)
           .max(MAX_COMPARE_REGIONS)
-          .describe('区域：按画面比例给框（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏，换模特时按截图重新给框）。'),
+          .optional()
+          .describe('区域：按画面比例给框（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏，换模特时按截图重新给框）。与 preset_regions 二选一。'),
+        preset_regions: z.enum(['H', 'G']).optional().describe('用 makeup_light_metrics 的 H/G 标准取样框作为 regions；与 regions 二选一。'),
         reference: z.string().min(1).optional().describe('参考图（PNG / JPEG）的绝对路径；和区域的 ref 一起用。'),
         videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
         tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
@@ -1656,7 +1924,13 @@ export function createServer(deps = {}) {
         save_to: saveTo,
       },
       run: async (a) => {
-        const { variants, regions, reference, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, zoom = 3, save_to } = a;
+        const { variants, reference, videos, tracking_type = 'face', at_ms = HOLD_AT_MS, zoom = 3, save_to } = a;
+        let regions = a.regions;
+        if (a.preset_regions) {
+          if (regions?.length) throw Error('REGIONS_AND_PRESET: pass regions or preset_regions, not both');
+          regions = lightPresetRegions(a.preset_regions, 720, 1280).map(({ label, x, y, width, height }) => ({ label, x, y, width, height }));
+        }
+        if (!regions?.length) throw Error('REGIONS_REQUIRED: pass regions or preset_regions');
         if (!reference !== !regions.some((r) => r.ref)) throw Error(reference ? 'REFERENCE_UNUSED: give ref boxes on the regions to compare with the reference' : 'REFERENCE_MISSING: regions give ref boxes but no reference image');
         const ref = reference ? await loadImage(reference) : null;
         const instance_id = await officialInstance(a);
@@ -2583,14 +2857,6 @@ export function createServer(deps = {}) {
     },
   };
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const mine = [...own.values()].map((t) => ({ name: t.name, description: t.refs ? `${t.description}${REF_NOTE}` : t.description, inputSchema: z.toJSONSchema(t.schema) }));
-    const official = (await d.official.listTools())
-      .filter((t) => !own.has(t.name))
-      .map((t) => (Object.prototype.hasOwnProperty.call(OFFICIAL_NOTES, t.name) ? { ...t, description: `${t.description || ''}\n\n（xiangsu-mcp-plus）${OFFICIAL_NOTES[t.name]}` } : t));
-    return { tools: [...mine, ...official] };
-  });
-
   // Official tools whose arguments are rewritten here before they are forwarded.
   const rewritten = {
     edit_by_dsl: async (args) => {
@@ -2616,7 +2882,7 @@ export function createServer(deps = {}) {
     const t = own.get(name);
     if (t) {
       const parsed = t.schema.safeParse(args);
-      if (!parsed.success) return failure(`INVALID_ARGUMENTS(${name}): ${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`);
+      if (!parsed.success) return invalidArguments(name, parsed.error);
       try {
         let res = await t.run(parsed.data);
         if (t.refs && !res.isError) res = { ...res, content: res.content.map((c) => (c.type === 'text' ? { ...c, text: JSON.stringify(withRefs(JSON.parse(c.text), d.refs), null, 2) } : c)) };
@@ -2649,10 +2915,92 @@ export function createServer(deps = {}) {
     }
   };
 
+  const ownDefinition = (t, { hintNames } = {}) => {
+    let description = t.refs ? `${t.description}${REF_NOTE}` : t.description;
+    if (hintNames) description = withHiddenToolHints(description, { self: t.name, knownNames: hintNames });
+    return {
+      name: t.name,
+      description,
+      inputSchema: z.toJSONSchema(t.schema),
+      ...(t.annotations ? { annotations: t.annotations } : {}),
+    };
+  };
+  const officialDefinition = (t, { hintNames } = {}) => {
+    let description = Object.hasOwn(OFFICIAL_NOTES, t.name) ? `${t.description || ''}\n\n（xiangsu-mcp-plus）${OFFICIAL_NOTES[t.name]}` : t.description || '';
+    if (hintNames) description = withHiddenToolHints(description, { self: t.name, knownNames: hintNames });
+    return { ...t, description };
+  };
+  const listOfficial = async () => (await d.official.listTools()).filter((t) => !own.has(t.name) && !catalog.has(t.name));
+  const findOfficial = async (name) => (await listOfficial()).find((t) => t.name === name);
+  const unknownTool = (name) => {
+    const status = d.official.status();
+    const note = status.connected ? '' : '；官方 MCP 当前未连接，查官方工具请先启动像塑';
+    return failure(`UNKNOWN_TOOL(${name}): 用 tool_search 查可用工具${note}`);
+  };
+  const toolName = z.string().trim().min(1).describe('原工具名，可从 tool_search 取得。');
+  const catalog = new Map((flatTools ? [] : [
+    {
+      name: 'tool_search',
+      description: '按中文或英文关键词查找像塑官方和扩展工具。结果只有名字和摘要，每页 12 项。用 tool_describe 查完整说明和参数，再用 tool_call 调用。',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      schema: z.strictObject({
+        query: z.string().trim().min(1).optional().describe('工具名或用途关键词，如「素材库」「工作流」「library apply」。省略时分页浏览。'),
+        offset: z.number().int().min(0).optional().describe('翻页时传上一次的 next_offset，首次省略。'),
+      }),
+      run: async ({ query, offset }) => {
+        const official = await listOfficial();
+        const page = searchTools([...own.values(), ...official], query, offset);
+        d.callLog.write({ event: 'tool_search', query: query ?? '', total: page.total });
+        return text({ ...page, official_connected: d.official.status().connected });
+      },
+    },
+    {
+      name: 'tool_describe',
+      description: '按原工具名取完整用法和参数 JSON Schema。把参数对象交给 tool_call 的 arguments。',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      schema: z.strictObject({ name: toolName }),
+      run: async ({ name }) => {
+        const local = own.get(name);
+        if (local) return text(ownDefinition(local));
+        const official = await findOfficial(name);
+        return official ? text(officialDefinition(official)) : unknownTool(name);
+      },
+    },
+    {
+      name: 'tool_call',
+      description: '按原工具名调用像塑工具，返回原工具结果。通过 tool_describe 查参数，将参数对象放在 arguments 中。',
+      schema: z.strictObject({
+        name: toolName,
+        arguments: z.record(z.string(), z.unknown()).optional().describe('原工具的参数对象。'),
+      }),
+      run: async ({ name, arguments: args = {} }) => {
+        if (!own.has(name) && !await findOfficial(name)) return unknownTool(name);
+        return callTool(name, args);
+      },
+    },
+  ]).map((t) => [t.name, t]));
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const visible = (t) => flatTools || DIRECT_TOOLS.has(t.name);
+    const official = await listOfficial();
+    const hintNames = flatTools ? null : new Set([...own.keys(), ...official.map((t) => t.name), ...catalog.keys()]);
+    return {
+      tools: [
+        ...[...own.values()].filter(visible).map((t) => ownDefinition(t, { hintNames })),
+        ...official.filter(visible).map((t) => officialDefinition(t, { hintNames })),
+        ...[...catalog.values()].map((t) => ownDefinition(t)),
+      ],
+    };
+  });
+
   // While a call runs, a client that asked for progress gets a beat every progressMs, so long calls
   // (frames over seconds, waiting for checks) are not ended as idle.
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
-    const { name, arguments: args = {} } = req.params;
+    const { name: requested, arguments: args = {} } = req.params;
+    const entry = catalog.get(requested);
+    const parsed = entry?.schema.safeParse(args);
+    const name = requested === 'tool_call' && parsed?.success ? parsed.data.name : requested;
+    const via = requested === 'tool_call' ? 'tool_call' : 'direct';
     const token = req.params._meta?.progressToken;
     const started = Date.now();
     let beats = 0;
@@ -2668,14 +3016,16 @@ export function createServer(deps = {}) {
     let result;
     let error;
     try {
-      result = await callTool(name, args);
+      if (!entry) result = await callTool(name, args);
+      else if (!parsed.success) result = invalidArguments(requested === 'tool_call' ? name : requested, parsed.error);
+      else result = await entry.run(parsed.data);
       return result;
     } catch (e) {
       error = String(e?.message ?? e);
       throw e;
     } finally {
       clearInterval(timer);
-      d.callLog.call({ tool: name, ms: Date.now() - started, result, error, progress: token === undefined ? 'none' : beats });
+      d.callLog.call({ tool: name, via, ms: Date.now() - started, result, error, progress: token === undefined ? 'none' : beats });
     }
   });
 

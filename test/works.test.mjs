@@ -423,7 +423,7 @@ test('works tools use the lowest-pid window when no target is given', async () =
 });
 
 test('server sort enum matches the plugin ranker table', async () => {
-  const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
+  const client = await connect({ flatTools: true, listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   assert.deepEqual(tools.find((t) => t.name === 'works_list').inputSchema.properties.sort.enum, Object.keys(WORK_SORTS));
   assert.equal(tools.find((t) => t.name === 'works_by_effect').inputSchema.properties.effects.maxItems, MAX_WORK_EFFECTS);

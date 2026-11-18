@@ -1,12 +1,115 @@
 // Measurements on preview frames for comparing makeup states on the same video frame: region colour,
 // brightness and skin detail, and side-by-side crops. Frames are PNG (lossless): JPEG blurs thin lines
 // and bleeds colour across edges, which is exactly what these numbers look at.
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { PNG } from 'pngjs';
 
 export const decodePng = (buf) => PNG.sync.read(buf);
 
 // Rec. 601 luma, the brightness the beauty notes measure (眼周明暗, 皮肤细节).
 const luma = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+
+// Pixel boxes from light_metrics.py (xiangsu-beauty), written for the reference sizes below and scaled
+ // to the actual frame. Keys match the Chinese labels the skill printed.
+const LIGHT_BASE = { H: [720, 1280], G: [720, 1280], ref: [673, 808] };
+const LIGHT_BOXES_PX = {
+  ref: {
+    眉心: [275, 250, 335, 290],
+    画面左颊: [90, 380, 200, 470],
+    画面右颊: [420, 400, 480, 470],
+    鼻尖顶: [230, 450, 270, 475],
+    鼻底: [225, 485, 275, 505],
+    下巴: [200, 670, 300, 710],
+  },
+  H: {
+    眉心: [345, 470, 375, 495],
+    画面左颊: [250, 600, 320, 680],
+    画面右颊: [440, 600, 510, 680],
+    鼻尖顶: [345, 612, 375, 632],
+    鼻底: [345, 652, 375, 664],
+    下巴: [330, 745, 400, 775],
+  },
+  G: {
+    眉心: [345, 400, 385, 430],
+    画面左颊: [210, 530, 290, 610],
+    画面右颊: [440, 530, 520, 610],
+    鼻尖顶: [350, 555, 385, 578],
+    鼻底: [350, 598, 385, 610],
+    下巴: [330, 745, 400, 775],
+  },
+};
+
+export function lightPresetRegions(preset, width, height) {
+  const boxes = LIGHT_BOXES_PX[preset];
+  if (!boxes) throw Error(`UNKNOWN_LIGHT_PRESET: ${preset}; use H, G or ref`);
+  const [bw, bh] = LIGHT_BASE[preset];
+  return Object.entries(boxes).map(([label, [x0, y0, x1, y1]]) => ({
+    label,
+    x: x0 / bw,
+    y: y0 / bh,
+    width: (x1 - x0) / bw,
+    height: (y1 - y0) / bh,
+    // Kept so callers that want absolute pixels on this frame can rescale without re-deriving.
+    _px: {
+      x0: Math.round((x0 / bw) * width),
+      y0: Math.round((y0 / bh) * height),
+      x1: Math.round((x1 / bw) * width),
+      y1: Math.round((y1 / bh) * height),
+    },
+  }));
+}
+
+export function lightMetrics(img, { preset, boxes } = {}) {
+  const regions = boxes?.length
+    ? boxes.map((b) => ({ label: b.label, x: b.x, y: b.y, width: b.width, height: b.height }))
+    : lightPresetRegions(preset, img.width, img.height);
+  const vals = {};
+  for (const r of regions) {
+    vals[r.label] = regionStats(img, r).luma;
+  }
+  const left = vals['画面左颊'];
+  const right = vals['画面右颊'];
+  const chin = vals['下巴'];
+  const cheek = left !== undefined && right !== undefined ? (left + right) / 2 : null;
+  return {
+    preset: preset ?? null,
+    regions: Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, Number(v.toFixed(1))])),
+    cheek_delta: left !== undefined && right !== undefined ? Number((left - right).toFixed(1)) : null,
+    nose_delta: vals['鼻尖顶'] !== undefined && vals['鼻底'] !== undefined ? Number((vals['鼻尖顶'] - vals['鼻底']).toFixed(1)) : null,
+    chin_over_cheek: cheek ? Number((chin / cheek).toFixed(2)) : null,
+    boxes: regions.map(({ label, x, y, width, height }) => ({ label, x, y, width, height })),
+  };
+}
+
+export async function lightMetricsPreview(pngBuf, metrics) {
+  const img = await loadImage(pngBuf);
+  const canvas = createCanvas(img.width, img.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 2;
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#00ff00';
+  for (const b of metrics.boxes) {
+    const x = Math.round(b.x * img.width);
+    const y = Math.round(b.y * img.height);
+    const w = Math.round(b.width * img.width);
+    const h = Math.round(b.height * img.height);
+    ctx.strokeRect(x, y, w, h);
+    const v = metrics.regions[b.label];
+    if (v !== undefined) {
+      const label = `${b.label} ${v}`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#000';
+      ctx.strokeText(label, x, Math.max(16, y - 4));
+      ctx.fillStyle = '#00ff00';
+      ctx.fillText(label, x, Math.max(16, y - 4));
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2;
+    }
+  }
+  return canvas.toBuffer('image/jpeg', 85);
+}
 
 function hsl(r, g, b) {
   const [R, G, B] = [r / 255, g / 255, b / 255];
