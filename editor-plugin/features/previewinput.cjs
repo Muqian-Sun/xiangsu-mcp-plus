@@ -8,7 +8,7 @@
 // messages into AudioDetection results. Ending it reloads the preview without that runtime.
 const { M } = require('./common.cjs');
 
-const SESSION_ID = 'xiangsu-mcp-ext-audio';
+const SESSION_ID = 'xiangsu-mcp-plus-audio';
 const COMMANDS = ['touch_move', 'seek_to_time', 'switch_gesture_video'];
 
 const methods = {

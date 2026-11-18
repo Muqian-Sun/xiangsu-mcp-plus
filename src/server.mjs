@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // stdio MCP server: everything 像塑's official MCP offers (proxied unchanged), plus editor features the
-// official server cannot reach, served by the XiangsuMcpExt editor plugin.
+// official server cannot reach, served by the XiangsuMcpPlus editor plugin.
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -330,7 +330,7 @@ export function createServer(deps = {}) {
     ...deps,
   };
   const server = new Server(
-    { name: 'xiangsu-mcp-ext', version: VERSION },
+    { name: 'xiangsu-mcp-plus', version: VERSION },
     {
       capabilities: { tools: { listChanged: true } },
       instructions: flatTools ? undefined : '常用像塑工具可直接调用。其它官方和扩展工具用 tool_search 查名字，tool_describe 查完整参数，然后用 tool_call 传原工具名和 arguments。已知原工具名时可直接查参数。',
@@ -476,7 +476,7 @@ export function createServer(deps = {}) {
   const homeWindow = async ({ project_path, instance_id }) => {
     if (project_path !== undefined || instance_id !== undefined) return { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) };
     const pids = d.listInstances().map((s) => s.pid).sort((a, b) => a - b);
-    if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
+    if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpPlus plugin inside it)');
     return { pid: pids[0] };
   };
   // Received state and bindings change outside tasks_list (task_receive, the app), so a miss or a
@@ -563,7 +563,7 @@ export function createServer(deps = {}) {
     {
       name: 'ext_status',
       description:
-        '扩展自身状态：官方 MCP 连接情况；本次启动时编辑器插件的安装结果 plugin_install（action 为 installed 新装、kept 已有同版本或更新的插件未动、failed 安装失败附 error）；以及每个已加载 XiangsuMcpExt 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
+        '扩展自身状态：官方 MCP 连接情况；本次启动时编辑器插件的安装结果 plugin_install（action 为 installed 新装、kept 已有同版本或更新的插件未动、failed 安装失败附 error）；以及每个已加载 XiangsuMcpPlus 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
       shape: {},
       run: async () => {
         const official = await d.official.listTools().then(() => d.official.status());
@@ -2488,7 +2488,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_model_add',
-      description: `把自己的模特加进像塑的预览视频清单（不开像塑）：一张照片（默认 ${PHOTO_SECONDS} 秒静止视频）、一段视频，或两张照片交替循环（alternate，用来验「做一次表情记一次」：平静照和表情照交替），按内置预览视频的规格转码（720×1280、h264、30000/1001 fps、带静音 AAC；动图 320×569、图标 56×96），写进 ~/Library/Application Support/DouyinAR/Shared/Resources/PreviewResource/PreviewResources.json（改之前的版本备份到 ~/.xiangsu-mcp-ext/preview-resources-backup/，留最近 10 份）。之后新打开的工程窗口就有这个视频（set_preview_video 的 video_name、preview_frames 的 videos 用 name）；已开着的窗口要关掉重开。replace=true 原位换掉同名模特的视频：替换某个窗口播过的视频会让那个窗口的预览卡住，先关掉那些窗口再替换。像塑更新可能覆盖清单，覆盖后重新加。`,
+      description: `把自己的模特加进像塑的预览视频清单（不开像塑）：一张照片（默认 ${PHOTO_SECONDS} 秒静止视频）、一段视频，或两张照片交替循环（alternate，用来验「做一次表情记一次」：平静照和表情照交替），按内置预览视频的规格转码（720×1280、h264、30000/1001 fps、带静音 AAC；动图 320×569、图标 56×96），写进 ~/Library/Application Support/DouyinAR/Shared/Resources/PreviewResource/PreviewResources.json（改之前的版本备份到 ~/.xiangsu-mcp-plus/preview-resources-backup/，留最近 10 份）。之后新打开的工程窗口就有这个视频（set_preview_video 的 video_name、preview_frames 的 videos 用 name）；已开着的窗口要关掉重开。replace=true 原位换掉同名模特的视频：替换某个窗口播过的视频会让那个窗口的预览卡住，先关掉那些窗口再替换。像塑更新可能覆盖清单，覆盖后重新加。`,
       shape: {
         name: z.string().min(1).max(40).describe('清单里的名字，照现有的写法「模特W短发||女」（|| 后面是性别）。'),
         file_name: z.string().regex(/^[a-z0-9_]+$/).describe('文件名（小写字母、数字、下划线），如 model_w、model_s_kiss。'),
@@ -2513,7 +2513,7 @@ export function createServer(deps = {}) {
     {
       name: 'scene_set_layer',
       description:
-        '改已保存工程的 Assets/main.scene 里对象的渲染图层（layer）和摄像机能看见哪些图层（layerVisibleMask），官方 DSL 改不了这两项（报 Invalid property name layer）。用于把一些对象只给某个摄像机画（如擦痕遮罩只画进渲染纹理）。只改对象各自那一行，其余内容原样；改完重新解析核对，对不上就不写（报 SCENE_EDIT_NOT_APPLIED）。改之前的文件备份到 ~/.xiangsu-mcp-ext/scene-backups/（每个工程留最近 10 份）。工程窗口开着时拒绝（报 PROJECT_OPEN：编辑器保存时会覆盖文件）：先 save_project、project_close，改完再 project_open。对象写法同 scene_tree 的 project_dir 模式（#序号、名称或层级路径）。',
+        '改已保存工程的 Assets/main.scene 里对象的渲染图层（layer）和摄像机能看见哪些图层（layerVisibleMask），官方 DSL 改不了这两项（报 Invalid property name layer）。用于把一些对象只给某个摄像机画（如擦痕遮罩只画进渲染纹理）。只改对象各自那一行，其余内容原样；改完重新解析核对，对不上就不写（报 SCENE_EDIT_NOT_APPLIED）。改之前的文件备份到 ~/.xiangsu-mcp-plus/scene-backups/（每个工程留最近 10 份）。工程窗口开着时拒绝（报 PROJECT_OPEN：编辑器保存时会覆盖文件）：先 save_project、project_close，改完再 project_open。对象写法同 scene_tree 的 project_dir 模式（#序号、名称或层级路径）。',
       shape: {
         project_dir: absPath('工程目录').describe('工程目录的绝对路径（含 Assets/main.scene）。'),
         objects: z

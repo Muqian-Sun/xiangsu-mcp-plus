@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { longFetch } from './longfetch.mjs';
 
-const INSTANCE_DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), 'instances');
+const INSTANCE_DIR = path.join(process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus'), 'instances');
 
 // Start time (ms, truncated to the second) of each running pid; pids with no process are absent.
 function startTimes(pids) {

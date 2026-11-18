@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
+process.env.XIANGSU_MCP_PLUS_STATE = tmpdir('xs-state-');
 const { Library, M } = require('../editor-plugin/library.cjs');
 
 // The editor's agent command layer as far as these tools use it: the preview, its commands, the audio
@@ -73,9 +73,9 @@ function setup(opts = {}) {
 test('the audio session resumes a paused preview, then reloads it with the runtime on and off', async () => {
   const { lib, calls, session } = setup({ paused: true });
   assert.deepEqual(await lib.previewAudioSession({ action: 'start' }), { started: true, active: true });
-  assert.deepEqual(calls, ['resume', ['activate', 'xiangsu-mcp-ext-audio'], ['reload', 0]], 'resumed before the reload, which needs a playing preview');
+  assert.deepEqual(calls, ['resume', ['activate', 'xiangsu-mcp-plus-audio'], ['reload', 0]], 'resumed before the reload, which needs a playing preview');
   assert.deepEqual(await lib.previewAudioSession({ action: 'stop' }), { restored: true, active: false });
-  assert.deepEqual(calls.slice(3), [['deactivate', 'xiangsu-mcp-ext-audio'], ['reload', 0]]);
+  assert.deepEqual(calls.slice(3), [['deactivate', 'xiangsu-mcp-plus-audio'], ['reload', 0]]);
   assert.equal(session.active, false);
   await assert.rejects(lib.previewAudioSession({ action: 'pause' }), /INVALID_ACTION/);
   await assert.rejects(setup({ ready: false }).lib.previewAudioSession({ action: 'start' }), /PREVIEW_NOT_READY/);

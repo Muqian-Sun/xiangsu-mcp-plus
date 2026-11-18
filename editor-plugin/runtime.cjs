@@ -7,7 +7,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus');
 const INSTANCE_DIR = path.join(STATE_ROOT, 'instances');
 const LOG_FILE = path.join(STATE_ROOT, 'logs', 'plugin.log');
 const MAX_BODY = 4 * 1024 * 1024;

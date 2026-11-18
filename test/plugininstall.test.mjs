@@ -25,7 +25,7 @@ function pluginRootWithOthers() {
 }
 
 const listed = (root) => JSON.parse(fs.readFileSync(path.join(root, 'plugins.config.json'), 'utf8')).plugins;
-const entryCode = (root) => fs.readFileSync(path.join(root, 'XiangsuMcpExt@0.3.0', 'index.js'), 'utf8');
+const entryCode = (root) => fs.readFileSync(path.join(root, 'XiangsuMcpPlus@0.3.0', 'index.js'), 'utf8');
 const backups = (root) => fs.readdirSync(root).filter((f) => f.startsWith('plugins.config.json.bak-'));
 
 test('a fresh install points the plugin at the package and keeps other plugins listed', () => {
@@ -36,7 +36,7 @@ test('a fresh install points the plugin at the package and keeps other plugins l
   assert.equal(res.code, path.join(pkgRoot, 'editor-plugin'));
   assert.deepEqual(listed(pluginRoot), [
     { name: 'Other', version: '1.0.0', loadOnStartup: true },
-    { name: 'XiangsuMcpExt', version: '0.3.0', loadOnStartup: true },
+    { name: 'XiangsuMcpPlus', version: '0.3.0', loadOnStartup: true },
   ]);
   assert.ok(entryCode(pluginRoot).includes(JSON.stringify(path.join(pkgRoot, 'editor-plugin', 'runtime.cjs'))));
   assert.equal(backups(pluginRoot).length, 1);
@@ -45,7 +45,7 @@ test('a fresh install points the plugin at the package and keeps other plugins l
 test('the generated entry loads the real runtime', () => {
   const pluginRoot = pluginRootWithOthers();
   ensurePlugin({ pluginRoot, pkgRoot: REPO, stateRoot: tmpdir('xs-st-') });
-  const Plugin = createRequire(import.meta.url)(path.join(pluginRoot, 'XiangsuMcpExt@0.3.0', 'index.js'));
+  const Plugin = createRequire(import.meta.url)(path.join(pluginRoot, 'XiangsuMcpPlus@0.3.0', 'index.js'));
   assert.equal(typeof Plugin, 'function');
   assert.equal(typeof Plugin.prototype.initPlugin, 'function');
 });
@@ -89,13 +89,13 @@ test('an install whose code is gone is replaced', () => {
 
 test('an install from before the record existed is replaced, removing old plugin versions', () => {
   const pluginRoot = pluginRootWithOthers();
-  fs.mkdirSync(path.join(pluginRoot, 'XiangsuMcpExt@0.2.0'));
-  fs.mkdirSync(path.join(pluginRoot, 'XiangsuMcpExt@0.3.0'));
-  fs.writeFileSync(path.join(pluginRoot, 'XiangsuMcpExt@0.3.0', 'index.js'), '// legacy');
+  fs.mkdirSync(path.join(pluginRoot, 'XiangsuMcpPlus@0.2.0'));
+  fs.mkdirSync(path.join(pluginRoot, 'XiangsuMcpPlus@0.3.0'));
+  fs.writeFileSync(path.join(pluginRoot, 'XiangsuMcpPlus@0.3.0', 'index.js'), '// legacy');
   const res = ensurePlugin({ pluginRoot, pkgRoot: fakePackage('1.0.0'), stateRoot: tmpdir('xs-st-') });
   assert.equal(res.action, 'installed');
-  assert.deepEqual(res.removed.sort(), ['XiangsuMcpExt@0.2.0', 'XiangsuMcpExt@0.3.0']);
-  assert.deepEqual(fs.readdirSync(pluginRoot).filter((f) => f.startsWith('XiangsuMcpExt')), ['XiangsuMcpExt@0.3.0']);
+  assert.deepEqual(res.removed.sort(), ['XiangsuMcpPlus@0.2.0', 'XiangsuMcpPlus@0.3.0']);
+  assert.deepEqual(fs.readdirSync(pluginRoot).filter((f) => f.startsWith('XiangsuMcpPlus')), ['XiangsuMcpPlus@0.3.0']);
 });
 
 test('a package run from the npx cache is copied out, and the plugin keeps working after the cache goes', () => {

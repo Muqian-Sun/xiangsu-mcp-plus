@@ -89,12 +89,12 @@ const M = {
 };
 
 // Where this plugin keeps its own files (import records, preview strips) outside any project.
-const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus');
 
 // Scratch folder under the editor instance for exports this plugin makes and removes itself.
 function scratchDir(lib, kind) {
   const base = lib.mod(M.ef).Resource.EditorFoundation.env.getInstancePath();
-  return fs.mkdtempSync(path.join(base, `xiangsu-mcp-ext-${kind}-`));
+  return fs.mkdtempSync(path.join(base, `xiangsu-mcp-plus-${kind}-`));
 }
 
 // Export options of the two flows this plugin mirrors: the submit flow (exportEffectPackageForSubmit)

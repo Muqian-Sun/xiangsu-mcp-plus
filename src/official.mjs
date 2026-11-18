@@ -16,7 +16,7 @@ const refused = (e) => e?.cause?.code === 'ECONNREFUSED';
 const describe = (e) => `${e?.message ?? e}${e?.cause?.code ? ` (${e.cause.code})` : ''}`;
 
 async function defaultConnect(url) {
-  const client = new Client({ name: 'xiangsu-mcp-ext', version: '0.3.0' });
+  const client = new Client({ name: 'xiangsu-mcp-plus', version: '0.3.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(url), { fetch: longFetch }));
   return client;
 }

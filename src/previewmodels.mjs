@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ffmpeg as runFfmpeg, streamTypes as probeStreams } from './editorres.mjs';
 
-const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus');
 export const previewRoot = () => process.env.XIANGSU_PREVIEW_ROOT ?? path.join(os.homedir(), 'Library/Application Support/DouyinAR/Shared/Resources/PreviewResource');
 const CONFIG = 'PreviewResources.json';
 

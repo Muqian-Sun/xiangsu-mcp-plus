@@ -82,7 +82,7 @@ function outline(value) {
 }
 
 export class Spill {
-  constructor({ stateDir = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), now = Date.now, limit = SPILL_CHARS } = {}) {
+  constructor({ stateDir = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus'), now = Date.now, limit = SPILL_CHARS } = {}) {
     this.dir = path.join(stateDir, 'outputs');
     this.now = now;
     this.limit = limit;

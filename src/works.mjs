@@ -44,7 +44,7 @@ export function editorRoot(projectPath) {
 }
 
 export class Downloads {
-  constructor({ stateDir = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), now = Date.now } = {}) {
+  constructor({ stateDir = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus'), now = Date.now } = {}) {
     this.file = path.join(stateDir, 'works-downloads.json');
     this.now = now;
   }

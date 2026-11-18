@@ -8,7 +8,7 @@ import path from 'node:path';
 const FILE = /^(\d+)-.+\.png$/;
 
 export class QrCodes {
-  constructor({ stateDir = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), now = Date.now } = {}) {
+  constructor({ stateDir = process.env.XIANGSU_MCP_PLUS_STATE || path.join(os.homedir(), '.xiangsu-mcp-plus'), now = Date.now } = {}) {
     this.dir = path.join(stateDir, 'mobile-qr');
     this.now = now;
   }

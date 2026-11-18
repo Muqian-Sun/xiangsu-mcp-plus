@@ -33,10 +33,10 @@
 
 | 部分 | 位置 | 作用 |
 | --- | --- | --- |
-| 编辑器插件 `XiangsuMcpExt` | `editor-plugin/` | 像塑用户插件。每个工程窗口里开一个只监听 `127.0.0.1`、带随机令牌的 RPC 服务，调用编辑器自身的模块 |
+| 编辑器插件 `XiangsuMcpPlus` | `editor-plugin/` | 像塑用户插件。每个工程窗口里开一个只监听 `127.0.0.1`、带随机令牌的 RPC 服务，调用编辑器自身的模块 |
 | MCP 服务 | `src/server.mjs` | stdio MCP。转发官方 MCP（`http://127.0.0.1:17320/mcp`），并把插件能力包装成工具 |
 
-插件把 `{pid, port, token, startedAt}` 写到 `~/.xiangsu-mcp-ext/instances/<pid>.json`（权限 600）。窗口崩溃或被强退时这份记录会留下来，所以只有该 pid 的进程还在、并且启动时间不晚于 `startedAt` 时才算开着的窗口；pid 被后来的进程复用时不算。插件日志在 `~/.xiangsu-mcp-ext/logs/plugin.log`；MCP 服务每次工具调用（名称、耗时、报错、是否发了进度）和异常退出记在 `~/.xiangsu-mcp-ext/logs/server.log`，超过 5 MB 时旧的移到 `server.log.1`；导入记录在 `~/.xiangsu-mcp-ext/imports/`。
+插件把 `{pid, port, token, startedAt}` 写到 `~/.xiangsu-mcp-plus/instances/<pid>.json`（权限 600）。窗口崩溃或被强退时这份记录会留下来，所以只有该 pid 的进程还在、并且启动时间不晚于 `startedAt` 时才算开着的窗口；pid 被后来的进程复用时不算。插件日志在 `~/.xiangsu-mcp-plus/logs/plugin.log`；MCP 服务每次工具调用（名称、耗时、报错、是否发了进度）和异常退出记在 `~/.xiangsu-mcp-plus/logs/server.log`，超过 5 MB 时旧的移到 `server.log.1`；导入记录在 `~/.xiangsu-mcp-plus/imports/`。
 
 按工程找窗口时，同时询问各窗口开着哪个工程，卡住或正在关闭的窗口（5 秒没回应）不影响找到其它窗口，并记住每个工程上次所在的窗口，下次先问它。客户端请求带进度令牌时，工具调用期间每 5 秒发一次进度，避免长调用（连续截帧、等提交页检测）被当成空闲掐断。
 
@@ -77,7 +77,7 @@
 | `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后先关掉还开着的提交窗口（之前调用留下的），再走「提交特效」按钮的入口打开一个新的（最小化在程序坞里），逐页填写：名称（必填）、触发提示、默认摄像头方向、灵感、任务和赛道（可用 `icon_image` 先设图标），翻到「提交审核」页并等页面检测跑完，返回摘要、检测结果、协议是否已同意和 `next`（你还要做什么）。每一项都从页面读回核对，页面截断、报错、没选上或翻页被拦时报 `SUBMIT_*` 错误，窗口保持打开。不勾协议，也不点「提交审核」，不会送审 |
 | `submit_confirm` | 送审：在 `submit_prepare` 留下的那个提交窗口里勾上《创作者协议》（账号已同意过时不用勾），点「提交审核」，特效真正提交审核、占用提交次数。`name` 须和窗口摘要一致；页面检测没跑完或没通过时不点；账号最新的 10 个作品里已有同名、在审核中或审核过了的也不点（`SUBMIT_ALREADY_SUBMITTED`），防止重复提交。点了之后等页面报结果（最多 5 分钟）：成功返回 `effect_id`、是否替你勾了协议、是否提示实名认证，关掉窗口，并到账号最新的作品列表里找到这条特效放在 `listed`。页面没确认成功（报失败、停止提交却没给结果、没等到结果）时先到作品列表里找这条，找到就照成功返回、页面当时的情况放在 `page_problem`；找不到才报 `SUBMIT_FAILED`（页面给了失败原因）或 `SUBMIT_RESULT_UNKNOWN`，不自动重试，重交前先 `pipeline_refresh` 再看 `pipeline_works` |
 | `submit_close` | 关掉开着的提交窗口，不打开新的 |
-| `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看；二维码同时存成文件（`~/.xiangsu-mcp-ext/mobile-qr/`），到期自动删除 |
+| `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看；二维码同时存成文件（`~/.xiangsu-mcp-plus/mobile-qr/`），到期自动删除 |
 | `inspiration_list` / `inspiration_detail` | 灵感分页列表（每页带上全部分类，每条带关联热点）、详情（说明、图片、奖励、关联热点的热度和标签、同灵感特效、示例视频的播放地址和封面、贴纸、是否已收藏）；关联工程服务端只给标题，没有 id，要下载就拿标题去 `works_search` |
 | `inspiration_collect` | 收藏或取消收藏灵感（写账号），之后重新查询确认生效 |
 | `inspiration_collected` | 当前账号收藏的灵感（按收藏时间从新到旧分页），字段同 `inspiration_list`，另有收藏时间、作品类型和所属征集任务；`submit_prepare` 的 `inspiration` 就在这些收藏里选 |
@@ -214,7 +214,7 @@
 - 返回资料的方式：
   - 列表默认每页 20 条（服务端上限更小的按上限），只给挑选时要看的字段；要细节用对应的详情工具。
   - 列表里的图片、视频、音频不给地址，给短引用 `*_ref` / `*_refs`（`img:12`、`video:3`、`audio:5`），交给 `image_view`：一个签名 CDN 地址有几百字，实测占列表每条的 43%–93%。引用记在 MCP 服务里，这次运行期间有效（最多记 2 万个，超出时忘掉最久没用的）；详情工具（`inspiration_detail`、`menu_list` 的 `details`）给的是这个对象自己的图，仍给地址；`effect_detail` 的图标和视频是签名长地址，也给短引用。
-  - 我们自己的工具回答超过 3 万字时，全文写进 `~/.xiangsu-mcp-ext/outputs/`（24 小时后删除），回答换成文件路径和结构概要（每个字段的值或条数，列表给每条有哪些字段），用读文件的工具按需读，或用分页参数分几次取。3 万是拍的：`task_detail` 原来一次回 4.8 万字，读不全。官方工具原样转发，不受影响；只有官方报错超过 4000 字时（如 `apply_workflow_patch` 校验失败的整段展开）截断，全文写进同一目录。
+  - 我们自己的工具回答超过 3 万字时，全文写进 `~/.xiangsu-mcp-plus/outputs/`（24 小时后删除），回答换成文件路径和结构概要（每个字段的值或条数，列表给每条有哪些字段），用读文件的工具按需读，或用分页参数分几次取。3 万是拍的：`task_detail` 原来一次回 4.8 万字，读不全。官方工具原样转发，不受影响；只有官方报错超过 4000 字时（如 `apply_workflow_patch` 校验失败的整段展开）截断，全文写进同一目录。
   - 字段命名：投稿量统一叫 `publish_*`（`publish_count`、`publish_peak`、`publish_total`），跟拍量叫 `follow_shoot`，页面原样给的展示文字（如「1.2万」「¥50」）以 `_text` 结尾，换算过的金额以 `_yuan` 结尾；看不出单位的数（任务奖项的 `money`、`award_amount`）原样给，不换算。
 - 灵感、任务、排行榜按编辑器首页活动中心的方式请求（编辑器的登录 Cookie 和签名请求头），读写的都是编辑器里登录的账号。排行榜和成长之路用的是像塑移动版的接口，榜单名和筛选项取值与移动版一致，后端改版时可能失效。灵感和任务详情的接口移动版和编辑器是同一个（2026-11-08 对照移动版 v17.7.0 安装包里的接口逐个实测，返回完全相同），移动版看到的内容都在工具的返回里；热点内容流、任务筛选、每日任务、创新任务这几个移动版接口暂未接入（参数未知，或当前账号没有内容可核对）。
 - `inspiration_collected` 用的是首页灵感页「收藏」页和提交窗口灵感下拉共用的 `/creator_api/inspiration/v1/collect_list`（参数取自两个页面的在线脚本，2026-11-10 实测）：不带作品类型 `artwork_types` 时一条都不返回；灵感页只要 0（特效）和 5（表情），提交窗口要 0、5、14，而当前账号还有一条类型 2（模板）的收藏，两个页面都列不出来，所以工具带上 0、2、5、14（试过 0–20，只有 0 和 2 有内容）。别的类型的收藏要是出现，工具也会漏掉。
@@ -232,7 +232,7 @@
 - 下载物不留痕：
   - 编辑器缓存在 `~/Library/Application Support/DouyinAR/Shared/Resources/LokiDownload/TemplateResources/` 的工程包，解压后立即删除（下载前已存在的视为你自己在首页用过的缓存，不动）。
   - 给了 `dest` 时，临时目录里那份随即删除。
-  - 每份下载（临时目录或 `dest`）登记在 `~/.xiangsu-mcp-ext/works-downloads.json`。`works_cleanup` 随时删除；没删的在 24 小时后由下一次下载自动清掉（这个时长是拍的：够一个工作日内学完，又不至于堆积，可按需调 `src/works.mjs` 的 `DOWNLOAD_TTL_MS`）。
+  - 每份下载（临时目录或 `dest`）登记在 `~/.xiangsu-mcp-plus/works-downloads.json`。`works_cleanup` 随时删除；没删的在 24 小时后由下一次下载自动清掉（这个时长是拍的：够一个工作日内学完，又不至于堆积，可按需调 `src/works.mjs` 的 `DOWNLOAD_TTL_MS`）。
   - 编辑器窗口正开着的下载不会被删；像塑关窗时不会自己删除这些目录，关窗后再调 `works_cleanup`。
 - AI 组合效果在工程里由三部分组成：场景里的「AI 组合效果」图片对象、它绑定的组合效果纹理（`Assets/AI 组合效果/*.oAICombineTextureJSA`，存编译好的 `workflow`、上传后的 `graphTosUri` 和云端草稿 `draftId`），以及 `Graph/graph.json` 里的 AI Graph。「添加对象」菜单里的 AI 组合效果只建对象和一张 `workflow` 为 `{}` 的空纹理，编辑器自己也是先建空壳、再由「应用」填参数，所以 `menu_add` 仍然拒绝它，改用 `ai_combine_new` / `ai_combine_apply`。哪些步骤会连到云端（2026-11-08 读编辑器代码；`ai_combine_new` 和 `ai_combine_apply` 不建草稿是实测，官方 Patch 建草稿、预览视频上传只读了代码，没有实测）：`ai_combine_new` 和本地连线都不联网；官方 `apply_workflow_patch` 每次改完都会把工作流存成账号下的云端 AI 效果草稿（`releaseAIEffect`），此后 `ai_combine_apply` 返回的 `draft_id` 就是这个草稿；官方 `generate_workflow` 扣生图额度；`ai_combine_apply` 上传工作流文件，生成过预览视频时把视频一并上传供审核，自己不建草稿。场景里有变声组件时编辑器拒绝「应用」，工具报 `AI_COMBINE_APPLY_NO_EFFECT`。
 - 图生视频（2026-11-14 读 9.8.3 编辑器代码并实测）：工作流原生支持「视频生成」节点（`BuiltinResource/AIGraph/NodeInfo/Image2VideoEffect/node.json`，`AINodeType: Video`，5 个图片输入口 `ParamJSON.Images.0`–`4`、1 个视频输出口），可选模型来自 `AIEffectController` 的视频模型表（`BASE_MODEL_CATEGORY_ID_MAP.videoAllModelKey`），面板里的「图生视频」系列是 Seedance 2.0 Mini（主模型）/ Fast / 2.0 / 2.5，另有肢体驱动、照片唱演、五官驱动。官方 MCP 的 `get_workflow_capabilities` 只列生图基模、`apply_workflow_patch` 只能建生图节点，所以 `ai_video_node` 照节点编辑面板（`VideoSeedanceAdjustment`）的做法：`AIGraphManager.initNodeByName('AI Effect Video')` 建节点，模型的默认 style 经共用的 `AIVideoCtx.styleItemToCtxParams` 再 `node.setStyleParamByStyleItem` 写进节点，参数用 `onStyleParamsUpdate` 改后经 `getCurStyleItem` 写回（分辨率对应的 `DefinitionType` 由编辑器换算）。建好后官方 `get_workflow_context`、`apply_workflow_patch`（绑输入图）、`generate_workflow` 都能照常处理这张图；实测一次 Seedance 2.0 Mini 480p 5 秒约 3 分钟生成完，视频节点出 496×864，效果组合出 1080×1920。生成结果在节点的 `AIResultList`（`localPath` 是编辑器的 AIGC 缓存），`ai_video_results` 读它。`ai_combine_apply` 把它放进场景时编辑器会先把效果组合的结果视频上传供审核（`auditVideoVid`），场景里已有 AI 组合效果时照旧原地更新它、报 `AI_COMBINE_APPLY_NO_EFFECT`。
@@ -262,13 +262,13 @@
   - 次数：编辑器只有用完时的提示「模型使用次数达到上限，请提升特效师等级以获取更多次数」（错误码 2038），没有查询剩余次数或单次消耗的接口。
   - 实测（2026-11-08，一次）：一张 1024×1536 的小猫图、`mode=motion`、10 秒、不加投影，云端 2 秒接受，约 6 分钟后在本机合成完，输出 720×720、24 fps、带原声。之后在另一个工程窗口里查这条任务，直接就是 `succeeded`（编辑器的生成记录缓存在 `Shared/Resources/ARVideoHistory/` 下，各窗口共用，本机合成的文件还在就不重做）。
   - 导入后的场景（同日实测，导进一个空场景）：渲染组「AR跟踪」›「AR平面跟踪」（`MeshRenderer`，内置 AR 平面网格和「蒙版阴影」材质）›「AR 视频主体 1」，加一个「AR摄像机」（`Camera`、`DeviceTracker`）；空场景还会多出「通用」组。「AR 视频主体」上有 `Image`（`texture` 是导入的 `Mp4Texture`「混合透明 MP4 播放器」，`loopCount=-1` 无限循环）、`LookAt`（朝向 AR 摄像机）、`AudioComponent`（原声，`autoPlay=false`）和编辑器内置的 `ARVideoAudioController`（`playOriginalAudio_target`、`originalVolume_target`、`videoTexture_target`，让原声跟着视频播）。脚本里控制视频：`texture.getControl()` 的 `play()` / `pause()` / `resume()` / `stop()`，事件用 `APJS.EventManager.getObjectEmitter(texture)` 监听 `APJS.Mp4Event.*`（取自内置节点「视频纹理播放器」的实现 `CGVideoTexturePlayer.js`）。同一个工程第二次导入时对象怎么排还没有实测。
-  - 预览图 `preview_image_file` 是用编辑器自带的 ffmpeg 从预览视频均匀取 6 帧拼成的横条，存在 `~/.xiangsu-mcp-ext/ar-video/<task_id>.jpg`，预览视频重建后自动重做。
+  - 预览图 `preview_image_file` 是用编辑器自带的 ffmpeg 从预览视频均匀取 6 帧拼成的横条，存在 `~/.xiangsu-mcp-plus/ar-video/<task_id>.jpg`，预览视频重建后自动重做。
 - 9.8.3 新功能的依据和实测范围（2026-11-14 读编辑器 9.8.3 的源码）：
   - 画面特效、实时变脸、图片编辑器 AI 都照面板和编辑窗口自己的调用写：画面特效先清空面板输入（`leavePage`）再填描述、时长和参考素材，参考视频等到审核通过才提交，提交后转到后台；实时变脸的训练按面板分两种流程（真人搞怪的 preset 是 `fun`，要先生成候选图、挑满 30 张），导入前照训练完成卡片的做法下载模型文件和预览视频、生成封面；图片编辑器的消除和重绘靠在原图上把区域涂成绿色棋盘格（`#00ff00`，透明度 0xc0 和 0x48 交替）告诉云端范围，格子在编辑器里是 12 个屏幕像素，这里按图片长边每 600 像素 12 像素算（拍的，编辑器视图的实际尺寸不知道）。
   - 实测过：三组功能和预览输入在 9.8.3 上自检全部通过；实时变脸的风格和剩余训练次数（当时 5 次）、两个面板的历史列表能读出来（账号里还没有任务）。提交画面特效、实时变脸的预览和训练、超清 / 抠图 / 消除 / 重绘都会占用账号的模型次数或训练次数，没有实测，第一次用时核对返回。
   - 模拟声音：编辑器内置 Agent 的「试玩」会话打开时会重载预览、注入运行时，之后发给预览的音量、音高、关键词事件才会变成 `AudioDetection` 的结果；会话关掉再重载一次就恢复原样。实测（一个每 0.4 秒打印一次 `VolumeDetector.getResult()` 的脚本）：喂 0.12 持续 2 秒读到 5 次 0.12、再喂 0.03 持续 1.2 秒读到 3 次 0.03，前后都是 0。预览暂停时重载等不到完成事件（实测切完手势视频后超时 10 秒），所以开关会话前先恢复播放。
 - 做素材的工具不连像塑窗口：文字和图片用 Skia（`@napi-rs/canvas`，首次用到时才加载，冷启动约 2 秒），字体默认是像塑自带的抖音体（`/Applications/Douyin AR.app/Contents/Resources/BuiltinResource/fonts/`，也可传 .ttf / .otf 路径）；音效和预览视频用像塑自带的 ffmpeg（`BuiltinResource/ffmpeg/<架构>/ffmpeg`）。音效预设移植自各特效工程的 `make_sfx.py`，没有随机噪声的预设和原脚本逐采样一致（最大差 5e-10），带噪声的用自己的随机数，听感一样、采样不同；呼啸声原脚本是 FFT 频带滤波，这里换成中心 2500 Hz、Q 0.7 的二阶带通。
-- 预览模特写的是像塑共享的 `PreviewResources.json`（所有工程窗口共用），改之前备份到 `~/.xiangsu-mcp-ext/preview-resources-backup/`（留最近 10 份），保留原文件的权限（编辑器装的是 0666）。`scene_set_layer` 改之前把场景文件备份到 `~/.xiangsu-mcp-ext/scene-backups/<工程路径的哈希>/`（留最近 10 份，旁边的 `project.txt` 写着是哪个工程）。
+- 预览模特写的是像塑共享的 `PreviewResources.json`（所有工程窗口共用），改之前备份到 `~/.xiangsu-mcp-plus/preview-resources-backup/`（留最近 10 份），保留原文件的权限（编辑器装的是 0666）。`scene_set_layer` 改之前把场景文件备份到 `~/.xiangsu-mcp-plus/scene-backups/<工程路径的哈希>/`（留最近 10 份，旁边的 `project.txt` 写着是哪个工程）。
 - 预览重载有延迟，应用后用 `interact_by_dsl` 先 `wait` 2–3 秒再截图更稳。
 - 资源删除不可撤销；对象删除可以在编辑器里撤销，但已删除的资源不会回来。
 - 「孤儿资源」只按场景直接引用判断（资源的编辑器 guid 是否出现在场景序列化数据里）。只通过材质等间接引用的资源不会被判为孤儿。
@@ -298,7 +298,7 @@ Cursor 等用 JSON 配置的客户端：
 }
 ```
 
-服务每次启动时检查编辑器插件，没装、版本比自己旧或者插件指向的代码已经不在时，自动装到 `~/Library/Application Support/DouyinAR/Plugins/v<编辑器版本>/Local`（像塑升级后换了版本目录也会自动补装）；已装的是同版本或更新的就不动，所以同一台机器上开着几个不同来源的服务也不会来回覆盖。插件按绝对路径加载代码，而 `npx` 的缓存随时可能被清理，所以从 `npx` 运行时会先把 `editor-plugin/` 复制到 `~/.xiangsu-mcp-ext/editor-plugin/<版本>/`，插件加载那份复制；从源码目录或 `npm install -g` 的目录运行时直接加载原处，不要挪动。安装结果（新装、未动或失败原因，例如像塑没装或还没启动过）在 `ext_status` 的 `plugin_install` 里。
+服务每次启动时检查编辑器插件，没装、版本比自己旧或者插件指向的代码已经不在时，自动装到 `~/Library/Application Support/DouyinAR/Plugins/v<编辑器版本>/Local`（像塑升级后换了版本目录也会自动补装）；已装的是同版本或更新的就不动，所以同一台机器上开着几个不同来源的服务也不会来回覆盖。插件按绝对路径加载代码，而 `npx` 的缓存随时可能被清理，所以从 `npx` 运行时会先把 `editor-plugin/` 复制到 `~/.xiangsu-mcp-plus/editor-plugin/<版本>/`，插件加载那份复制；从源码目录或 `npm install -g` 的目录运行时直接加载原处，不要挪动。安装结果（新装、未动或失败原因，例如像塑没装或还没启动过）在 `ext_status` 的 `plugin_install` 里。
 
 插件只在安装后**新打开的工程窗口**里加载；第一次装好后，已开着的窗口要保存后重开。
 
@@ -323,7 +323,7 @@ npm ci
 claude mcp add -s user xiangsu -- "$(which node)" "$PWD/src/server.mjs"
 ```
 
-`node scripts/install.mjs`（npm 全局安装后是 `xiangsu-mcp-ext-install`）不看版本，把插件强制指回这份代码，用于从别的来源切回源码目录。
+`node scripts/install.mjs`（npm 全局安装后是 `xiangsu-mcp-plus-install`）不看版本，把插件强制指回这份代码，用于从别的来源切回源码目录。
 
 ### 更新后怎么生效
 
@@ -338,7 +338,7 @@ claude mcp add -s user xiangsu -- "$(which node)" "$PWD/src/server.mjs"
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/e2e.mjs <工程路径> <关键词> [标题]`：搜索 + 应用 + 未知 ID 报错的端到端检查（会真的导入素材，只对测试工程用）。
 - `config.local.json` 里 `devEval: true` 时可用插件方法 `dev_eval` 在编辑器进程里执行探测代码（`scripts/call.mjs dev_eval '{}' --code-file x.js`，`scripts/dump-source.js` 可导出模块源码）。同一个开关也管 `scripts/call.mjs` 的 `eval` / `describe`；三者都在每次调用时读取开关，改回 `false` 在开着的窗口里立即失效。**日常使用保持 `false`**：它能在编辑器进程里执行任意代码。
-- 环境变量 `XIANGSU_MCP_EXT_STATE` 可改状态目录（测试用），`XIANGSU_MCP_URL` 可改官方 MCP 地址。
+- 环境变量 `XIANGSU_MCP_PLUS_STATE` 可改状态目录（测试用），`XIANGSU_MCP_URL` 可改官方 MCP 地址。
 
 ### 依赖的编辑器内部接口
 

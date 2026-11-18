@@ -8,7 +8,7 @@ import http from 'node:http';
 import { tmpdir } from './tmp.mjs';
 import { callPlugin, listInstances, resolveInstance, BRIDGE_TIMING } from '../src/bridge.mjs';
 
-const DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE, 'instances');
+const DIR = path.join(process.env.XIANGSU_MCP_PLUS_STATE, 'instances');
 const PROCESS_START = Date.now() - process.uptime() * 1000;
 
 function writeRecords(records) {

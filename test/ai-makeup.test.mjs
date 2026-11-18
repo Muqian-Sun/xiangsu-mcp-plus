@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const STATE = tmpdir('xs-state-');
-process.env.XIANGSU_MCP_EXT_STATE = STATE;
+process.env.XIANGSU_MCP_PLUS_STATE = STATE;
 const { Library, M } = require('../editor-plugin/library.cjs');
 
 const PARTS = [
