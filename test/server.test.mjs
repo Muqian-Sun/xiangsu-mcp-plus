@@ -36,6 +36,7 @@ const OWN = [
   'ar_video_import',
   'ar_video_submit',
   'ar_video_tasks',
+  'audio_probe',
   'brief_today',
   'changes_ack',
   'changes_since',
@@ -56,6 +57,8 @@ const OWN = [
   'failure_lessons',
   'growth_task_detail',
   'growth_tasks_list',
+  'h5_bundle_build',
+  'h5_font_subset',
   'hit_reasons',
   'hot_topics',
   'hotspot_inspiration_images',
@@ -65,6 +68,7 @@ const OWN = [
   'icon_set',
   'image_matting',
   'image_repaint',
+  'image_sheet',
   'image_upscale',
   'image_view',
   'inspect_many',
@@ -82,6 +86,7 @@ const OWN = [
   'library_search',
   'makeup_compare',
   'makeup_layers',
+  'makeup_light_metrics',
   'menu_add',
   'menu_list',
   'mobile_preview',
@@ -165,12 +170,106 @@ async function connect(deps) {
   return { client, server };
 }
 
-test('lists own tools plus the official tools, own names first', async () => {
-  const { client } = await connect({ official: fakeOfficial(), callPlugin: async () => ({}) });
+test('flat mode lists own tools plus the official tools, own names first', async () => {
+  const { client } = await connect({ flatTools: true, official: fakeOfficial(), callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).slice(0, OWN.length).sort(), OWN);
   assert.equal(tools.at(-1).name, 'get_scene');
   assert.equal(tools.find((t) => t.name === 'library_apply').inputSchema.type, 'object');
+});
+
+const useTool = (client, name, args = {}) => client.callTool({ name, arguments: args });
+const toolJson = async (client, name, args) => JSON.parse((await useTool(client, name, args)).content[0].text);
+
+test('the default list keeps only frequently used tools and the catalog', async () => {
+  const upstream = ['get_scene', 'get_project_context', 'edit_by_dsl', 'save_project', 'list_resources', 'library_search'].map((name) => ({
+    name,
+    description: '官方工具',
+    inputSchema: { type: 'object', properties: { instance_id: { type: 'string' } }, required: ['instance_id'] },
+  }));
+  // library_search is an own tool; keep an official-only direct name in the upstream set.
+  const officialOnly = upstream.filter((t) => !['library_search'].includes(t.name));
+  const { client } = await connect({ official: fakeOfficial({ tools: officialOnly }) });
+  const { tools } = await client.listTools();
+  assert.deepEqual(tools.map((t) => t.name).sort(), [
+    'brief_today', 'edit_by_dsl', 'effect_search', 'ext_status', 'get_project_context', 'image_view', 'inspect_many', 'inspiration_detail',
+    'library_apply', 'library_search', 'list_resources', 'preview_frames', 'project_close', 'project_open', 'save_project', 'scene_tree',
+    'tool_call', 'tool_describe', 'tool_search',
+  ]);
+  assert.equal(tools.find((t) => t.name === 'save_project').name, 'save_project');
+  assert.equal(tools.find((t) => t.name === 'tool_search').annotations?.readOnlyHint, true);
+  // Measured: 16 direct + 3 catalog ≈ 27.8 KB with real official tools; keep under 32 KB.
+  assert.ok(Buffer.byteLength(JSON.stringify({ tools })) < 32_000);
+});
+
+test('catalog searches and pages the tool names, then describes a single tool in full', async () => {
+  const upstream = { name: 'get_scene', description: '读取官方场景', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } };
+  const { client } = await connect({ official: fakeOfficial({ tools: [upstream] }) });
+  const byName = await toolJson(client, 'tool_search', { query: 'LIBRARY APPLY' });
+  assert.equal(byName.tools[0].name, 'library_apply');
+  const byPurpose = await toolJson(client, 'tool_search', { query: '官方素材应用' });
+  assert.deepEqual(Object.keys(byPurpose.tools.find((t) => t.name === 'library_apply')).sort(), ['name', 'summary']);
+  const first = await toolJson(client, 'tool_search');
+  const second = await toolJson(client, 'tool_search', { offset: first.next_offset });
+  assert.equal(first.total, OWN.length + 1);
+  assert.equal(first.tools.length, 12);
+  assert.equal(first.next_offset, 12);
+  assert.equal(new Set([...first.tools, ...second.tools].map((t) => t.name)).size, 24);
+  const local = await toolJson(client, 'tool_describe', { name: 'library_apply' });
+  assert.deepEqual(local.inputSchema.required, ['template_id']);
+  const official = await toolJson(client, 'tool_describe', { name: 'get_scene' });
+  assert.deepEqual(official, { ...upstream, description: upstream.description + '\n\n（xiangsu-mcp-plus）先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。' });
+});
+
+test('catalog returns local tools while the official MCP is offline and reports the connection state', async () => {
+  const tools = [];
+  const official = fakeOfficial({ tools });
+  official.status = () => ({ connected: tools.length > 0 });
+  const { client } = await connect({ official });
+  const offline = await toolJson(client, 'tool_search', { query: 'library_apply' });
+  assert.equal(offline.official_connected, false);
+  assert.equal(offline.tools[0].name, 'library_apply');
+  const unavailable = await useTool(client, 'tool_describe', { name: 'get_scene' });
+  assert.equal(unavailable.isError, true);
+  assert.match(unavailable.content[0].text, /UNKNOWN_TOOL\(get_scene\).*官方 MCP 当前未连接/);
+  tools.push({ name: 'get_scene', description: '读取场景', inputSchema: { type: 'object' } });
+  const online = await toolJson(client, 'tool_search', { query: 'get_scene' });
+  assert.equal(online.official_connected, true);
+  assert.equal(online.tools[0].name, 'get_scene');
+});
+
+test('catalog calls use the original validation, official result content and tool name in the log', async () => {
+  const official = fakeOfficial();
+  const calls = [];
+  const log = [];
+  const writes = [];
+  const { client } = await connect({
+    official,
+    callPlugin: async (...args) => (calls.push(args), { changed: 1 }),
+    callLog: { call: (e) => log.push(e), write: (e) => writes.push(e) },
+  });
+  const name = 'face_warp_set_intensity';
+  const args = { project_path: '/proj/A', object_path: 'Face', intensity: 101 };
+  const bad = await useTool(client, 'tool_call', { name, arguments: args });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /INVALID_ARGUMENTS\(face_warp_set_intensity\): intensity/);
+  assert.deepEqual(calls, []);
+  const ok = await toolJson(client, 'tool_call', { name, arguments: { ...args, intensity: 20 } });
+  assert.deepEqual(ok, { changed: 1 });
+  assert.deepEqual(calls, [[name, { object_path: 'Face', intensity: 20 }, { projectPath: '/proj/A', timeoutMs: undefined }]]);
+  const proxied = await useTool(client, 'tool_call', { name: 'get_scene', arguments: { instance_id: '1' } });
+  assert.deepEqual(proxied.content, [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }]);
+  const unknown = await useTool(client, 'tool_call', { name: 'not_an_editor_tool' });
+  assert.equal(unknown.isError, true);
+  assert.match(unknown.content[0].text, /UNKNOWN_TOOL\(not_an_editor_tool\)/);
+  assert.deepEqual(official.seen, [['get_scene', { instance_id: '1' }]]);
+  assert.deepEqual(log.map((e) => e.tool), [name, name, 'get_scene', 'not_an_editor_tool']);
+  assert.ok(log.every((e) => e.via === 'tool_call'));
+  await toolJson(client, 'tool_search', { query: 'library_apply' });
+  assert.ok(writes.some((e) => e.event === 'tool_search' && e.query === 'library_apply' && e.total >= 1));
+  await useTool(client, 'ext_status');
+  assert.equal(log.at(-1).via, 'direct');
+  assert.equal(log.at(-1).tool, 'ext_status');
 });
 
 test('official tools are proxied unchanged, images included', async () => {
@@ -271,7 +370,7 @@ test('image_view shows URLs and local files with a caption each, isolating failu
   assert.equal(tooMany.isError, true);
 });
 
-test('image_view resolves refs: pictures by their address, videos and audio as their address, unknown refs per item', async () => {
+test('image_view resolves refs: pictures by their address, videos attempt a grid, audio points to audio_probe', async () => {
   const fetched = [];
   const refs = new MediaRefs();
   const img = refs.add('https://c/cover.png', 'image');
@@ -279,16 +378,14 @@ test('image_view resolves refs: pictures by their address, videos and audio as t
   const audio = refs.add('https://c/song.mp3', 'audio');
   const { client } = await connect({ official: fakeOfficial(), callPlugin: async () => ({}), refs, fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }) });
   const res = await client.callTool({ name: 'image_view', arguments: { images: [img, video, audio, 'img:999'] } });
-  assert.deepEqual(res.content, [
-    { type: 'text', text: `第 1 张：${img}` },
-    { type: 'image', data: 'AAAA', mimeType: 'image/png' },
-    { type: 'text', text: `第 2 张：${video}` },
-    { type: 'text', text: `${video} 是视频，看不了画面，原地址：https://c/clip.mp4` },
-    { type: 'text', text: `第 3 张：${audio}` },
-    { type: 'text', text: `${audio} 是音频，看不了画面，原地址：https://c/song.mp3` },
-    { type: 'text', text: '第 4 张：img:999' },
-    { type: 'text', text: '图片读取失败：引用 img:999 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具' },
-  ]);
+  assert.equal(res.content[0].text, `第 1 张：${img}`);
+  assert.deepEqual(res.content[1], { type: 'image', data: 'AAAA', mimeType: 'image/png' });
+  assert.equal(res.content[2].text, `第 2 张：${video}`);
+  assert.match(res.content[3].text, /视频预览失败：.*原地址：https:\/\/c\/clip\.mp4/);
+  assert.deepEqual(res.content[4], { type: 'text', text: `第 3 张：${audio}` });
+  assert.deepEqual(res.content[5], { type: 'text', text: `${audio} 是音频，看波形/响度/卡点用 audio_probe；原地址：https://c/song.mp3` });
+  assert.deepEqual(res.content[6], { type: 'text', text: '第 4 张：img:999' });
+  assert.deepEqual(res.content[7], { type: 'text', text: '图片读取失败：引用 img:999 已失效（MCP 服务重启过，或是很久以前的列表），重新调用返回它的工具' });
   assert.deepEqual(fetched, ['https://c/cover.png']);
 });
 
@@ -500,7 +597,7 @@ test('the call log writes one line per call, with the error of a failed one', as
 test('official tools that overlap ours are listed with a note naming ours; the rest stay unchanged', async () => {
   const names = ['capture_preview', 'get_scene', 'inspect', 'edit_by_dsl', 'list_resources'];
   const official = fakeOfficial({ tools: names.map((name) => ({ name, description: `官方${name}`, inputSchema: { type: 'object' } })) });
-  const { client } = await connect({ official, callPlugin: async () => ({}) });
+  const { client } = await connect({ flatTools: true, official, callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   const desc = (name) => tools.find((t) => t.name === name).description;
   assert.match(desc('capture_preview'), /^官方capture_preview\n\n（xiangsu-mcp-plus）.*preview_frames/);
@@ -637,7 +734,7 @@ test('ar_video tools go to the target project window, where the task is composed
 
 test('official tools that trip agents carry a note on what to pass or use instead', async () => {
   const names = ['edit_by_dsl', 'interact_by_dsl', 'list_preview_videos', 'upload_workflow_image', 'generate_assets_batch', 'get_workflow_capabilities', 'apply_workflow_patch'];
-  const { client } = await connect({ official: fakeOfficial({ tools: names.map((name) => ({ name, description: 'official', inputSchema: { type: 'object' } })) }), callPlugin: async () => ({}) });
+  const { client } = await connect({ flatTools: true, official: fakeOfficial({ tools: names.map((name) => ({ name, description: 'official', inputSchema: { type: 'object' } })) }), callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   const note = (name) => tools.find((t) => t.name === name).description;
   assert.match(note('edit_by_dsl'), /properties 写成对象.*result\.changes/);

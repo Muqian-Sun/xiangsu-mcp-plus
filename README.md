@@ -42,13 +42,27 @@
 
 ## 工具
 
-官方 MCP 的工具按原名提供。扩展工具都接受 `project_path` 或官方的 `instance_id` 指定工程（只开一个工程窗口时可省略）：
+默认工具清单只公开 **16 个高频直调工具** 和 3 个查找入口（`tool_search` / `tool_describe` / `tool_call`）。直调含工程生命周期（`project_open` / `project_close` / `save_project`）、素材（`library_search` / `library_apply` / `list_resources`）、场景编辑与验收（`scene_tree` / `inspect_many` / `edit_by_dsl` / `preview_frames` / `image_view`），以及启动与选题（`ext_status` / `get_project_context` / `brief_today` / `effect_search` / `inspiration_detail`）。官方工具在连上像塑后出现；其余扩展工具经发现入口调用。
+
+其它工具按需使用。例如，想用素材库搜索工具：
+
+1. 调 **tool_search**，传 `{"query":"素材库"}`，查看匹配的名字和摘要。结果有 `next_offset` 时可继续翻页。
+2. 调 **tool_describe**，传 `{"name":"library_search"}`，读取完整说明和参数。已知工具名时从这一步开始。
+3. 调 **tool_call**，传 `{"name":"library_search","arguments":{"query":"复古滤镜"}}`。
+
+需要在客户端直接看到全部工具时，在 MCP 服务的环境变量里设置 `XIANGSU_MCP_FLAT_TOOLS=1`，然后重启服务。使用 MCP SDK 的脚本可以按原名发送 `tools/call`。
+
+下表使用原工具名。接受 `project_path` 或官方 `instance_id` 的扩展工具可用其中之一指定工程（只开一个工程窗口时可省略）。
 
 | 工具 | 作用 |
 | --- | --- |
 | `ext_status` | 官方 MCP 连接状态；每个工程窗口的 pid、工程路径、instance_id、有没有未保存的改动、编辑器接口自检 |
 | `project_open` / `project_new` / `project_close` | 打开已有工程、新建空白工程并保存到指定目录（窗口都最小化在程序坞里，前台留在原来的应用）、关闭工程窗口（不把首页带出来；有未保存改动时默认拒绝） |
-| `image_view` | 看图：列表类工具返回的引用（`cover_ref`、`gif_ref`、任务内容块的 `image_refs` 等，形如 `img:12`）、详情类工具返回的地址（灵感 `images`、菜单示意图）或本机图片路径都放进它的 `images` 数组；视频和音频引用（`video:3`、`audio:5`）返回原地址；一次最多 8 张，动图等大图一次给不完时把没给的列在 `not_returned` 里（单次响应不超过 MCP stdio 的 10 MiB 上限） |
+| `image_view` | 看图 / 看视频画面：`img:` / `video:` 引用、URL 或本机路径放进 `images`；图片带宽高（PNG 含 `alpha_bbox`），视频用像塑 ffmpeg 抽 3×2 网格预览；可选 `crop`（0–1）；音频改用 `audio_probe`；一次最多 8 项，体积过大时列在 `not_returned` |
+| `image_sheet` | 多图网格拼图、PNG 透明边裁切（`trim_alpha`）、缩放与 `save_to`（不开像塑） |
+| `makeup_light_metrics` | 量妆容打光明暗（preset `H`/`G`/`ref` 或自定义 boxes），返回亮度比值与画框预览 |
+| `audio_probe` | 音频探测（响度 / 静音 / 卡点）与可选裁切转码导出 |
+| `h5_bundle_build` / `h5_font_subset` | H5 打包发布到 ArtifactStore、按页面字符裁字体为 woff2 |
 | `library_list` / `library_search` | 官方素材库面板清单（不传 `panel_key`，含素材广场、收藏）和面板里的分页列表、关键词搜索：逐个面板查标题以拿全结果；词正好是面板名或子分类名时也带出那里的素材（「滤镜」「腮红」「复古滤镜」），按标题匹配程度排序，`queries` 一次搜多个词，返回各面板条数和展开了哪些分类，结果缓存 10 分钟供翻页；每条素材带 `kind`、封面 `cover_ref` 和命中方式 `matched`；第一页还附带「添加对象」菜单里同名的项到 `menu_items`（如「脸蛋天才」，用 `menu_add` 加） |
 | `library_images` | 一张 AI 图片卡片的整组结果图地址（按 `image_index` 编号） |
 | `library_apply` | 下载素材包、校验 MD5、导入并放进场景（可撤销）；素材广场卡片按 `kind` 走编辑器自己的应用流程（AI 图片可用 `image_index` 选第几张）；返回新增对象（素材连带建出渲染组时，组下面这次新加的对象列在 `contents`）和素材包文件夹；素材广场卡片不给 `file_size`（恒为 3409，没有意义） |

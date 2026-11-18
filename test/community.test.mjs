@@ -1419,7 +1419,7 @@ test('task tools take the task_id of their own list and hand the plugin the id i
 });
 
 test('server kind and rank filter enums match the plugin tables', async () => {
-  const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
+  const client = await connect({ flatTools: true, listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   const props = (name) => tools.find((t) => t.name === name).inputSchema.properties;
   assert.deepEqual(props('rank_innovation').kind.enum, INNOVATION_KINDS);
