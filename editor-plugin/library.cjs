@@ -37,10 +37,9 @@ const aivfx = require('./features/aivfx.cjs');
 const customgan = require('./features/customgan.cjs');
 const imageedit = require('./features/imageedit.cjs');
 const assetops = require('./features/assetops.cjs');
-const templatesTimeline = require('./features/templates_timeline.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, previewinput, aivfx, customgan, imageedit, assetops, templatesTimeline, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, previewinput, aivfx, customgan, imageedit, assetops, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.

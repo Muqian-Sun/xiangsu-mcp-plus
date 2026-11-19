@@ -61,7 +61,9 @@ export class OfficialMcp {
           const client = await this.connectFn(this.url);
           if (typeof client.setNotificationHandler === 'function') {
             client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
-              this.refreshTools().catch(() => {});
+              this.refreshTools().catch((e) => {
+                this.lastError = String(e?.message ?? e);
+              });
             });
           }
           const { tools } = await client.listTools();
@@ -97,6 +99,7 @@ export class OfficialMcp {
     const { tools } = await this.client.listTools();
     const changed = fingerprint(tools) !== fingerprint(this.tools);
     this.tools = tools;
+    this.lastError = null;
     if (changed && this.onToolsChanged) this.onToolsChanged();
     return this.tools;
   }

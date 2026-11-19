@@ -13,19 +13,10 @@ const SNAPSHOTS_DIR = path.join(STATE_ROOT, 'snapshots');
 function getEhm(lib) {
   const mod = lib.mod(M.ehCommandManager);
   if (!mod) throw Error('EH_COMMAND_MANAGER_UNAVAILABLE');
-  const mgr = mod.EHCommandManager || mod.default || mod;
-  if (typeof mgr.getInstance === 'function') return mgr.getInstance();
-  if (mgr.instance) return mgr.instance;
-  return mgr;
-}
-
-function getSnapHost(lib) {
-  const mod = lib.mod(M.projectSnapshot);
-  if (!mod) throw Error('PROJECT_SNAPSHOT_HOST_UNAVAILABLE');
-  const host = mod.ConversationProjectSnapshotHost || mod.default || mod;
-  if (typeof host.getInstance === 'function') return host.getInstance();
-  if (host.instance) return host.instance;
-  return host;
+  const Mgr = mod.EHCommandManager || mod.default || mod;
+  if (typeof Mgr === 'function') return new Mgr();
+  if (Mgr && typeof Mgr.getAllAssets === 'function') return Mgr;
+  throw Error('EH_COMMAND_MANAGER_INVALID');
 }
 
 function getActiveProject(ef) {
@@ -108,7 +99,7 @@ async function resolveAssetGuid(ehm, guid, relPath) {
 }
 
 function extractAssetProperties(asset) {
-  const raw = asset?.properties ?? asset?.data?.properties;
+  const raw = asset?.properties ?? asset?.data?.properties ?? (asset && typeof asset === 'object' && !Array.isArray(asset) ? asset : null);
   if (!raw || typeof raw !== 'object') {
     throw Error('INVALID_ASSET_SHAPE: asset has no properties');
   }
@@ -176,6 +167,7 @@ function resolveSceneObjects(ef, guids) {
 
 const methods = {
   async assetProperties({ action, guid, path: relPath, type, path_contains, properties } = {}) {
+    this.ensureCompatible('assetOps');
     const ehm = getEhm(this);
 
     if (action === 'list') {
@@ -241,22 +233,19 @@ const methods = {
   },
 
   async projectSnapshot({ action, label, snapshot_id } = {}) {
+    this.ensureCompatible('assetOps');
     const ef = this.mod(M.ef);
     const project = getActiveProject(ef);
     const projectPath = project.path;
     const realProjectPath = resolveRealPath(projectPath);
     const indexFile = snapshotIndexFile(realProjectPath);
-    const snapHost = getSnapHost(this);
+    const ehm = getEhm(this);
 
     if (action === 'create') {
       const rand = crypto.randomBytes(3).toString('hex');
       const id = `snap-${Date.now()}-${rand}`;
       const gitRef = `refs/heads/snapshot/${id}`;
-      const res = await snapHost.createProjectSnapshot({
-        conversationId: CONVERSATION_ID,
-        projectPath,
-        gitRef,
-      });
+      const res = await ehm.createProjectSnapshot(CONVERSATION_ID, projectPath, gitRef);
       assertNoErrorResult(res, 'CREATE_SNAPSHOT_FAILED');
       const commitId = res?.commitId ?? res?.commit_id;
       const gitRepoPath = res?.gitRepoPath ?? res?.git_repo_path;
@@ -295,12 +284,7 @@ const methods = {
       if (resolveRealPath(entry.project_path) !== realProjectPath) {
         throw Error(`SNAPSHOT_PROJECT_MISMATCH: ${snapshot_id} belongs to ${entry.project_path}, current is ${realProjectPath}`);
       }
-      const res = await snapHost.restoreProjectSnapshot({
-        conversationId: CONVERSATION_ID,
-        projectPath,
-        commitId: entry.commit_id,
-        gitRepoPath: entry.git_repo_path,
-      });
+      const res = await ehm.restoreProjectSnapshot(CONVERSATION_ID, projectPath, entry.commit_id, entry.git_repo_path);
       assertNoErrorResult(res, 'RESTORE_SNAPSHOT_FAILED');
       return { restored: true, snapshot: entry, ...(res && typeof res === 'object' ? { result: res } : {}) };
     }
@@ -316,11 +300,7 @@ const methods = {
       if (resolveRealPath(entry.project_path) !== realProjectPath) {
         throw Error(`SNAPSHOT_PROJECT_MISMATCH: ${snapshot_id} belongs to ${entry.project_path}, current is ${realProjectPath}`);
       }
-      const res = await snapHost.deleteProjectSnapshotRefs({
-        conversationId: CONVERSATION_ID,
-        gitRefs: [entry.git_ref],
-        gitRepoPath: entry.git_repo_path,
-      });
+      const res = await ehm.deleteProjectSnapshotRefs(CONVERSATION_ID, [entry.git_ref], entry.git_repo_path);
       assertNoErrorResult(res, 'DELETE_SNAPSHOT_FAILED');
       entries.splice(idx, 1);
       writeSnapshotIndex(indexFile, entries);
@@ -331,6 +311,7 @@ const methods = {
   },
 
   async assetPackage({ action, path: pkgPath, guid, guids, name, out_dir } = {}) {
+    this.ensureCompatible('assetOps');
     const ehm = getEhm(this);
 
     if (action === 'import_package') {

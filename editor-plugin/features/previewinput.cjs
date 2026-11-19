@@ -45,7 +45,13 @@ const methods = {
     const mod = this.mod(M.ehCommandManager);
     const mgr = mod.EHCommandManager || mod;
     if (typeof mgr.getInstance === 'function') return mgr.getInstance();
-    if (typeof mgr === 'function' && typeof mgr.previewDrag !== 'function') return new mgr();
+    if (typeof mgr === 'function' && typeof mgr.previewDrag !== 'function') {
+      if (!this._ehManager || this._ehManagerCtor !== mgr) {
+        this._ehManager = new mgr();
+        this._ehManagerCtor = mgr;
+      }
+      return this._ehManager;
+    }
     return mgr;
   },
 
@@ -170,6 +176,7 @@ const methods = {
       const outPath = resolveRecordPath(save_to);
       try {
         const result = await mgr.recordPreviewVideo(outPath, dur);
+        if (result && result.success === false) throw Error(`PREVIEW_RECORD_FAILED: ${result.error || 'recording failed'}`);
         return { action: 'record', path: outPath, duration_s: dur, result };
       } catch (e) {
         await mgr.abortPreviewRecording().catch(() => {});
@@ -181,16 +188,21 @@ const methods = {
       const projectPath = this.mod(M.ef).ProjectManager.getInstance().getActiveProject()?.path ?? null;
       try {
         const result = await mgr.beginPreviewRecording(outPath, projectPath);
+        this._recordOutPath = outPath;
         return { action: 'start', path: outPath, projectPath, result };
       } catch (e) {
+        this._recordOutPath = null;
         await mgr.abortPreviewRecording().catch(() => {});
         throw e;
       }
     }
     if (action === 'stop') {
       const result = await mgr.endPreviewRecording();
-      return { action: 'stop', result };
+      const outPath = result?.path || this._recordOutPath || null;
+      this._recordOutPath = null;
+      return { action: 'stop', ...(outPath ? { path: outPath } : {}), result };
     }
+    this._recordOutPath = null;
     const result = await mgr.abortPreviewRecording();
     return { action: 'abort', result };
   },

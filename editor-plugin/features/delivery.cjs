@@ -165,7 +165,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     step,
     filled: { icons: basic.icons, name: basic.name, trigger_hint: basic.trigger_hint, camera: basic.camera },
     bindings: bindings && { inspiration: bindings.inspiration, task: bindings.task },
-    pick_nomination: bindings?.pick_nomination ?? { available: false, checked: null, remaining: null, disabled: false, text: null },
+    pick_nomination: bindings?.pick_nomination ?? { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null },
     other_sections: otherSections,
     review,
     next,

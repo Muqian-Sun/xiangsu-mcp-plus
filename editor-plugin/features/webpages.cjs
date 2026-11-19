@@ -63,13 +63,14 @@ async function submitPage(arg) {
   const pickNominationWrapper = () => [...document.querySelectorAll('.innovation-wrapper')].filter(shown).find((w) => /精选提报/.test(text(w.querySelector('.innovation-title'))));
   const readPickNomination = () => {
     const w = pickNominationWrapper();
-    if (!w) return { available: false, checked: null, remaining: null, disabled: false, text: null };
+    if (!w) return { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null };
     const box = w.querySelector('.custom-checkbox');
     const contentText = text(w.querySelector('.innovation-main')) || text(w);
-    const m = /(?:每日有|剩余|还可提报)\s*(\d+)\s*次/.exec(contentText);
+    const mRem = /(?:剩余|还可提报)\s*(\d+)\s*次/.exec(contentText);
+    const mLim = /每日有\s*(\d+)\s*次/.exec(contentText);
     const disabled = !box || box.classList.contains('disabled') || box.hasAttribute('disabled') || box.getAttribute('aria-disabled') === 'true';
     const checked = !!box && (box.classList.contains('checked') || box.classList.contains('active') || box.getAttribute('aria-checked') === 'true' || !!box.querySelector('input:checked'));
-    return { available: true, checked, remaining: m ? Number(m[1]) : null, disabled, text: contentText || null };
+    return { available: true, checked, remaining: mRem ? Number(mRem[1]) : null, daily_limit: mLim ? Number(mLim[1]) : null, disabled, text: contentText || null };
   };
 
   switch (arg.action) {
