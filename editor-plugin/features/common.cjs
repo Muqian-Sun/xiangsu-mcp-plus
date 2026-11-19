@@ -87,13 +87,6 @@ const M = {
   imageEditAI: '@orion/Business/ImageEditor/utils/imageEditAIGen',
   imageSegmentation: '@orion/Business/ImageEditor/utils/imageSegmentationUtil',
   ehCommandManager: '@orion/Business/Agent/EHCommand/EHCommandManager',
-  previewRecording: '@orion/Business/Agent/EHCommand/AgentPreviewRecordingService',
-  humanAction: '@orion/Business/Agent/EHCommand/AgentHumanActionService',
-  playthroughController: '@orion/Business/Agent/EHCommand/AgentPlaythroughSessionController',
-  previewConfig: '@orion/Business/Agent/EHCommand/PreviewVerificationConfig',
-  projectSnapshot: '@orion/Business/Agent/Snapshot/ConversationProjectSnapshotHost',
-  textTemplatePreview: '@orion/Business/IconCreationNew/controller/TextTemplatePreviewManager',
-  timelineCore: '@orion/Business/UI/ORTimeline/Core',
 };
 
 // Where this plugin keeps its own files (import records, preview strips) outside any project.
