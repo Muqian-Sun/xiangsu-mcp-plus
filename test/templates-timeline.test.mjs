@@ -284,8 +284,12 @@ test('graphParams inspects and updates real .surfacegraph and .vfxgraph JSON pre
 
   const vfxSet = await lib.graphParams({ action: 'set', graph_path: 'Assets/fire.vfxgraph', param_name: '火焰速率', value: 3.0 });
   assert.equal(vfxSet.param.value, 3.0);
+  const vfxSetByUniform = await lib.graphParams({ action: 'set', graph_path: 'Assets/fire.vfxgraph', param_name: 'Float_0_10', value: 4.5 });
+  assert.equal(vfxSetByUniform.param.uniform_name, 'Float_0_10');
+  assert.equal(vfxSetByUniform.param.value, 4.5);
   const rawVfx = JSON.parse(fs.readFileSync(vfxPath, 'utf8'));
   assert.equal(typeof rawVfx.vfxGraphData, 'string', 'vfxGraphData stays stringified JSON');
 
+  await assert.rejects(lib.graphParams({ action: 'inspect', graph_path: 'Assets/missing.surfacegraph' }), /GRAPH_NOT_FOUND/);
   await assert.rejects(lib.graphParams({ action: 'set', graph_path: 'Assets/LyricsSG.surfacegraph', param_name: 'Missing' }), /GRAPH_PARAM_NOT_FOUND/);
 });

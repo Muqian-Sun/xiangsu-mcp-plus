@@ -450,6 +450,7 @@ const methods = {
         const { abs, rel } = resolveInsideProject(project.path, graph_path);
         const ext = path.extname(abs).toLowerCase();
         if (!GRAPH_EXTS.has(ext)) throw Error(`UNSUPPORTED_GRAPH_TYPE: ${ext}; supported: .surfacegraph, .vfxgraph`);
+        if (!fs.existsSync(abs)) throw Error(`GRAPH_NOT_FOUND: ${rel}`);
         return { graphs: [inspectGraphFile(abs, rel)] };
       }
       const files = walkFiles(path.join(realProj, 'Assets'), (_, name) => GRAPH_EXTS.has(path.extname(name).toLowerCase()));
@@ -478,7 +479,7 @@ const methods = {
       fs.renameSync(tmp, abs);
 
       const readback = inspectGraphFile(abs, rel);
-      const hit = readback.params.find((p) => p.name === param_name);
+      const hit = readback.params.find((p) => p.name === param_name || p.uniform_name === param_name);
       return { updated: true, graph_path: rel, param_name, param: hit || null };
     }
 
