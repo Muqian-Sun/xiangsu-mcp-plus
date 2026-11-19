@@ -27,6 +27,7 @@ import { FRAMES_TTL_MS, cropImage, framesDir, jpegToPng, resizeImage } from './f
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 import { QrCodes } from './qrcodes.mjs';
 import { CallLog } from './calllog.mjs';
+import { parseTimelineYaml } from './timeline-yaml.mjs';
 import { MediaRefs, REF_PATTERN, Spill, withRefs } from './outputs.mjs';
 import { ensurePlugin } from './plugininstall.mjs';
 import { platformRequest } from './opsdata.mjs';
@@ -2995,7 +2996,7 @@ export function createServer(deps = {}) {
     {
       name: 'asset_properties',
       keywords: '资源 属性 贴图 分辨率 压缩 过滤 extra asset properties list get set',
-      description: 'List, read, or edit asset import properties online (e.g. texture compressMaxResolution, filterMin, wrapModeS) without closing the editor: action=list|get|set. Validates editable keys and reads back to confirm.',
+      description: 'List, read, or edit asset import properties online (e.g. texture compressMaxResolution="Size1024"|"Size512"|"Size256"|"Size128", filterMin, wrapModeS) without closing the editor: action=list|get|set. Validates editable keys and reads back to confirm.',
       shape: {
         ...target,
         action: z.enum(['list', 'get', 'set']).describe('list, get, or set.'),
@@ -3033,6 +3034,62 @@ export function createServer(deps = {}) {
         out_dir: z.string().min(1).optional().describe('export_package: output directory.'),
       },
       run: plugin('asset_package', 60000),
+    },
+    {
+      name: 'text_template',
+      keywords: '花字 动态文字 歌词 模板 text template lyrics list apply',
+      description: 'List or apply scene text templates (ScreenTextJS/Text3D, setting text/font_size/color): action=list|apply. Icon/lyrics templates are listed with their kind.',
+      shape: {
+        ...target,
+        action: z.enum(['list', 'apply']).describe('list or apply.'),
+        id: z.string().min(1).optional().describe('apply: template id from list.'),
+        kind: z.enum(['scene_text', 'icon_text_template', 'text_template_resource', 'lyrics_template']).optional().describe('list: optional kind filter.'),
+        text: z.string().optional().describe('apply: initial text content.'),
+        font_size: z.number().positive().optional().describe('apply: font size.'),
+        color: z.string().optional().describe('apply: text color (#RRGGBB or #RRGGBBAA).'),
+      },
+      run: plugin('text_template', 30000),
+    },
+    {
+      name: 'timeline',
+      keywords: '时间轴 关键帧 卡点 节拍 timeline inspect set_tracks import_beats',
+      description: 'Inspect .timeline YAML assets and TimelinePlayer state, or add ActivityTrack clips/beats via Timeline@1.0.17 API: action=inspect|set_tracks|import_beats.',
+      shape: {
+        ...target,
+        action: z.enum(['inspect', 'set_tracks', 'import_beats']).describe('inspect, set_tracks, or import_beats.'),
+        timeline_path: z.string().min(1).optional().describe('set_tracks/import_beats: .timeline path inside project.'),
+        tracks: z.array(z.record(z.string(), z.unknown())).optional().describe('set_tracks: [{name, clips:[{start_time,end_time}]}].'),
+        beats: z.array(z.number().min(0)).optional().describe('import_beats: beat timestamps in seconds.'),
+        fps: z.number().positive().optional().describe('import_beats: frame rate (default 30).'),
+        track_name: z.string().min(1).optional().describe('import_beats: target track name (default Beats).'),
+      },
+      run: async ({ project_path, instance_id, action, timeline_path, tracks, beats, fps, track_name }) => {
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const res = await d.callPlugin('timeline', { action, timeline_path, tracks, beats, fps, track_name }, { projectPath, timeoutMs: 30000 });
+        if (action === 'inspect' && Array.isArray(res?.timeline_files)) {
+          res.timelines = res.timeline_files.map((f) => {
+            try {
+              return { path: f.rel_path, ...parseTimelineYaml(fs.readFileSync(f.abs_path, 'utf8')) };
+            } catch (e) {
+              return { path: f.rel_path, parse_error: String(e?.message ?? e) };
+            }
+          });
+        }
+        return text(res);
+      },
+    },
+    {
+      name: 'graph_params',
+      keywords: '节点图 材质图 粒子图 参数 graph params surface vfxgraph inspect set',
+      description: 'Inspect or update exposed parameters in .surfacegraph (showInProperty/uniforms) and .vfxgraph (paramList/Parameters) JSON assets: action=inspect|set.',
+      shape: {
+        ...target,
+        action: z.enum(['inspect', 'set']).describe('inspect or set.'),
+        graph_path: z.string().min(1).optional().describe('Graph file path inside project (required for set).'),
+        param_name: z.string().min(1).optional().describe('set: exposed parameter name.'),
+        value: z.unknown().optional().describe('set: new parameter value.'),
+      },
+      run: plugin('graph_params', 30000),
     },
   ];
   const own = new Map(tools.map((t) => [t.name, { ...t, schema: z.strictObject(t.shape) }]));

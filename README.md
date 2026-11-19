@@ -146,6 +146,9 @@
 | `asset_properties` | 在线列出、读取、修改资源导入属性（如贴图 `compressMaxResolution` / 滤波 / Wrap 模式），无需关窗口手改 `.extra`，写入后回读校验 |
 | `project_snapshot` | 工程快照与回滚：`action=create|list|restore|delete`，按工程隔离索引，防止跨工程误恢复 |
 | `asset_package` | 资产包与预制体操作：`import_package`（导入 `.ehpackage`）、`create_prefab`、`instantiate_prefab`、`export_package`（导出场景对象为 `.ehpackage`） |
+| `text_template` | 列出文字/歌词/花字模板，并向场景添加 `ScreenTextJS` / `Text3D` 设置文案、字号与颜色（`list` / `apply`） |
+| `timeline` | 解析 `.timeline` YAML 与 `TimelinePlayer` 状态，或通过 `Timeline@1.0.17` 原生 API 添加轨道与节拍片段（`inspect` / `set_tracks` / `import_beats`） |
+| `graph_params` | 检查或修改 `.surfacegraph` / `.vfxgraph` 暴露参数（`inspect` / `set`，写入后回读校验） |
 | `sfx_synth` | 按预设合成音效（ding、tick、pop、boing、puff、win、chime、whoosh、wahwah、lose、reveal、sparkle、heartbeat、shutter、miss、hit、stamp、shiver 共 18 种，频率、包络、音量照各工程的音效脚本，没有随机噪声的和原脚本逐采样一致），可升降调、调音量，出双声道 128 kbps MP3 或 WAV。不用开像塑 |
 | `ui_text_image` / `ui_panel` | 描边 / 渐变 / 投影文字 PNG（Text2D 设不了描边），圆角或胶囊底板 PNG（可带几行文字），一次一批，返回每张的宽高。不用开像塑 |
 | `preview_model_add` | 把模特照片（或视频、或两张照片交替循环）按内置预览视频的规格转码，加进像塑的预览清单 `PreviewResources.json`（先备份）；新开的工程窗口就能在 `set_preview_video` / `preview_frames` 里用 |

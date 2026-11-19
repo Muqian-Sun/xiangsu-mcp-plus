@@ -262,6 +262,11 @@ const REQUIRED = {
     ...['getAllAssets', 'getAsset', 'setResourceProperties', 'addPackage', 'addPrefab', 'instantiatePrefab', 'createProjectSnapshot', 'restoreProjectSnapshot', 'deleteProjectSnapshotRefs'].map((p) => [M.ehCommandManager, `EHCommandManager.prototype.${p}`]),
     [M.ef, 'Resource.AssetPackageManager.instance.exportAsPrefabsPkg'],
   ],
+  templatesTimeline: [
+    [M.ef, 'Project.getCurrent'],
+    [M.orionui, 'ExtensionManager.host.getAPI'],
+    [M.sceneOps, 'createEntity'],
+  ],
   aiVfx: [
     [M.assetsLibrary, 'AssetsLibrary.getInstance'],
     ...['resume', 'leavePage', 'updatePrompt', 'updateDurationSeconds', 'updateReferenceMedia', 'getReferenceAdmissionError', 'submit', 'queryTaskList', 'importCurrentResult', 'cancel'].map((p) => [M.aiVfxManager, `default.prototype.${p}`]),

@@ -41,6 +41,7 @@ const INTENT_SYNONYMS = [
   [/后处理|滤镜|闪光|发光|模糊|暗角|胶片|转场/gu, 'FilterV2 hierarchy_posteffect BlingV2 Bloom ChromaticAberraion Distort Grain Vignette BokehBlur MotionBlur LensFlare Transition'],
   [/3d|模型|高斯|点云|动作迁移|骨骼/gu, 'ThreeDModel HeadMesh FaceShapeV2 GSplatEntity ai3d'],
   [/对话|聊天|识图|点评|配文|LLM|万物识别|识物/gu, 'AIChat AIImageCaption AIObjectLens AIDraw AIVideo Audio_AIMusic'],
+  [/花字|歌词|时间轴|关键帧|卡点/gu, 'text_template timeline TimelinePlayer Lyrics'],
 ];
 
 // Built-in baseline taxonomy (mirrors Xiangsu 9.8.3 add-object menu + AI pipelines) used only when
@@ -203,6 +204,7 @@ const FUNCTION_MAPPINGS = [
   { match: /2D|贴纸|图片|前景|文字/i, menu_ids: ['ScreenImageEntity', 'ScreenTextJS', 'Mask'], tool: 'menu_add / library_search / ui_text_image', note: '2D 前景贴图、文字和遮罩' },
   { match: /排行|打卡|倒计时|天气|POI/i, menu_ids: ['GameRankingListJS', 'CheckinRankingListJS', 'CountDown', 'WeatherCardEntity', 'POIEntityCity'], tool: 'menu_add', note: '内置社交/互动组件' },
   { match: /对话|聊天|识图|配文|识物|万物识别|LLM/i, menu_ids: ['AIChat', 'AIImageCaption', 'AIObjectLens', 'AIDraw', 'AIVideo', 'Audio_AIMusic'], tool: 'menu_add', note: '原生云端 AI 互动组件（运行时联网计费）' },
+  { match: /花字|歌词|时间轴|卡点/i, menu_ids: ['TimelinePlayer', 'ScreenTextJS', 'Text3D'], tool: 'text_template / timeline', note: '场景文字模板与时间轴轨道/节拍编辑' },
 ];
 
 export function readEditorVersion(appRoot = process.env.XIANGSU_APP ?? '/Applications/Douyin AR.app') {
