@@ -191,14 +191,7 @@ const methods = {
     else if (kind === 'ai_image') await lib.AIAssets.AIAssetPictureCtx.onApplyAIAsset({ ...card, uriInfos: [{ uri: uris[index] }] }, asset);
     else if (kind === 'ai_makeup') await lib.AIAssets.AIAssetMakeupCtx.onApplyAIAsset({ ...card, uriInfos: asset.aiParam.resMakeup }, asset);
     else if (kind === 'ai_video' || kind === 'ai_3d') {
-      const ctx = kind === 'ai_video'
-        ? (lib.AIAssets.AIAssetVideoCtx || lib.AIAssets.aiVideo)
-        : (lib.AIAssets.AIAsset3dCtx || lib.AIAssets.AIAsset3DCtx || lib.AIAssets.ai3d);
-      if (ctx && typeof ctx.onApplyAIAsset === 'function') {
-        await ctx.onApplyAIAsset({ ...card, uriInfos: [{ uri: '' }] }, asset);
-      } else if (typeof ctx === 'function') {
-        await ctx(asset, !!auto_instantiate);
-      } else if (asset.customized && asset.customized.resourceExt === resourceType.Ehpackage && square && typeof square.applyNormalAsset === 'function') {
+      if (asset.customized && asset.customized.resourceExt === resourceType.Ehpackage && square && typeof square.applyNormalAsset === 'function') {
         await square.applyNormalAsset(asset, !!auto_instantiate);
       } else {
         throw Error(`SQUARE_APPLY_UNSUPPORTED: ${kind} template ${raw.templateId} has no apply handler`);

@@ -194,3 +194,31 @@ test('image tools copy the editor result out of its cache; repaint sends the mar
   assert.deepEqual(JSON.parse(mat.content[0].text).files, { subject: path.join(out, 'frame_subject.png'), hair: path.join(out, 'frame_hair.png') });
   assert.ok(fs.existsSync(path.join(out, 'frame_hair.png')));
 });
+
+test('preview_record holds full rate on start success and releases it on start failure or stop', async () => {
+  let failStart = false;
+  const { call, seen } = await connect({
+    plugin: async (method, params) => {
+      if (method === 'preview_full_rate') return { ok: true };
+      if (method === 'preview_record') {
+        if (params.action === 'start' && failStart) throw Error('START_BOOM');
+        return { action: params.action, path: '/tmp/nonexistent-rec.mp4' };
+      }
+      return {};
+    },
+  });
+
+  const okStart = await call('preview_record', { project_path: '/proj/B', action: 'start' });
+  assert.equal(okStart.isError, undefined);
+  assert.equal(seen.filter((s) => s.method === 'preview_full_rate' && s.params.hold_ms === 0).length, 0);
+
+  const okStop = await call('preview_record', { project_path: '/proj/B', action: 'stop' });
+  assert.equal(okStop.isError, undefined);
+  assert.equal(seen.filter((s) => s.method === 'preview_full_rate' && s.params.hold_ms === 0).length, 1);
+
+  failStart = true;
+  const errStart = await call('preview_record', { project_path: '/proj/B', action: 'start' });
+  assert.equal(errStart.isError, true);
+  assert.match(errStart.content[0].text, /START_BOOM/);
+  assert.equal(seen.filter((s) => s.method === 'preview_full_rate' && s.params.hold_ms === 0).length, 2);
+});

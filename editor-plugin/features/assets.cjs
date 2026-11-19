@@ -254,8 +254,13 @@ const REQUIRED = {
     [M.preview, 'PreviewManager.getInstance'],
     [M.preview, 'PreviewStreamState.Paused'],
     ...['reloadSticker', 'previewTouchMove', 'seekToTime', 'switchGestureVideo'].map((p) => [M.ehPreview, `EHPreviewCommand.prototype.${p}`]),
+    ...['previewDrag', 'recordPreviewVideo', 'beginPreviewRecording', 'endPreviewRecording', 'abortPreviewRecording', 'pausePreview', 'resumePreview', 'transportPreviewProperty', 'beginHumanActionSession', 'switchHumanAction', 'restoreHumanActionSession'].map((p) => [M.ehCommandManager, `EHCommandManager.prototype.${p}`]),
     ...['setPlayAudioInput', 'clearPlayAudioInput'].map((p) => [M.playAudio, `AgentPlayAudioInputService.prototype.${p}`]),
     ...['activateAgentPlaythroughRuntimeSession', 'deactivateAgentPlaythroughRuntimeSession', 'isAgentPlaythroughRuntimeSessionActive', 'clearAgentPlaythroughRuntimeSession'].map((p) => [M.playthroughRuntime, p]),
+  ],
+  assetOps: [
+    ...['getAllAssets', 'getAsset', 'setResourceProperties', 'addPackage', 'addPrefab', 'instantiatePrefab', 'createProjectSnapshot', 'restoreProjectSnapshot', 'deleteProjectSnapshotRefs'].map((p) => [M.ehCommandManager, `EHCommandManager.prototype.${p}`]),
+    [M.ef, 'Resource.AssetPackageManager.instance.exportAsPrefabsPkg'],
   ],
   aiVfx: [
     [M.assetsLibrary, 'AssetsLibrary.getInstance'],

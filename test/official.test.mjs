@@ -154,6 +154,28 @@ test('refreshes tools on ToolListChanged notification without disconnecting', as
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual((await o.listTools()).map((t) => t.name), ['get_scene', 'new_hot_tool']);
   assert.equal(changes, 2);
+
+  // Notification refresh failure records lastError instead of silently swallowing it.
+  let failRefresh = true;
+  const oErr = new OfficialMcp({
+    connect: async () => ({
+      setNotificationHandler: (schema, fn) => {
+        if (schema === ToolListChangedNotificationSchema) handler = fn;
+      },
+      listTools: async () => {
+        if (failRefresh) throw Error('REFRESH_BOOM');
+        return { tools };
+      },
+      callTool: async () => ({}),
+      close: async () => {},
+    }),
+  });
+  failRefresh = false;
+  await oErr.listTools();
+  failRefresh = true;
+  handler();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(oErr.status().last_error, 'REFRESH_BOOM');
 });
 
 test('triggers onToolsChanged when tool names match but inputSchema changes, and ignores key order', async () => {

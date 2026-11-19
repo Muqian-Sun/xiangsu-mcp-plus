@@ -32,54 +32,54 @@ function setup(opts = {}) {
       return hand === 'Victory' ? { success: true, handAction: hand, captureTimesMs: [967], paused: true } : { success: false, error: { code: 'INVALID_HAND_ACTION', message: `Unknown canonical HandAction: ${hand}` } };
     }
   }
-  const EHCommandManager = {
+  class EHCommandManager {
     async previewDrag(x1, y1, x2, y2, steps, durationMs) {
       calls.push(['drag', x1, y1, x2, y2, steps, durationMs]);
       return { dragged: true };
-    },
+    }
     async pausePreview() {
       calls.push(['pause']);
       return { paused: true };
-    },
+    }
     async resumePreview() {
       calls.push(['resumePreview']);
       return { paused: false };
-    },
+    }
     async transportPreviewProperty(guid, componentType, property, value) {
       calls.push(['setProperty', guid, componentType, property, value]);
       return { applied: true };
-    },
+    }
     async beginHumanActionSession(sessionId) {
       calls.push(['beginHuman', sessionId]);
       return { sessionId };
-    },
+    }
     async switchHumanAction(sessionId, actionId, filePath, inputType) {
       calls.push(['switchHuman', sessionId, actionId, filePath, inputType]);
       return { switched: true };
-    },
+    }
     async restoreHumanActionSession(sessionId) {
       calls.push(['restoreHuman', sessionId]);
       return { restored: true };
-    },
+    }
     async recordPreviewVideo(outPath, durationS) {
       calls.push(['recordVideo', outPath, durationS]);
       if (opts.recordFails) throw Error('RECORD_FAILED');
       return { outPath, durationS };
-    },
+    }
     async beginPreviewRecording(outPath, projectPath) {
       calls.push(['beginRecording', outPath, projectPath]);
       if (opts.startRecordFails) throw Error('START_RECORD_FAILED');
       return { outPath, projectPath };
-    },
+    }
     async endPreviewRecording() {
       calls.push(['endRecording']);
       return { stopped: true };
-    },
+    }
     async abortPreviewRecording() {
       calls.push(['abortRecording']);
       return { aborted: true };
-    },
-  };
+    }
+  }
   class AgentPlayAudioInputService {
     setPlayAudioInput(id, input, ms) {
       calls.push(['audio', input, ms]);
@@ -254,11 +254,15 @@ test('previewRecord supports record, start/stop, abort, and cleans up on error',
 
   const stopped = await lib.previewRecord({ action: 'stop' });
   assert.equal(stopped.action, 'stop');
+  assert.equal(stopped.path, '/tmp/session.mp4');
   assert.deepEqual(calls.at(-1), ['endRecording']);
 
   const aborted = await lib.previewRecord({ action: 'abort' });
   assert.equal(aborted.action, 'abort');
   assert.deepEqual(calls.at(-1), ['abortRecording']);
+
+  const stoppedAfterAbort = await lib.previewRecord({ action: 'stop' });
+  assert.equal(stoppedAfterAbort.path, undefined);
 
   await assert.rejects(lib.previewRecord({ action: 'invalid' }), /INVALID_ACTION/);
   await assert.rejects(lib.previewRecord({ action: 'record', duration_s: 0 }), /INVALID_DURATION/);
@@ -271,4 +275,6 @@ test('previewRecord supports record, start/stop, abort, and cleans up on error',
   const startErr = setup({ startRecordFails: true });
   await assert.rejects(startErr.lib.previewRecord({ action: 'start', save_to: '/tmp/fail-start.mp4' }), /START_RECORD_FAILED/);
   assert.deepEqual(startErr.calls.at(-1), ['abortRecording']);
+  const stopAfterFail = await startErr.lib.previewRecord({ action: 'stop' });
+  assert.equal(stopAfterFail.path, undefined);
 });

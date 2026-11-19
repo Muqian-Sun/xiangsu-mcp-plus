@@ -296,10 +296,9 @@ test('square apply records what it added so object_remove can clean up after it'
   assert.deepEqual(rec, [{ name: '粉色公主纱裙', package_folders: ['Assets/粉色公主纱裙'] }]);
 });
 
-test('square apply handles ai_video and ai_3d with dedicated contexts, Ehpackage, or fails closed', async () => {
-  const { lib, calls, modules, projectDir } = setup();
-  const assetsLib = modules[M.assetsLibrary].AssetsLibrary.getInstance();
-  // Without dedicated context on AIAssets, non-Ehpackage ai_video / ai_3d fail closed with SQUARE_APPLY_UNSUPPORTED.
+test('square apply handles ai_video and ai_3d Ehpackage, or fails closed when non-Ehpackage', async () => {
+  const { lib, calls, projectDir } = setup();
+  // Non-Ehpackage ai_video / ai_3d fail closed with SQUARE_APPLY_UNSUPPORTED (no guessed video/3d contexts).
   await assert.rejects(lib.apply({ item: CARDS.aiVideoBySubType }), /SQUARE_APPLY_UNSUPPORTED: ai_video template 915/);
   await assert.rejects(lib.apply({ item: CARDS.ai3dBySubType }), /SQUARE_APPLY_UNSUPPORTED: ai_3d template 918/);
 
@@ -307,38 +306,6 @@ test('square apply handles ai_video and ai_3d with dedicated contexts, Ehpackage
   const vidPkg = await lib.apply({ item: CARDS.aiVideoPkg });
   assert.equal(vidPkg.kind, 'package');
   assert.deepEqual(calls.applied.at(-1), ['applyNormalAsset', '916', true]);
-
-  // With dedicated AIAssetVideoCtx / AIAsset3dCtx handlers, ai_video / ai_3d apply and recordImport.
-  const ctxSetup = setup();
-  const ctxLib = ctxSetup.lib;
-  const ctxAssets = ctxSetup.modules[M.assetsLibrary].AssetsLibrary.getInstance().AIAssets;
-  ctxAssets.AIAssetVideoCtx = {
-    onApplyAIAsset: async (cardInfo, asset) => {
-      ctxSetup.calls.applied.push(['video', cardInfo.templateId, asset.templateId]);
-      setTimeout(() => {
-        ctxSetup.sceneObjects.push({ name: asset.title, parent: ctxSetup.sceneObjects[0], guid: asset.templateId });
-        ctxSetup.resources.push({ assetPath: path.join(ctxSetup.projectDir, 'Assets', asset.title), builtin: false });
-      }, 15);
-    },
-  };
-  ctxAssets.AIAsset3dCtx = {
-    onApplyAIAsset: async (cardInfo, asset) => {
-      ctxSetup.calls.applied.push(['3d', cardInfo.templateId, asset.templateId]);
-      setTimeout(() => {
-        ctxSetup.sceneObjects.push({ name: asset.title, parent: ctxSetup.sceneObjects[0], guid: asset.templateId });
-        ctxSetup.resources.push({ assetPath: path.join(ctxSetup.projectDir, 'Assets', asset.title), builtin: false });
-      }, 15);
-    },
-  };
-  const vid = await ctxLib.apply({ item: CARDS.aiVideoByCat });
-  assert.equal(vid.kind, 'ai_video');
-  assert.deepEqual(vid.added_objects, [{ name: 'AI 视频卡', object_path: '素材/AI 视频卡' }]);
-  const d3 = await ctxLib.apply({ item: CARDS.ai3dByCat });
-  assert.equal(d3.kind, 'ai_3d');
-  assert.deepEqual(d3.added_objects, [{ name: 'AI 3D 卡', object_path: '素材/AI 3D 卡' }]);
-  const imports = Object.values(readImports(ctxSetup.projectDir));
-  assert.ok(imports.some((r) => r.name === 'AI 视频卡'));
-  assert.ok(imports.some((r) => r.name === 'AI 3D 卡'));
   assert.ok(Object.values(readImports(projectDir)).some((r) => r.name === 'AI 视频包'));
 });
 

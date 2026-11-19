@@ -2800,18 +2800,20 @@ export function createServer(deps = {}) {
         ...target,
         action: z.enum(['record', 'start', 'stop', 'abort']).describe('record (timed), start, stop, or abort.'),
         duration_s: z.number().gt(0).max(60).optional().describe('record: duration in seconds (0 < duration_s <= 60, default 5).'),
-        save_to: z.string().min(1).optional().describe('record/start: output .mp4/.mov path (defaults to temp file).'),
+        save_to: z.string().min(1).optional().describe('record/start: output .mp4 path (defaults to temp file).'),
       },
       run: async ({ project_path, instance_id, action, duration_s, save_to }) => {
-        const projectPath = await resolveProjectPath({ project_path, instance_id });
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
         const holdMs = action === 'record' ? Math.ceil((duration_s ?? 5) * 1000) + HOLD_SLACK_MS : 60000 + HOLD_SLACK_MS;
         const needHold = action === 'record' || action === 'start';
         if (needHold) await holdFullRate(projectPath, holdMs);
         let res;
+        let started = false;
         try {
           res = await d.callPlugin('preview_record', { action, duration_s, save_to }, { projectPath, timeoutMs: 120000 });
+          started = action === 'start';
         } finally {
-          if (action !== 'start') await releaseFullRate(projectPath);
+          if (!started) await releaseFullRate(projectPath);
         }
         const content = [{ type: 'text', text: JSON.stringify(res, null, 2) }];
         if ((action === 'record' || action === 'stop') && res?.path && fs.existsSync(res.path)) {
@@ -3031,51 +3033,6 @@ export function createServer(deps = {}) {
         out_dir: z.string().min(1).optional().describe('export_package: output directory.'),
       },
       run: plugin('asset_package', 60000),
-    },
-    {
-      name: 'text_template',
-      keywords: '花字 动态文字 歌词 模板 text template lyrics list apply',
-      description: 'List or apply built-in dynamic text templates and lyrics templates: action=list|apply. Can set text, font_size, and color.',
-      shape: {
-        ...target,
-        action: z.enum(['list', 'apply']).describe('list or apply.'),
-        id: z.string().min(1).optional().describe('apply: template id from list.'),
-        kind: z.enum(['text_template', 'lyrics_template']).optional().describe('apply: optional template kind.'),
-        text: z.string().optional().describe('apply: initial text content.'),
-        font_size: z.number().positive().optional().describe('apply: font size.'),
-        color: z.string().optional().describe('apply: text color.'),
-        parent_guid: z.string().min(1).optional().describe('apply: optional parent scene object GUID.'),
-      },
-      run: plugin('text_template', 30000),
-    },
-    {
-      name: 'timeline',
-      keywords: '时间轴 关键帧 卡点 节拍 timeline inspect set_tracks import_beats',
-      description: 'Inspect or edit .timeline assets and TimelinePlayer components: action=inspect|set_tracks|import_beats (writes audio_probe beats into beatsPoint/keyframes).',
-      shape: {
-        ...target,
-        action: z.enum(['inspect', 'set_tracks', 'import_beats']).describe('inspect, set_tracks, or import_beats.'),
-        timeline_path: z.string().min(1).optional().describe('set_tracks/import_beats: .timeline path inside project.'),
-        tracks: z.array(z.record(z.string(), z.unknown())).optional().describe('set_tracks: track definitions.'),
-        beats: z.array(z.number().min(0)).optional().describe('import_beats: beat timestamps in seconds.'),
-        fps: z.number().positive().optional().describe('Frame rate (default 30).'),
-        target_guid: z.string().min(1).optional().describe('import_beats: optional target object GUID.'),
-        property: z.string().min(1).optional().describe('import_beats: optional target property.'),
-      },
-      run: plugin('timeline', 30000),
-    },
-    {
-      name: 'graph_params',
-      keywords: '节点图 材质图 粒子图 音频图 参数 graph params surface audiograph vfxgraph inspect set',
-      description: 'Inspect or safely update exposed parameters in .surfacegraph, .audiograph, or .vfxgraph assets: action=inspect|set. Reads back to verify.',
-      shape: {
-        ...target,
-        action: z.enum(['inspect', 'set']).describe('inspect or set.'),
-        graph_path: z.string().min(1).optional().describe('Graph file path inside project (required for set).'),
-        param_name: z.string().min(1).optional().describe('set: exposed parameter name.'),
-        value: z.unknown().optional().describe('set: new parameter value.'),
-      },
-      run: plugin('graph_params', 30000),
     },
   ];
   const own = new Map(tools.map((t) => [t.name, { ...t, schema: z.strictObject(t.shape) }]));

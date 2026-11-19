@@ -53,8 +53,9 @@ function createSetup(opts = {}) {
     ]).map((so) => [so.guid, so]),
   );
 
-  const ehm = {
-    getAllAssets: async () => {
+  let snapCounter = 0;
+  class EHCommandManager {
+    async getAllAssets() {
       calls.push(['getAllAssets']);
       return [...assets.values()].map((a) => ({
         guid: a.guid,
@@ -62,12 +63,12 @@ function createSetup(opts = {}) {
         type: a.type,
         filePath: a.filePath,
       }));
-    },
-    getAsset: async (guid) => {
+    }
+    async getAsset(guid) {
       calls.push(['getAsset', guid]);
       return assets.get(guid) ? structuredClone(assets.get(guid)) : null;
-    },
-    setResourceProperties: async (guid, props) => {
+    }
+    async setResourceProperties(guid, props) {
       calls.push(['setResourceProperties', guid, structuredClone(props)]);
       if (opts.dropWrite) return { success: true };
       const target = assets.get(guid);
@@ -80,40 +81,36 @@ function createSetup(opts = {}) {
         }
       }
       return { success: true };
-    },
-    addPackage: async (pkgPath) => {
+    }
+    async addPackage(pkgPath) {
       calls.push(['addPackage', pkgPath]);
       return { imported: true, path: pkgPath };
-    },
-    addPrefab: async (guid) => {
+    }
+    async addPrefab(guid) {
       calls.push(['addPrefab', guid]);
       return { prefabGuid: `prefab-${guid}` };
-    },
-    instantiatePrefab: async (guid) => {
+    }
+    async instantiatePrefab(guid) {
       calls.push(['instantiatePrefab', guid]);
       return { instanceGuid: `inst-${guid}` };
-    },
-  };
-
-  let snapCounter = 0;
-  const snapHost = {
-    createProjectSnapshot: async ({ conversationId, projectPath: pp, gitRef }) => {
+    }
+    async createProjectSnapshot(conversationId, pp, gitRef) {
       calls.push(['createProjectSnapshot', conversationId, pp, gitRef]);
       snapCounter += 1;
       return {
         commitId: `commit-${snapCounter}`,
         gitRepoPath: path.join(pp, '.git'),
       };
-    },
-    restoreProjectSnapshot: async ({ conversationId, projectPath: pp, commitId, gitRepoPath }) => {
+    }
+    async restoreProjectSnapshot(conversationId, pp, commitId, gitRepoPath) {
       calls.push(['restoreProjectSnapshot', conversationId, pp, commitId, gitRepoPath]);
       return { ok: true };
-    },
-    deleteProjectSnapshotRefs: async ({ conversationId, gitRefs, gitRepoPath }) => {
+    }
+    async deleteProjectSnapshotRefs(conversationId, gitRefs, gitRepoPath) {
       calls.push(['deleteProjectSnapshotRefs', conversationId, gitRefs, gitRepoPath]);
       return { ok: true };
-    },
-  };
+    }
+  }
 
   const sceneManager = {
     findSceneObjectByGuid: (g) => {
@@ -149,8 +146,7 @@ function createSetup(opts = {}) {
   };
 
   const modules = {
-    [M.ehCommandManager]: { EHCommandManager: { getInstance: () => ehm } },
-    [M.projectSnapshot]: snapHost,
+    [M.ehCommandManager]: { EHCommandManager },
     [M.ef]: ef,
   };
 

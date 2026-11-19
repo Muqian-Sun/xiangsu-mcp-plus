@@ -581,7 +581,8 @@ test('submit_prepare supports pick_nomination: tick, untick, omit, unavailable, 
   assert.deepEqual(ticked.pick_nomination, {
     available: true,
     checked: true,
-    remaining: 1,
+    remaining: null,
+    daily_limit: 1,
     disabled: false,
     text: '每日有1次提报精选的机会，被评为精选可获得 50元现金、15%加权激励 等。查看审核标准',
   });
