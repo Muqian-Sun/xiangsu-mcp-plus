@@ -27,6 +27,9 @@ test('searchTools ranks exact/prefix/name/description and falls back to token hi
   assert.equal(searchTools(tools, 'library').tools[0].name, 'library_apply');
   assert.ok(searchTools(tools, '抠图').tools.some((t) => t.name === 'image_matting'));
   assert.ok(searchTools(tools, '报错').tools.some((t) => t.name === 'script_logs'));
+  // A compound query typed without spaces still hits spaced keywords.
+  const spaced = [{ name: 'douyin_hot_list', description: 'The Douyin hot list', keywords: '抖音 热榜 douyin hot list' }];
+  assert.equal(searchTools(spaced, '抖音热榜').tools[0]?.name, 'douyin_hot_list');
   const soft = searchTools(tools, '素材 xyz_no_hit');
   assert.ok(soft.total >= 1);
   assert.ok(soft.tools.some((t) => t.name.startsWith('library_')));
@@ -34,10 +37,10 @@ test('searchTools ranks exact/prefix/name/description and falls back to token hi
 
 test('withHiddenToolHints only annotates non-direct names', () => {
   const known = new Set(['brief_today', 'hot_topics', 'tasks_open', 'save_project', 'tool_describe']);
-  const raw = '先读 brief_today，再 tasks_open 和 hot_topics，最后 save_project。';
+  const raw = 'Read brief_today first, then tasks_open and hot_topics, finally save_project.';
   const out = withHiddenToolHints(raw, { self: 'brief_today', knownNames: known });
-  assert.match(out, /hot_topics、tasks_open/);
-  assert.doesNotMatch(out, /save_project 不在默认/);
+  assert.match(out, /hot_topics, tasks_open/);
+  assert.doesNotMatch(out, /Note:[^)]*save_project/);
   assert.match(out, /tool_describe/);
 });
 
@@ -109,6 +112,6 @@ test('default descriptions that name hidden tools carry the call hint', async ()
   }
   for (const t of tools) {
     const hidden = OWN_EXTRA.filter((n) => n !== t.name && !DIRECT_TOOLS.has(n) && new RegExp(`(?<![A-Za-z0-9_])${n}(?![A-Za-z0-9_])`).test(t.description));
-    if (hidden.length) assert.match(t.description, /不在默认直调清单内/);
+    if (hidden.length) assert.match(t.description, /not in the default direct-call set/);
   }
 });

@@ -207,7 +207,7 @@ test('catalog searches and pages the tool names, then describes a single tool in
   const { client } = await connect({ official: fakeOfficial({ tools: [upstream] }) });
   const byName = await toolJson(client, 'tool_search', { query: 'LIBRARY APPLY' });
   assert.equal(byName.tools[0].name, 'library_apply');
-  const byPurpose = await toolJson(client, 'tool_search', { query: '官方素材应用' });
+  const byPurpose = await toolJson(client, 'tool_search', { query: '素材 应用' });
   assert.deepEqual(Object.keys(byPurpose.tools.find((t) => t.name === 'library_apply')).sort(), ['name', 'summary']);
   const first = await toolJson(client, 'tool_search');
   const second = await toolJson(client, 'tool_search', { offset: first.next_offset });
@@ -218,7 +218,7 @@ test('catalog searches and pages the tool names, then describes a single tool in
   const local = await toolJson(client, 'tool_describe', { name: 'library_apply' });
   assert.deepEqual(local.inputSchema.required, ['template_id']);
   const official = await toolJson(client, 'tool_describe', { name: 'get_scene' });
-  assert.deepEqual(official, { ...upstream, description: upstream.description + '\n\n（xiangsu-mcp-plus）先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。' });
+  assert.deepEqual(official, { ...upstream, description: upstream.description + '\n\n（xiangsu-mcp-plus）First look at structure: scene_tree (compact indented text; also reads a downloaded project directory without a window). Parameters of several objects: inspect_many.' });
 });
 
 test('catalog returns local tools while the official MCP is offline and reports the connection state', async () => {
@@ -604,7 +604,7 @@ test('official tools that overlap ours are listed with a note naming ours; the r
   assert.match(desc('get_scene'), /^官方get_scene\n\n（xiangsu-mcp-plus）.*scene_tree.*inspect_many/);
   assert.match(desc('inspect'), /（xiangsu-mcp-plus）.*inspect_many/);
   assert.match(desc('edit_by_dsl'), /（xiangsu-mcp-plus）.*object_remove/);
-  assert.match(desc('edit_by_dsl'), /\$ref.*component_type.*换成该对象上 T 组件的 guid/);
+  assert.match(desc('edit_by_dsl'), /\$ref.*component_type.*swapped for that object T component guid/);
   assert.equal(desc('list_resources'), '官方list_resources');
 });
 
@@ -737,13 +737,13 @@ test('official tools that trip agents carry a note on what to pass or use instea
   const { client } = await connect({ flatTools: true, official: fakeOfficial({ tools: names.map((name) => ({ name, description: 'official', inputSchema: { type: 'object' } })) }), callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   const note = (name) => tools.find((t) => t.name === name).description;
-  assert.match(note('edit_by_dsl'), /properties 写成对象.*result\.changes/);
-  assert.match(note('interact_by_dsl'), /screenshot 动作截到的是黑图.*preview_frames/);
+  assert.match(note('edit_by_dsl'), /properties must be an object[\s\S]*result\.changes/);
+  assert.match(note('interact_by_dsl'), /screenshot action returns black[\s\S]*preview_frames/);
   assert.match(note('list_preview_videos'), /preview_videos/);
   assert.match(note('upload_workflow_image'), /\{"kind": "local_path", "file_path"/);
-  assert.match(note('generate_assets_batch'), /kind，写成 type 会被拒/);
-  assert.match(note('get_workflow_capabilities'), /baseModelId.*algorithm_id/);
-  assert.match(note('apply_workflow_patch'), /超过 4000 字的官方报错会被截断/);
+  assert.match(note('generate_assets_batch'), /kind; writing type is rejected/);
+  assert.match(note('get_workflow_capabilities'), /baseModelId[\s\S]*algorithm_id/);
+  assert.match(note('apply_workflow_patch'), /Errors over 4000 chars are truncated/);
 });
 
 test('edit_by_dsl refuses set_component properties given as an array before anything reaches the editor', async () => {

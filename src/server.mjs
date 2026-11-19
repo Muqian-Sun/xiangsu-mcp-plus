@@ -44,34 +44,34 @@ const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEA
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。现生成的 AI 面板不在其中；其中「AI 妆容」（从参考图提取妆容）用 ai_makeup_* 工具，「AI 3D」（图生 3D 模型、3D 动画、高精度模型重建）用 ai3d_* 工具，「AR 视频」（AR 视频贴片）用 ar_video_* 工具，「画面特效」用 ai_vfx_* 工具，「实时变脸」（训练自己的 AI 实时变脸）用 custom_gan_* 工具；「图片」「视频」生成没有接入。';
+  'general: the regular panels (3d_distortion=脸部变形/3D 变形, distortion=美型, gaoguai_gan/makeup_gan=AI 实时变脸, 3d_makeup=美妆, 3d_filter=滤镜, sticker=跟脸贴纸); square: aigc_material=素材广场, other creators shares (ready-made AI images / AI makeup / custom live faces — applying downloads the result, no regeneration, no quota); collection: collection=收藏, this account favorites. On-the-fly AI panels live elsewhere: 「AI 妆容」 → ai_makeup_*, 「AI 3D」 → ai3d_*, 「AR 视频」 → ar_video_*, 「画面特效」 → ai_vfx_*, 「实时变脸」 → custom_gan_*; 「图片」/「视频」 generation is not integrated.';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 const SCRIPT_TAG_TEXT = Object.entries(SCRIPT_TAGS).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const target = {
-  project_path: z.string().optional().describe('目标工程的绝对路径。与 instance_id 二选一；只开了一个工程窗口时都可省略。'),
-  instance_id: z.string().optional().describe('官方 list_instances 返回的 instance_id，与 project_path 二选一。'),
+  project_path: z.string().optional().describe('Absolute path of the target project. Pass either this or instance_id; both may be omitted while exactly one project window is open.'),
+  instance_id: z.string().optional().describe('instance_id from the official list_instances; pass either this or project_path.'),
 };
 
-const saveTo = z.string().min(1).optional().describe('另存到这个目录（绝对路径，不存在会创建），长期保留。');
+const saveTo = z.string().min(1).optional().describe('Directory (absolute path, created if missing) to save the output into for long-term keeping.');
 const refBox = z
   .strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) })
   .optional()
-  .describe('同一部位在参考图上的框（按参考图宽高的比例），和 reference 一起用。');
+  .describe('Box of the same region on the reference image, as fractions of its width/height; use together with reference.');
 
 // Skia (@napi-rs/canvas) takes seconds to load cold, so the drawing tools load it on first use.
 const graphics = () => import('./graphics.mjs');
 const absPath = (what) => z.string().min(1).refine((p) => path.isAbsolute(p), `${what}须是绝对路径`);
-const outDir = absPath('目录').describe('输出目录的绝对路径（不存在会创建）；放进工程的 Assets/ 下时 PNG 会被编辑器自动导入。');
+const outDir = absPath('目录').describe('Output directory, absolute path (created if missing); PNGs under a project Assets/ folder are imported by the editor automatically.');
 const hexColor = z.string().regex(/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/, '颜色写 #rgb、#rgba、#rrggbb 或 #rrggbbaa');
 const fontArg = z
   .string()
   .min(1)
   .optional()
-  .describe(`字体：像塑自带字体的文件夹名（douyinti 抖音体、yansongxin、xinqingnianti、wenyuehouxiandaiti、nihongxin、gangfengfanti、fenglingyouyou、DouyinNumberABC-ExtraBold，以本机安装的为准），或 .ttf / .otf 的绝对路径；默认 ${DEFAULT_FONT}。`);
-const strokeArg = z.strictObject({ color: hexColor, width: z.number().min(0.5).max(60).describe('描边宽度（像素）') }).optional().describe('描边。');
+  .describe(`Font: folder name of a bundled Xiangsu font (douyinti 抖音体, yansongxin, xinqingnianti, wenyuehouxiandaiti, nihongxin, gangfengfanti, fenglingyouyou, DouyinNumberABC-ExtraBold — whichever is installed locally), or an absolute path to a .ttf / .otf; default ${DEFAULT_FONT}.`);
+const strokeArg = z.strictObject({ color: hexColor, width: z.number().min(0.5).max(60).describe('Stroke width (pixels)') }).optional().describe('Stroke outline.');
 const shadowArg = z
   .strictObject({
     color: hexColor.optional(),
@@ -80,16 +80,16 @@ const shadowArg = z
     opacity: z.number().min(0).max(1).optional(),
   })
   .optional()
-  .describe('投影；传 {} 用默认的柔和黑影（模糊 6、下移 4、不透明度 0.45）。');
+  .describe('Drop shadow; pass {} for the default soft black shadow (blur 6, shifted 4 down, opacity 0.45).');
 const textStyle = {
-  text: z.string().min(1).describe('文字，\\n 换行，多行居中。'),
+  text: z.string().min(1).describe('Text; \\n starts a new line, lines are centered.'),
   font: fontArg,
-  size: z.number().min(6).max(400).describe('字号（像素）。'),
-  fill: hexColor.optional().describe('填充色，默认 #ffffff。'),
-  gradient: z.array(hexColor).min(2).max(6).optional().describe('从上到下的渐变色（替代 fill）。'),
+  size: z.number().min(6).max(400).describe('Font size (pixels).'),
+  fill: hexColor.optional().describe('Fill color, default #ffffff.'),
+  gradient: z.array(hexColor).min(2).max(6).optional().describe('Vertical top-to-bottom gradient colors; replaces fill.'),
   stroke: strokeArg,
   shadow: shadowArg,
-  line_height: z.number().min(0.8).max(3).optional().describe('行距（字号的倍数），默认 1.25。'),
+  line_height: z.number().min(0.8).max(3).optional().describe('Line height as a multiple of font size; default 1.25.'),
 };
 const pngFile = z.string().regex(/^[^/\\:*?"<>|]+\.png$/, '文件名（不含目录）以 .png 结尾');
 const fileStem = z.string().regex(/^[^/\\:*?"<>|.][^/\\:*?"<>|]*$/, '文件名（不含目录和扩展名）');
@@ -175,24 +175,26 @@ const PROGRESS_MS = 5000;
 // Appended to official tools whose work overlaps ours, saying which one to reach for.
 // What every tool that opens a project window says about it.
 const QUIET_TEXT =
-  '窗口最小化在程序坞里，不显示加载进度窗、不抢前台（结果里 background.focus_kept_on 是打开期间焦点留在的应用）；用户从程序坞点开后就是普通窗口。最小化时 capture_preview、preview_frames 从渲染结果截图，get_scene_view 不可用（拒绝并说明），interact_by_dsl 的 screenshot 是黑图。';
+  'The window opens minimized in the Dock — no loading window, no focus (background.focus_kept_on names the app that kept focus while it opened); clicked in the Dock, it becomes a normal window. While minimized: capture_preview / preview_frames shoot the render output, get_scene_view refuses with an explanation, interact_by_dsl screenshots come back black.';
 const SCENE_VIEW_REFUSED =
   'SCENE_VIEW_NOT_DRAWN: 这个工程窗口最小化在程序坞里（MCP 打开的窗口都不上屏），最小化的窗口不绘制场景视图，get_scene_view 只能拍到一片纯色，所以没有调用。看效果用 capture_preview / preview_frames，看结构和对象用 scene_tree / get_scene / inspect_many；确实要场景视图截图，请用户从程序坞点开这个窗口后再调用。';
 
 const OFFICIAL_NOTES = {
   capture_preview:
-    '窗口可见时这里就是官方截图：刚改完场景或切换预览视频后，它可能还是改之前的画面；要确认新画面请用 preview_frames（先重置预览、等到重载后的画面再截）。窗口最小化或不可见时，这里改为重置预览后从渲染结果截取。',
-  get_scene_view: '工程窗口最小化时（本服务打开的窗口都最小化在程序坞里）拒绝调用并说明原因：最小化的窗口不绘制场景视图，只会拍到一片纯色。',
-  get_scene: '先摸清结构用 scene_tree（紧凑的缩进文本，也能不开窗口直接读下载的工程目录）；要看多个对象的参数用 inspect_many。',
-  inspect: '一次看多个对象、按组件类型或属性名过滤、只留关键参数时用 inspect_many（逐个调用本工具并整理结果）。',
+    'When the window is visible this is the official screenshot — right after a scene edit or preview-video switch it may still show the previous frame; confirm the new frame with preview_frames (it resets the preview and waits for the reloaded frame first). While minimized or hidden, this instead resets the preview and shoots the render output.',
+  get_scene_view: 'Refused while the project window is minimized (windows opened by this server are always minimized to the Dock): a minimized window does not draw its scene view — the shot would be one flat colour.',
+  get_scene: 'First look at structure: scene_tree (compact indented text; also reads a downloaded project directory without a window). Parameters of several objects: inspect_many.',
+  inspect: 'Several objects at once, filtering by component type / property name, or key parameters only: inspect_many (calls this tool per object and organizes the results).',
   edit_by_dsl:
-    '删除对象时，要连带找出并清理只被它使用的资源和素材包文件夹，用 object_remove（可撤销，资源默认只报告）。{"$ref": X, "component_type": T} 里的 X 不是本批前面命令的 alias 时，可以写已有对象的 guid（sNN）、名称或层级路径（同 inspect_many），转发前换成该对象上 T 组件的 guid；官方自己只认本批的 alias，已有对象的 sNN 配 component_type 会报 has no component。T 写 inspect 里的组件类型名（FaceMask、EyeColorV2、GanComponent、PostProcess 等）。set_component 的 properties 写成对象（{"属性名": 值}），写成数组会在转发前被拒；单条命令 status=success 不等于写进去了，看它 result.changes 里有没有这个属性（2026-11-09 见过单条 success、属性没写上、只有整批报 error）。',
-  interact_by_dsl: '窗口最小化或不可见时 screenshot 动作截到的是黑图；要看画面用 preview_frames（取自渲染结果，后台也能截）。',
-  list_preview_videos: '一次返回约 70 KB；只要挑视频名（给 preview_frames、makeup_compare 的 videos）时用 preview_videos，只给每类的视频名和当前视频。',
-  upload_workflow_image: '图片要写成对象 {"kind": "local_path", "file_path": "<绝对路径>"}，只传路径字符串会被拒（2026-11-09 实测）。',
-  generate_assets_batch: 'assets 里每项的类型字段叫 kind，写成 type 会被拒（2026-11-09 实测）。',
-  get_workflow_capabilities: 'algorithm_list 只给 baseModelId，algorithm_detail 要的 algorithm_id 不在列表里，二者不是同一个值；2026-11-09 因此没能加上生图节点，没找到绕过的办法。',
-  apply_workflow_patch: '校验不过时官方报错是整个联合校验的展开（几十 KB），有用的通常只有 source / target 那一句；超过 4000 字的官方报错会被截断，全文存到返回的文件里。',
+    'Delete an object together with the resources and package folders only it used: object_remove (undoable; resources reported by default, not deleted).\n' +
+    'In {"$ref": X, "component_type": T}: when X is not an alias from an earlier command of this batch it may be an existing object guid (sNN), name or path (resolved like inspect_many) — swapped for that object T component guid before forwarding. The official server only accepts batch aliases: an existing object sNN with component_type fails "has no component". T is a component type from inspect (FaceMask, EyeColorV2, GanComponent, PostProcess, ...).\n' +
+    'set_component properties must be an object ({"属性名": value}); an array is rejected before forwarding. One command status=success does not prove the property landed — check result.changes (seen 2026-11-09: single command success, property missing, only the batch as a whole reported error).',
+  interact_by_dsl: 'While the window is minimized or hidden the screenshot action returns black; see the frame via preview_frames (render output, works in the background).',
+  list_preview_videos: 'About 70 KB per call; to just pick video names (the videos of preview_frames / makeup_compare) use preview_videos — names per tracking type plus the current video only.',
+  upload_workflow_image: 'The image must be an object {"kind": "local_path", "file_path": "<absolute path>"}; a bare path string is rejected (measured 2026-11-09).',
+  generate_assets_batch: 'The type field of each assets entry is kind; writing type is rejected (measured 2026-11-09).',
+  get_workflow_capabilities: 'algorithm_list returns baseModelId, algorithm_detail wants algorithm_id — not the same value. This blocked adding an image-generation node on 2026-11-09; no workaround found.',
+  apply_workflow_patch: 'On validation failure the official error is the whole union-validator dump (tens of KB); the useful part is usually the source / target line. Errors over 4000 chars are truncated, full text saved to a file named in the reply.',
 };
 // Picked: an official error this long is a validator dump (apply_workflow_patch answered tens of KB);
 // the head says what went wrong, the rest goes to a file.
@@ -271,7 +273,7 @@ class Seen {
 }
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
-const REF_NOTE = '\n\n返回里的图片、视频、音频给的是短引用（*_ref / *_refs 字段，如 img:12、video:3）。看图/看视频画面时把引用放进 image_view 的 images 数组（参数名就是 images，如 images: ["img:12", "video:3"]）：图片直接显示并带宽高（PNG 含透明边界），视频抽 3×2 帧网格预览；音频探测与裁切用 audio_probe。引用在 MCP 服务这次运行期间有效。';
+const REF_NOTE = '\n\nMedia in results comes as short references (*_ref / *_refs fields, e.g. img:12, video:3). View them through image_view images array (the parameter is literally named images, e.g. images: ["img:12", "video:3"]): images render inline with dimensions (PNGs add the non-transparent bounding box alpha_bbox), videos give a 3×2 frame-grid preview. Audio: probe and trim with audio_probe. References live for this run of the MCP server.';
 const KIND_TEXT = { video: '视频', audio: '音频' };
 const cropBox = z.strictObject({
   x: z.number().min(0).max(1),
@@ -333,7 +335,7 @@ export function createServer(deps = {}) {
     { name: 'xiangsu-mcp-plus', version: VERSION },
     {
       capabilities: { tools: { listChanged: true } },
-      instructions: flatTools ? undefined : '常用像塑工具可直接调用。其它官方和扩展工具用 tool_search 查名字，tool_describe 查完整参数，然后用 tool_call 传原工具名和 arguments。已知原工具名时可直接查参数。',
+      instructions: flatTools ? undefined : 'Call the common Xiangsu tools directly. For other official and extension tools: find names with tool_search, look up full parameters with tool_describe, then call with tool_call passing the original tool name and arguments. If the original tool name is already known, start at tool_describe.',
     },
   );
   d.official = d.official ?? new OfficialMcp();
@@ -545,25 +547,28 @@ export function createServer(deps = {}) {
     const next = offset + count;
     return { ...rest, total: items.length, items: items.slice(offset, next), next_offset: next, has_more: next < items.length };
   };
-  const musicCursor = z.union([z.number(), z.string()]).optional().describe('下一页：上一页返回的 next_cursor；省略时从第一页开始。');
+  const musicCursor = z.union([z.number(), z.string()]).optional().describe('Next page: the previous page next_cursor; omit for the first page.');
   const pageShape = {
-    offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
+    offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+    count: z.number().int().min(1).max(100).optional().describe('Items per page, default 20.'),
   };
-  const subjectKind = z.enum(['effect', 'template']).optional().describe('effect 特效专题榜（默认），template 模板专题榜。');
-  const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。');
+  const subjectKind = z.enum(['effect', 'template']).optional().describe('effect for effect subject boards (default), template for template subject boards.');
+  const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('Sort: suggest (recommended, default), latest, effect_usage, or project_usage.');
   const workPage = {
-    category_id: z.string().optional().describe('works_list 返回的 categories 里的分类 ID；省略时用第一个分类（推荐）。'),
-    cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor；最后一页的 next_cursor 是 null。'),
-    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
+    category_id: z.string().optional().describe('A category ID from works_list categories; omitted means the first category (recommended).'),
+    cursor: z.string().min(1).optional().describe('Page cursor; take next_cursor from the previous page verbatim. The last page next_cursor is null.'),
+    count: z.number().int().min(1).max(100).optional().describe('Items per page, default 20.'),
     sort: workSort,
   };
 
   const tools = [
     {
       name: 'ext_status',
+      keywords: '状态 排查 插件 窗口 self status plugin',
       description:
-        '扩展自身状态：官方 MCP 连接情况；本次启动时编辑器插件的安装结果 plugin_install（action 为 installed 新装、kept 已有同版本或更新的插件未动、failed 安装失败附 error）；以及每个已加载 XiangsuMcpPlus 插件的工程窗口（pid、工程路径、对应的官方 instance_id、有没有未保存的改动 unsaved_changes（读不到时为 null）、编辑器接口自检）。工具报找不到窗口、INCOMPATIBLE_EDITOR 或官方工具不可用时先调它排查；插件只在装好后新打开的工程窗口里生效。',
+        "Status of this server: official MCP connectivity, the editor plugin install result at startup, and every project window with the XiangsuMcpPlus plugin loaded.\n\n" +
+        'Returns: official (connectivity); plugin_install with action installed (freshly installed) / kept (equal-or-newer plugin already present, untouched) / failed (with error); windows with pid, project path, matching official instance_id, unsaved_changes (null when unreadable), and an editor interface self-check.\n\n' +
+        'Call it first when a tool cannot find a window, reports INCOMPATIBLE_EDITOR, or official tools are unreachable. The plugin only takes effect in windows opened after it was installed.',
       shape: {},
       run: async () => {
         const official = await d.official.listTools().then(() => d.official.status());
@@ -581,28 +586,39 @@ export function createServer(deps = {}) {
     },
     {
       name: 'project_open',
-      description: '在新窗口打开一个已有的像塑工程（已经开着就直接返回，不改变它的窗口状态）。返回窗口 pid 和官方 instance_id。' + QUIET_TEXT + '旧版本工程可能弹出升级对话框，需要在编辑器里点确认。',
-      shape: { path: z.string().min(1).describe('工程文件夹的绝对路径（含 effect.dyehpj）。') },
+      keywords: '打开 工程 窗口 open',
+      description:
+        'Open an existing Xiangsu project in a new window. Returns the window pid and official instance_id; already open, it returns as-is without changing that window. ' +
+        QUIET_TEXT +
+        ' Older projects may pop an upgrade dialog needing a click in the editor.',
+      shape: { path: z.string().min(1).describe('Absolute path of the project folder (contains effect.dyehpj).') },
       run: async (a) => text(await projects.open(a)),
     },
     {
       name: 'project_new',
-      description: '新建一个空白像塑工程并首次保存到 path（目录须不存在或为空）。需要已有任意一个工程窗口开着。返回新窗口的 pid 和官方 instance_id。' + QUIET_TEXT,
-      shape: { path: z.string().min(1).describe('新工程要保存到的文件夹绝对路径。') },
+      keywords: '新建 工程 空白 new create',
+      description: 'Create a blank Xiangsu project, saved to path on first save (the directory must not exist or must be empty). Needs any project window already open. Returns the new window pid and official instance_id. ' + QUIET_TEXT,
+      shape: { path: z.string().min(1).describe('Absolute path of the folder to save the new project into.') },
       run: async (a) => text(await projects.create(a)),
     },
     {
       name: 'project_close',
-      description: '关闭一个工程窗口（等同工具栏「回到首页」，但不把首页窗口带出来）。有未保存改动时默认拒绝，先 save_project；确实要丢弃改动才传 discard_changes=true。',
-      shape: { ...target, discard_changes: z.boolean().optional().describe('丢弃未保存改动直接关闭。') },
+      keywords: '关闭 工程 窗口 close',
+      description: 'Close a project window — the toolbar 「回到首页」 without bringing the home window up. Refuses with unsaved changes (save_project first); discard_changes=true throws them away.',
+      shape: { ...target, discard_changes: z.boolean().optional().describe('Discard unsaved changes and close anyway.') },
       run: async (a) => text(await projects.close(a)),
     },
     {
       name: 'image_view',
-      description: `查看图片或视频画面。列表类工具返回的短引用 *_ref / *_refs（如 img:12、video:3），详情类工具的地址，或本机绝对路径，都放进参数 images。图片直接显示，说明里带 width×height（PNG 另给非透明像素边界 alpha_bbox）；视频引用 / 视频 URL / 本地 .mp4|.mov|.webm 用像塑自带 ffprobe+ffmpeg 返回媒体信息，并给一张均匀抽帧的 3×2 网格预览（角标为秒数）。音频引用请改用 audio_probe。可选 crop 按 0–1 比例裁剪返回的画面。一次最多 ${IMAGE_VIEW_MAX} 项；单项失败只在该项写明原因；体积过大时没给的列在 not_returned。`,
+      keywords: '看图 预览 图片 视频 画面 image view',
+      description: `View images or video frames inline. images takes list-tool references (*_ref / *_refs, e.g. img:12, video:3), detail-tool addresses, or local absolute paths.\n\n` +
+        '- images render with width×height (PNGs add the non-transparent bounding box alpha_bbox)\n' +
+        "- videos (video references / URLs / local .mp4|.mov|.webm) get media info via Xiangsu's bundled ffprobe+ffmpeg plus an evenly sampled 3×2 frame-grid preview (timestamps as labels)\n" +
+        '- audio references belong to audio_probe\n\n' +
+        `Optional crop trims the returned visuals. ≤${IMAGE_VIEW_MAX} items per call; a failed item notes its own reason; anything skipped for size lands in not_returned.`,
       shape: {
-        images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('img:/video: 引用、http(s) 地址，或本机图片/视频绝对路径。'),
-        crop: cropBox.optional().describe('按画面比例（0–1）裁剪每张返回的画面；视频网格也会裁。'),
+        images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('img:/video: references, http(s) URLs, or local absolute paths of images/videos.'),
+        crop: cropBox.optional().describe('Crop each returned visual by frame fractions (0–1); video grids are cropped too.'),
       },
       run: async ({ images, crop }) => {
         const content = [];
@@ -709,24 +725,26 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_sheet',
+      keywords: '拼图 网格 对比 素材 sheet grid',
       description:
-        '多图网格拼图（不开像塑）：把若干图片（img: 引用、URL 或本机路径）排成网格，可选裁掉 PNG 四周全透明边（trim_alpha）、统一缩放（resize）、写到 save_to。替代终端里的 PIL 拼图 / alpha 裁边 / 缩放脚本。最多 24 张。',
+        'Grid collage of images without opening Xiangsu — replaces PIL collage / alpha-trim / resize scripts. Up to 24 images; returns the sheet PNG plus metadata.\n\n' +
+        'items: images (img: references, URLs, local paths) with optional label and crop. Options: columns (2–4 auto when omitted), tile_height (default 360), trim_alpha (cut fully transparent PNG borders; reports sizes before/after and the opaque ratio), resize, save_to.',
       shape: {
         items: z
           .array(
             z.strictObject({
-              src: z.string().min(1).describe('img: 引用、http(s) 地址或本机图片绝对路径。'),
+              src: z.string().min(1).describe('img: reference, http(s) URL, or local image absolute path.'),
               label: z.string().max(40).optional(),
               crop: cropBox.optional(),
             }),
           )
           .min(1)
           .max(24),
-        columns: z.number().int().min(1).max(8).optional().describe('列数；省略时按张数在 2–4 列间自适应。'),
-        tile_height: z.number().int().min(64).max(1200).optional().describe('每格高度，默认 360。'),
-        trim_alpha: z.boolean().optional().describe('裁掉每张 PNG 四周全透明边，并返回裁切前后尺寸与非透明占比。'),
+        columns: z.number().int().min(1).max(8).optional().describe('Column count; omitted, it adapts between 2–4 columns by image count.'),
+        tile_height: z.number().int().min(64).max(1200).optional().describe('Tile height, default 360.'),
+        trim_alpha: z.boolean().optional().describe('Trim fully transparent borders of each PNG and report sizes before/after plus the opaque ratio.'),
         resize: z.strictObject({ width: z.number().int().min(1).max(4096), height: z.number().int().min(1).max(4096) }).optional(),
-        save_to: z.string().min(1).optional().describe('输出 PNG 的绝对路径。'),
+        save_to: z.string().min(1).optional().describe('Absolute path of the output PNG.'),
       },
       run: async ({ items, columns, tile_height, trim_alpha, resize, save_to }) => {
         const cleanups = [];
@@ -759,12 +777,14 @@ export function createServer(deps = {}) {
     },
     {
       name: 'makeup_light_metrics',
+      keywords: '打光 妆容 亮度 采样 light luma',
       description:
-        '量妆容打光明暗（眉心、左右颊、鼻尖顶、鼻底、下巴的平均亮度 luma，以及下巴/两颊比值、左右颊差），并返回画好取样框的预览图。preset 取 H / G / ref（与原 light_metrics.py 坐标一致，按帧宽高缩放）；也可自定义 boxes。image_path 为帧的绝对路径；省略时对当前打开工程截一帧。',
+        'Measure makeup lighting: mean luma of brow centre, left/right cheeks, nose tip top, nose base, chin; chin/cheek ratios; left-right cheek difference. Returns the numbers plus a preview with the sample boxes drawn.\n\n' +
+        'Sample boxes: preset H / G / ref (original light_metrics.py coordinates, frame-scaled) or custom boxes. image_path: absolute frame path; omitted, a frame is shot from the current preview.',
       shape: {
         ...target,
-        image_path: z.string().min(1).optional().describe('PNG/JPEG 帧的绝对路径；省略则截当前预览帧。'),
-        preset: z.enum(['H', 'G', 'ref']).optional().describe('标准取样框；与 boxes 二选一。'),
+        image_path: z.string().min(1).optional().describe('Absolute path of a PNG/JPEG frame; omitted, a frame is shot from the current preview.'),
+        preset: z.enum(['H', 'G', 'ref']).optional().describe('Standard sample boxes; either this or boxes.'),
         boxes: z
           .array(z.strictObject({ label: z.string().min(1).max(20), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
           .min(1)
@@ -802,13 +822,15 @@ export function createServer(deps = {}) {
     },
     {
       name: 'audio_probe',
+      keywords: '音频 音效 卡点 探测 audio',
       description:
-        '探测音频（本地路径、audio: 引用或 URL）：时长、采样率、声道、编码、平均/峰值音量、静音区间、卡点峰值 onset_peaks_s。可选按秒裁切并导出到 export_path（.wav / .mp3）；mono_16k=true 时导出 16 kHz 单声道。用像塑自带 ffprobe+ffmpeg。',
+        "Probe an audio file (local path, audio: reference, URL): duration, sample rate, channels, codec, mean/peak loudness, silence spans, and beat peaks onset_peaks_s. Uses Xiangsu's bundled ffprobe+ffmpeg.\n\n" +
+        'Optionally trims by seconds and exports (export_path, .wav / .mp3); mono_16k=true exports 16 kHz mono.',
       shape: {
-        audio: z.string().min(1).describe('audio: 引用、http(s) 地址或本机音频绝对路径。'),
+        audio: z.string().min(1).describe('audio: reference, http(s) URL, or local audio absolute path.'),
         trim_start_s: z.number().min(0).optional(),
         trim_end_s: z.number().min(0).optional(),
-        export_path: z.string().min(1).optional().describe('导出文件的绝对路径（.wav 或 .mp3）。'),
+        export_path: z.string().min(1).optional().describe('Absolute path of the export file (.wav or .mp3).'),
         mono_16k: z.boolean().optional(),
       },
       run: async ({ audio, trim_start_s, trim_end_s, export_path, mono_16k }) => {
@@ -845,29 +867,31 @@ export function createServer(deps = {}) {
     },
     {
       name: 'h5_bundle_build',
+      keywords: 'H5 打包 发布 bundle',
       description:
-        'H5 脚本动画打包发布：压缩 → 审计 → 兼容编译 → 连续两次打包核对 digest/sha256 → 解包复审 → 发布到 ArtifactStore。成功返回 import_h5_render_bundle 所需的 artifact_id / expected_digest / zip_relative_path；失败返回 outcome=error 的 diagnostics。依赖本机像塑 BuiltinResource skills；缺失时结构化报错。',
+        'Pack and publish an H5 script animation: minify → audit → compatibility compile → pack twice, cross-check digest/sha256 → unpack re-review → publish to the ArtifactStore.\n\n' +
+        'Success: artifact_id / expected_digest / zip_relative_path for import_h5_render_bundle. Failure: outcome=error with diagnostics. Needs the local Xiangsu BuiltinResource skills; missing skills are a structured error.',
       shape: {
-        source_dir: z.string().min(1).describe('H5 源码目录绝对路径。'),
-        brief_path: z.string().min(1).describe('brief.json 绝对路径。'),
-        project_path: z.string().min(1).describe('像塑工程目录绝对路径（zip 发布到其 ArtifactStore）。'),
-        instance_id: z.string().optional().describe('工程 persistent id；省略时用工程目录名。'),
+        source_dir: z.string().min(1).describe('Absolute path of the H5 source directory.'),
+        brief_path: z.string().min(1).describe('Absolute path of brief.json.'),
+        project_path: z.string().min(1).describe('Absolute path of the Xiangsu project directory (the zip is published to its ArtifactStore).'),
+        instance_id: z.string().optional().describe('Project persistent id; omitted, the project directory name is used.'),
         request_id: z.string().min(1),
-        short_edge: z.number().int().min(360).max(1440).optional().describe('默认 720。'),
-        fps: z.number().int().min(1).max(60).optional().describe('默认 24。'),
+        short_edge: z.number().int().min(360).max(1440).optional().describe('Default 720.'),
+        fps: z.number().int().min(1).max(60).optional().describe('Default 24.'),
       },
       run: async (a) => text(await buildH5Bundle(a)),
     },
     {
       name: 'h5_font_subset',
-      description:
-        '按 source_dir/index.html（加 extra_text 与 ASCII 可打印字符）裁字体为 woff2，写到 source_dir/fonts/<output_name>.woff2 并复制 OFL.txt。缺字时返回 missing_chars 并报错。',
+      keywords: '字体 裁剪 woff2 font subset',
+      description: 'Subset a font to woff2 for source_dir/index.html (plus extra_text and printable ASCII) → source_dir/fonts/<output_name>.woff2, with OFL.txt copied alongside. Missing characters: missing_chars and an error.',
       shape: {
-        font_path: z.string().min(1).describe('源字体绝对路径（.ttf/.otf）。'),
-        license_path: z.string().min(1).describe('OFL.txt 绝对路径。'),
-        source_dir: z.string().min(1).describe('H5 源码目录绝对路径。'),
-        output_name: z.string().min(1).describe('输出文件名，如 brand.woff2。'),
-        extra_text: z.string().optional().describe('页面动态文案里会出现、但 index.html 里没有的字符。'),
+        font_path: z.string().min(1).describe('Absolute path of the source font (.ttf/.otf).'),
+        license_path: z.string().min(1).describe('Absolute path of OFL.txt.'),
+        source_dir: z.string().min(1).describe('Absolute path of the H5 source directory.'),
+        output_name: z.string().min(1).describe('Output file name, such as brand.woff2.'),
+        extra_text: z.string().optional().describe('Characters that dynamic page copy may show but index.html does not contain.'),
       },
       run: async (a) => {
         const out = await subsetH5Font(a);
@@ -878,13 +902,16 @@ export function createServer(deps = {}) {
     {
       name: 'library_list',
       refs: true,
-      description: `不传 panel_key 时列出可直接应用的分类面板（panel_key）和类型 kind：${LIBRARY_PANELS_TEXT}传 panel_key 时分页列出该面板里的素材：子分类、素材（template_id、title、kind、封面 cover_ref 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_ref 交给 image_view 看；知道要找什么时用 library_search 按关键词搜，本工具适合按面板和子分类浏览。拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。`,
+      keywords: '素材库 素材 面板 浏览 library panel browse',
+      description: `Browse the official asset library by panel. Without panel_key: the applicable panels (panel_key) and kinds — ${LIBRARY_PANELS_TEXT} With panel_key: pages of that panel assets (template_id, title, kind, cover cover_ref, cursor).\n\n` +
+        '广场 sub-categories: 妆容, 图片, 实时变脸, 跟脸贴纸, 前景贴纸, 画面特效, 3D 模型, 3D 饰品; 收藏 sub-categories: folders like 全部, 美妆, 滤镜. Square cards without applicable content are only counted in unsupported.\n\n' +
+        'Pick by looks: hand cover_ref to image_view. Know the term: library_search. Have a template_id: apply with library_apply; the full image set of an AI image card (kind=ai_image): library_images.',
       shape: {
         ...target,
-        panel_key: z.string().optional().describe('面板，取不传 panel_key 时返回的 panels 里的 panel_key；省略时只返回面板清单。'),
-        category_id: z.string().optional().describe('子分类 ID（收藏为目录名）；省略时用第一个子分类（通常是「全部」）。'),
-        cursor: z.union([z.number().int().min(0), z.string()]).optional().describe('翻页游标，原样取上一页的 next_cursor（收藏是字符串）。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20。'),
+        panel_key: z.string().optional().describe('A panel: take panel_key from the panels of a call without panel_key; omitted, only the panel list is returned.'),
+        category_id: z.string().optional().describe('Sub-category ID (for 收藏 the folder name); omitted, the first sub-category is used (usually 「全部」).'),
+        cursor: z.union([z.number().int().min(0), z.string()]).optional().describe('Page cursor; take next_cursor from the previous page verbatim (a string for 收藏).'),
+        count: z.number().int().min(1).max(100).optional().describe('Items per page, default 20.'),
       },
       run: async (a) => {
         if (a.panel_key !== undefined) return library('library_list')(a);
@@ -895,15 +922,19 @@ export function createServer(deps = {}) {
     {
       name: 'library_search',
       refs: true,
-      description:
-        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_ref，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。第一页（没传 panel_key / offset）还会附带「添加对象」菜单里名字匹配的项到 menu_items（如「脸蛋天才」「磨皮」「发光」——它们不在素材库里，要用 menu_add 加），并写 menu_note。',
+      keywords: '素材库 搜索 美妆 滤镜 贴纸 音效 library search',
+      description: 'Keyword search over the official asset library (makeup, filters, face distortion, AI live faces, stickers, visual effects, sound effects, 素材广场, ...).\n\n' +
+        'A term equal to a panel or sub-category name also pulls in that section assets — 「滤镜」 → the filter panel, 「腮红」 → 美妆/腮红 + 跟脸贴纸/腮红 (their titles rarely carry the word), 「复古滤镜」 → 滤镜/复古; ≤300 per section.\n\n' +
+        'Ranking: exact title > prefix > contains > category match > rest; each item matched says how (title / category:面板/分类 / panel:面板). queries merges up to 8 near-synonyms.\n\n' +
+        'Paged by offset / count (10-minute cache, paging does not re-request). Items carry template_id, title, panel_key, kind, cover_ref; totals: total, by_panel (narrow with panel_key), matched_categories, related_categories (name contains the term, not expanded — list via library_list). kind: package 素材包, ai_image AI 图片, ai_makeup AI 妆容, custom_gan 自定义实时变脸, foreground_sticker 前景贴纸, face_sticker 跟脸贴纸, filter 滤镜.\n\n' +
+        'First page (no panel_key / offset) also adds 「添加对象」 menu matches to menu_items (「脸蛋天才」, 「磨皮」, 「发光」 — not library assets; add with menu_add) with menu_note.',
       shape: {
         ...target,
-        query: z.string().min(1).optional().describe('搜索关键词，如「芒果脸」「腮红」「复古滤镜」。与 queries 二选一。'),
-        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["冷艳", "猫眼", "烟熏", "风格妆"]。与 query 二选一。'),
-        panel_key: z.string().optional().describe('只搜这个面板（library_list 不传 panel_key 时返回的 panel_key，如 aigc_material）。'),
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 20。'),
+        query: z.string().min(1).optional().describe('Search term, such as 「芒果脸」, 「腮红」 or 「复古滤镜」. Either this or queries.'),
+        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('Search several terms at once and merge, such as ["冷艳", "猫眼", "烟熏", "风格妆"]. Either this or query.'),
+        panel_key: z.string().optional().describe('Search only this panel (a panel_key from a library_list call without panel_key, such as aigc_material).'),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+        count: z.number().int().min(1).max(200).optional().describe('Items per page, default 20.'),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -925,9 +956,9 @@ export function createServer(deps = {}) {
     {
       name: 'library_images',
       refs: true,
-      description:
-        '一张 AI 图片卡片（kind=ai_image）的整组结果图 image_ref，按 image_index 编号；用 image_view 看图，应用时用 library_apply 的 image_index 选择。template_id 须来自本会话的 library_list / library_search。',
-      shape: { ...target, template_id: z.string().describe('library_list / library_search 返回的 template_id。') },
+      keywords: 'AI 图片 结果图 ai image',
+      description: 'Full result set (image_ref, numbered by image_index) of one AI image card (kind=ai_image). View with image_view; pick one at apply time via library_apply image_index. template_id from this session library_list / library_search.',
+      shape: { ...target, template_id: z.string().describe('A template_id from library_list / library_search.') },
       run: async ({ project_path, instance_id, template_id }) => {
         const { slim, raw } = seenLib.get(template_id);
         const images = await d.callPlugin('library_images', { item: raw }, await homeWindow({ project_path, instance_id }));
@@ -936,13 +967,16 @@ export function createServer(deps = {}) {
     },
     {
       name: 'library_apply',
-      description:
-        '把一个官方素材应用到目标工程，与素材库面板里点应用相同（可撤销）：素材包下载、校验 MD5、导入并默认放进场景；素材广场的卡片按 kind 走编辑器自己的应用流程（AI 图片、AI 妆容等只下载现成结果，不重新生成、不扣额度），等对象出现在场景里才返回。返回 kind、added_objects（新放进场景的对象名和 object_path）和 package_folders。template_id 须来自本会话的 library_list / library_search。应用后用 capture_preview 验收。',
+      keywords: '应用 素材 加入场景 apply asset',
+      description: "Apply an official asset to the target project — the library panel 应用, undoable.\n\n" +
+        '- packages: download, MD5 check, import, placed into the scene by default\n' +
+        '- 素材广场 cards: the editor own per-kind apply flow; AI images / AI makeup only download the ready-made result (no regeneration, no quota)\n\n' +
+        'Returns only once the objects have appeared in the scene: kind, added_objects (names + object_path), package_folders. template_id from this session library_list / library_search. Verify with capture_preview.',
       shape: {
         ...target,
-        template_id: z.string().describe('library_list / library_search 返回的 template_id。'),
-        auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板（只有 kind=package 支持）。'),
-        image_index: z.number().int().min(0).optional().describe('kind=ai_image 时用第几张结果图，默认 0；整组图见 library_images。'),
+        template_id: z.string().describe('A template_id from library_list / library_search.'),
+        auto_instantiate: z.boolean().optional().describe('Whether to place into the scene, default true; false only imports into the asset panel (supported for kind=package only).'),
+        image_index: z.number().int().min(0).optional().describe('For kind=ai_image, which result image to use (0-based); the full set is in library_images.'),
       },
       run: async (a) => {
         const { project_path, instance_id, template_id, auto_instantiate, image_index } = a;
@@ -954,22 +988,26 @@ export function createServer(deps = {}) {
     {
       name: 'works_list',
       refs: true,
-      description: '分页列出像塑首页「模板」某个分类下的作品。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法；任意一个工程窗口开着即可。每次都带上全部分类 categories（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）。每条作品有 template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_ref 和动图 gif_ref（交给 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
+      keywords: '首页 作品 模板 浏览 works browse',
+      description: "Page through homepage 「模板」 works of one category. Works are complete Xiangsu projects (official + user submissions), downloadable to learn from their scenes and scripts; any open project window serves.\n\n" +
+        'Every call carries all categories (推荐, 官方工程, 新手必做, 游戏, 妆容, AI玩法, ...). Per work: template_id, title, tags, published Douyin effect_id / publish_count (null when absent), usage, package size, cover cover_ref, animated gif_ref — hand covers to image_view. Next: works_download.',
       shape: { ...target, ...workPage },
       run: works('works_list'),
     },
     {
       name: 'works_search',
       refs: true,
-      description:
-        '按作品名搜索首页作品（与首页搜索框同一个接口）。不给 category_id 时搜全部分类并合并去重：「推荐」翻到底只有约 300 条，「美化」「友友天地」等分类里还有它没有的作品。合并顺序是先「推荐」里的（按 sort），再按分类顺序追加只在其它分类出现的；每个分类最多 300 条。每条带 found_in（出现在哪些分类），另返回 total、by_category（各分类条数）。queries 一次搜多个词（最多 8 个）并合并，每条带 matched_queries。按 offset / count 分页，结果缓存 10 分钟，翻页不重新请求。某个分类翻页时服务端一直给同一页，会列在 incomplete 里。其余字段同 works_list。按特效 ID 查用 works_by_effect。',
+      keywords: '首页 作品 搜索 works search',
+      description: 'Search homepage works by name — the homepage search box endpoint.\n\n' +
+        'Without category_id all categories are searched and merged: 「推荐」 alone bottoms out at ~300 items; categories like 「美化」 / 「友友天地」 hold more. Merge order: 「推荐」 hits first (by sort), then category-unique works in category order; ≤300 per category. A category stuck on the same page while paging is listed in incomplete.\n\n' +
+        'Items add found_in; totals: total, by_category. queries merges up to 8 terms (matched_queries per item). Paged by offset / count, 10-minute cache. Other fields as works_list. Lookup by effect ID: works_by_effect.',
       shape: {
         ...target,
-        query: z.string().min(1).optional().describe('作品名关键词，如「合掌」「转场」「换装」。与 queries 二选一。'),
-        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["头套", "头饰"]。与 query 二选一。'),
-        category_id: z.string().optional().describe('只搜这个分类（works_list 返回的 categories 里的分类 ID）；省略时搜全部分类。'),
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 20。'),
+        query: z.string().min(1).optional().describe('Work-name keyword, such as 「合掌」, 「转场」 or 「换装」. Either this or queries.'),
+        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('Search several terms at once and merge, such as ["头套", "头饰"]. Either this or query.'),
+        category_id: z.string().optional().describe('Search only this category (a category ID from works_list categories); omitted, all categories.'),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+        count: z.number().int().min(1).max(200).optional().describe('Items per page, default 20.'),
         sort: workSort,
       },
       run: works('works_search'),
@@ -977,32 +1015,41 @@ export function createServer(deps = {}) {
     {
       name: 'works_by_effect',
       refs: true,
-      description:
-        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subject_detail / rank_innovation / effect_search 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_style 首页没有它，但像塑移动版「做同款」按钮指向首页上的一个工程（same_style 给出那个工程所属特效的 effect_id 和名称，常常是别人的另一个特效，如「顶美精致淡妆感」指向「可可裸妆」，不是这个特效本身的工程）；same_name 首页没有它、也没有做同款工程，只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 拿不到工程。做同款工程不在首页时 same_style 仍会给出，status 按同名作品的查找结果。found、same_style 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到四次请求。',
+      keywords: '特效 ID 查工程 做同款 works by effect',
+      description: "Given effect IDs from elsewhere (rank_list / rank_subject_detail / rank_innovation / effect_search), find whether the homepage has a project — the homepage 「特效ID」 search endpoint. ≤20 effects (one rank page); 1–4 requests each.\n\n" +
+        'Per effect, status:\n' +
+        '- found: homepage project exists\n' +
+        '- same_style: no project, but mobile 「做同款」 points at a homepage project (its effect effect_id + name — often a different effect: 「顶美精致淡妆感」 → 「可可裸妆」)\n' +
+        '- same_name: only same-named works (different effect_id — possibly someone else; not this effect)\n' +
+        '- not_on_homepage: nothing obtainable\n\n' +
+        'same_style still reports when its project is off-homepage; the status then follows the same-name lookup. Matching works land in items (fields as works_list); template_id works directly with works_download / works_open.\n\n' +
+        'The default search runs in 「推荐」, which by ID also reaches category-unique works — searching by ID inside another category misses them; leave category_id unset.',
       shape: {
         ...target,
         effects: z
           .array(
             z.object({
-              effect_id: z.string().regex(/^\d+$/).describe('特效 ID，如 rank_list 返回的 effect_id。'),
-              name: z.string().min(1).optional().describe('特效名；给了才会在查不到 ID 时找同名作品。'),
+              effect_id: z.string().regex(/^\d+$/).describe('The effect ID, such as an effect_id from rank_list.'),
+              name: z.string().min(1).optional().describe('Effect name; only with it does a same-name lookup run when the ID misses.'),
             }),
           )
           .min(1)
           .max(20)
-          .describe('要查的特效，最多 20 个（一页排行榜）。'),
+          .describe('Effects to look up, at most 20 (one rank page).'),
         category_id: workPage.category_id,
       },
       run: works('works_by_effect'),
     },
     {
       name: 'works_download',
-      description:
-        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件概况：key_files 只列学做法要读的文件（effect.dyehpj、场景 .scene 及其 .extra、Graph 下的文件和作者的 .js / .ts 脚本，相对路径和大小；官方素材包 _DynamicAsset 里自带的脚本不列），其余贴图、模型只给总数 file_count 和按扩展名的计数 by_extension，要看时自己列目录。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。同一窗口的多个下载会排队一个个下，可以一起发出。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
+      keywords: '下载 作品 工程 学习 works download',
+      description: "Download a homepage work as a complete project and unpack it (homepage open-work flow, no window). Returns the project directory plus a file outline.\n\n" +
+        "key_files: only what learning the craft needs — effect.dyehpj, scene .scene/.extra, Graph files, author .js/.ts scripts (relative paths + sizes); scripts bundled in official packages (_DynamicAsset) are not listed. Other textures/models: counted only (file_count, by_extension) — list the directory yourself.\n\n" +
+        "dest: place the project there (must not exist or be empty, skips the Library cache); the Xiangsu temp copy is removed at once. Omitted, it stays in Xiangsu's temp dir. All downloads are registered and auto-deleted on the next download past expires_at (24 h) — call works_cleanup when done. Same-window downloads queue; send several together. Live inspection: works_open. Author copyright: learning reference only — never copy into your own project or repository.",
       shape: {
         ...target,
-        template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。'),
-        dest: z.string().optional().describe('工程要放到的文件夹绝对路径（须不存在或为空）；省略时留在像塑的临时目录。'),
+        template_id: z.string().describe('A template_id from works_list / works_search / works_by_effect.'),
+        dest: z.string().optional().describe('Absolute path of the folder for the project (must not exist or must be empty); omitted, it stays in Xiangsu temp directory.'),
       },
       run: async (a) => {
         const { template_id, dest } = a;
@@ -1022,9 +1069,11 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_open',
-      description:
-        '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。' + QUIET_TEXT + '看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
-      shape: { ...target, template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。') },
+      keywords: '打开 作品 编辑器 学习 works open',
+      description: 'Download a homepage work and open it in a new editor window (homepage open-work flow; no upgrade dialog, project unsaved). Returns pid, official instance_id, project directory — then study it with get_scene, capture_preview, ... ' +
+        QUIET_TEXT +
+        ' When done: project_close (discard_changes=true), then works_cleanup; the download survives while a window holds it.',
+      shape: { ...target, template_id: z.string().describe('A template_id from works_list / works_search / works_by_effect.') },
       run: async (a) => {
         await projects.ensureFreeWindow();
         const got = await downloadWork(a);
@@ -1039,8 +1088,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_cleanup',
-      description: '删除 works_download / works_open 下载过的作品工程（像塑临时目录里的和 dest 副本）。省略 paths 时删除全部；编辑器窗口正开着的会保留并在 kept_open 里列出，关窗后再调用即可。只删登记过的下载，其它路径一律拒绝。',
-      shape: { paths: z.array(z.string().min(1)).min(1).optional().describe('只删这些下载（works_download / works_open 返回的 project_path）；省略时删除全部。') },
+      keywords: '删除 下载 清理 cleanup works',
+      description: 'Delete downloaded homepage works (Xiangsu temp copies and dest copies) from works_download / works_open. No paths = all; ones an open window holds are kept and listed in kept_open — close the window, call again. Only registered downloads are deletable; any other path is refused.',
+      shape: { paths: z.array(z.string().min(1)).min(1).optional().describe('Delete only these downloads (project_path values from works_download / works_open); omitted, delete all.') },
       run: async ({ paths }) => {
         const out = d.downloads.cleanup({ paths, openPaths: await openPaths() });
         return text({ ...out, remaining: d.downloads.list().map((e) => e.path) });
@@ -1048,12 +1098,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'icon_set',
-      description:
-        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一批文件），并和那个窗口的「完成」按钮一样把图标上传到抖音特效平台（提交窗口只认上传过的图标）。默认女性、男性两个图标位都用这张图（提交窗口要这两个）。上传失败报 ICON_UPLOAD_FAILED，重试即可。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。之后 save_project 落盘。',
+      keywords: '图标 上传 交付 icon',
+      description: 'Set the effect icon (submission requires it): centre-crop square → 360×360 PNG → project Icon/ folder (the same files the 「图标制作」 window saves) → upload to the Douyin platform, like that window 「完成」 button (the submit window only accepts an uploaded icon). By default both female and male slots get the image — the two the submit window requires.\n\n' +
+        'Upload failure: ICON_UPLOAD_FAILED, retry. Source: generate_image output or a saved capture_preview frame. Persist with save_project.',
       shape: {
         ...target,
-        image_path: z.string().min(1).describe('图片的绝对路径（png / jpg / webp 等 sips 能读的格式）。'),
-        type: z.enum(['both', 'female', 'male', 'common']).optional().describe('写哪个图标位：both（默认，女性和男性两个位都用这张图，提交窗口要的就是这两个）、female、male，或 common 通用。'),
+        image_path: z.string().min(1).describe('Absolute path of the image (png / jpg / webp — anything sips reads).'),
+        type: z.enum(['both', 'female', 'male', 'common']).optional().describe('Which slot to write: both (default — the female and male slots both get this image; those are the two the submit window requires), female, male, or common.'),
       },
       run: async (a) => {
         const { project_path, instance_id, image_path, type } = a;
@@ -1063,38 +1114,39 @@ export function createServer(deps = {}) {
     },
     {
       name: 'icon_compose',
-      description:
-        '做图标图片（不开像塑）：从 preview_frames 存下的预览帧里裁一块正方形，按需压一行描边 / 渐变 / 投影字幕（说明玩法的一句话），缩放到 size（默认 720）存成 PNG，另存一张 160 的缩略图；一次最多 4 张（比如女生图、男生图，或几种取景）。另出一张列表大小（160）的并排图 sheet_160.jpg：先是这次做的图标，后面接 compare_images（同类作品的图标，用来看缩到列表大小后和它们拉不拉得开）。并排图和每张图标的 360 预览都在返回里。crop 用帧自己的像素：{top} 是和帧一样宽的正方形的上沿，{x, y, size} 是任意正方形；超出画面报 CROP_OUT_OF_FRAME（不做补边，补背景、补被切掉的头饰仍按工程里的做法）。字幕字号按输出尺寸算，太宽时等比缩到图宽的 max_width（默认 0.86），返回里 caption_shrunk_to 说明缩了多少。满意后把 file 交给 icon_set 上传（女生、男生图不同时分两次传 type）。',
+      keywords: '图标 合成 帧裁 icon compose',
+      description: 'Compose icon images without opening Xiangsu, from preview_frames frames. Per icon: crop a square → optional one-line stroked / gradient / shadowed caption (the sentence explaining the play) → scale to size (default 720) PNG + 160 thumbnail. Up to 4 per call (female / male image, several framings). Also renders a list-sized (160) side-by-side sheet_160.jpg — the new icons first, then compare_images (similar works icons, to check they still stand apart at list size). The reply carries the sheet and a 360 preview per icon.\n\n' +
+        'Out-of-frame crop: CROP_OUT_OF_FRAME (no border padding — background / cut-off headwear fixes follow the project own practice). Happy with an icon: hand the file to icon_set (distinct female/male images: two calls with type).',
       shape: {
         sources: z
           .array(
             z.strictObject({
-              frame: absPath('帧').describe('预览帧图片的绝对路径（preview_frames 的 files，或任意 PNG / JPEG）。'),
+              frame: absPath('帧').describe('Absolute path of a preview frame image (a file from preview_frames, or any PNG / JPEG).'),
               crop: z
                 .union([
-                  z.strictObject({ top: z.number().int().min(0).describe('和帧一样宽的正方形的上沿（帧的像素）。') }),
+                  z.strictObject({ top: z.number().int().min(0).describe('Top edge of a square as wide as the frame (frame pixels).') }),
                   z.strictObject({ x: z.number().int().min(0), y: z.number().int().min(0), size: z.number().int().min(16) }),
                 ])
-                .describe('裁哪块正方形。'),
+                .describe('Crop which square.'),
               caption: z
                 .strictObject({
                   ...textStyle,
                   position: z
                     .union([z.enum(['top', 'bottom']), z.number().min(0).max(1)])
                     .optional()
-                    .describe('top / bottom（默认，离边 3%），或字幕中心所在的高度（0–1）。字幕不要挡下巴和嘴。'),
-                  max_width: z.number().gt(0).max(1).optional().describe('字幕最宽占图宽的比例，默认 0.86。'),
+                    .describe('top / bottom (default, 3% off the edge), or the height of the caption centre (0–1). Keep the caption off the chin and mouth.'),
+                  max_width: z.number().gt(0).max(1).optional().describe('Widest fraction of the image width the caption may span, default 0.86.'),
                 })
                 .optional()
-                .describe('字幕；字号、描边宽度按输出尺寸（size）的像素算。'),
-              name: fileStem.optional().describe('文件名（不含扩展名），默认 icon_1、icon_2…'),
+                .describe('Caption; font size and stroke width are in output-size (size) pixels.'),
+              name: fileStem.optional().describe('File name without extension; default icon_1, icon_2, ...'),
             }),
           )
           .min(1)
           .max(4),
-        size: z.number().int().min(160).max(1080).optional().describe('图标边长，默认 720（icon_set 会再缩到 360）。'),
-        out_dir: outDir.optional().describe('输出目录的绝对路径；省略时放临时目录（24 小时后删除）。'),
-        compare_images: z.array(absPath('图片')).max(8).optional().describe('同类作品的图标（本机路径），接在并排图后面对比。'),
+        size: z.number().int().min(160).max(1080).optional().describe('Icon side length, default 720 (icon_set scales down to 360).'),
+        out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).'),
+        compare_images: z.array(absPath('图片')).max(8).optional().describe('Local paths of similar works icons, appended to the side-by-side sheet for comparison.'),
       },
       run: async (a) => {
         const { iconCanvas, jpeg, png, scaled, sheetCanvas } = await graphics();
@@ -1131,7 +1183,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'icon_open',
-      description: '打开编辑器的「图标制作」窗口（官方图标模板、文字模板、AI 图标），让用户在里面挑选或调整。窗口最小化在程序坞里、不抢前台，告诉用户从程序坞点开它。',
+      keywords: '图标制作 窗口 icon window',
+      description: "Open the editor 「图标制作」 icon window (official icon templates, text templates, AI icons) for the user to pick and adjust in. Minimized to the Dock, no focus — tell the user to open it from the Dock.",
       shape: { ...target },
       run: async ({ project_path, instance_id }) => {
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
@@ -1140,12 +1193,11 @@ export function createServer(deps = {}) {
     },
     {
       name: 'effect_check',
-      description:
-        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口（最小化，不抢前台），由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed。出结果后读出检测页的详情一起返回：verdict（页面结论，如「检测通过」「特效不通过」）、checks（每项检测的结论；包体积、帧率给出 figures：数值、上限、是否达标，帧率分 android / ios；没通过的项带页面给的改进建议 advice，读不到时写 advice_unavailable），然后关掉这个窗口（window_closed=true）；详情读不出来时窗口留着，返回 details_error。超过 timeout_ms 还没出结果时返回 timeout，窗口留着继续检测；之前调用留下的检测窗口会先关掉再开新的（closed_previous 是关掉的个数），所以窗口不会越叠越多。',
-      shape: {
-        ...target,
-        timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('最长等待时间，默认 300000（5 分钟）。'),
-      },
+      keywords: '特效检测 云端检测 check',
+      description: 'Run effect detection — the toolbar 「特效检测」: opens the detection window (minimized, no focus), which uploads the package for cloud detection (not publishing) and waits for passed / not_passed / needs_optimization / failed.\n\n' +
+        'With a verdict the page details come back: verdict (the page conclusion, e.g. 「检测通过」 / 「特效不通过」), checks (per-check results; size and frame rate carry figures: value, limit, pass — frame rate split android/ios; failing items carry the page advice, or advice_unavailable) — then the window closes (window_closed=true); unreadable details keep the window and return details_error.\n\n' +
+        'Past timeout_ms: reply timeout, the window keeps detecting. A stale detection window is closed first (closed_previous) so windows never pile up.',
+      shape: { ...target, timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('How long to wait at most, default 300000 (5 minutes).') },
       run: async (a) => {
         const { project_path, instance_id, timeout_ms = 300000 } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
@@ -1154,21 +1206,25 @@ export function createServer(deps = {}) {
     },
     {
       name: 'submit_prepare',
+      keywords: '提交 填表 提审 prepare',
       description:
-        '填好提交窗口，停在最后一步「提交审核」页（不送审）：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后先关掉还开着的提交窗口（之前调用留下的，closed_previous 是关掉的个数，关不掉报 WINDOW_NOT_CLOSED），再走和工具栏「提交特效」按钮相同的入口打开一个新的，（窗口最小化在程序坞里、不抢前台）然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（还要做什么）。本工具不勾选协议、不点「提交审核」，不会送审；确认摘要无误后用 submit_confirm 送审，或让用户从程序坞点开窗口自己点。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
+        'Fill the Douyin submit window through to its final 「提交审核」 page and stop there — nothing is sent.\n\n' +
+        'Flow: local precheck (package size, template reused as-is, login, icon) → close any submit window left open by an earlier call (closed_previous; WINDOW_NOT_CLOSED if it will not close) → open a fresh one via the toolbar 「提交特效」 entry (minimized to the Dock, no focus) → fill pages in order: name / trigger hint / camera on 「特效基础信息」, inspiration and task on 「特效发布设置」 (the icon comes from the project — set it first with icon_image) → turn to 「提交审核」 and wait for the on-page checks (size, performance, similarity; usually within a minute).\n\n' +
+        'Returns the page summary, per-check results, agreement state, whether 「提交审核」 is clickable, and next (what is still missing). Every entry is read back from the page to verify: truncation, a page error, a failed pick, or a blocked page turn fails the whole call (SUBMIT_*, page message verbatim) and leaves the window open. Settings not filled here (campaign, innovation declaration) are listed in other_sections as the page shows them; a failed precheck returns issues and opens no window.\n\n' +
+        'The agreement is never ticked and 「提交审核」 is never clicked. Next: submit_confirm, or let the user open the window from the Dock and click it themselves.',
       shape: {
         ...target,
-        name: z.string().min(1).describe('特效名称（必填）：最多 10 个字，两个英文字母或数字算一个字，不能有表情和特殊符号；页面截断或报错时整次调用失败。'),
-        trigger_hint: z.string().optional().describe('特效触发提示，开拍时显示，如「张嘴试试」：最多 10 个字；省略时保留页面带出的内容，传空串清空。'),
-        camera: z.enum(['front', 'back']).optional().describe('默认摄像头方向：front 前置、back 后置；省略时保留页面的默认（一般是前置）。'),
-        icon_image: z.string().min(1).optional().describe('先用这张图设图标（同 icon_set 的默认：女性、男性两个位，并上传），再打开提交窗口；省略时用工程现有的图标。'),
+        name: z.string().min(1).describe('Effect name: ≤10 chars, two English letters or digits count as one, no emoji or special symbols. Page truncation or an error fails the call.'),
+        trigger_hint: z.string().optional().describe('Trigger hint shown when shooting starts, e.g. 「张嘴试试」. ≤10 chars; omitted keeps what the page carried in, an empty string clears it.'),
+        camera: z.enum(['front', 'back']).optional().describe('Default camera; omitted keeps the page default (usually front).'),
+        icon_image: z.string().min(1).optional().describe('Sets the icon from this image first (icon_set defaults: female and male slots, then upload); omitted keeps the project icon.'),
         inspiration: z
           .string()
           .min(1)
           .optional()
-          .describe('「灵感绑定」要选的灵感或热点，取它在列表里显示的名称（当前账号收藏的灵感或热点，灵感的名称同 inspiration_collected 的标题）；传「暂不绑定」解绑；省略时保留页面带出的（inspiration_bind 绑定过的会自动带出）。'),
-        task: z.string().min(1).optional().describe('「任务绑定」要选的任务标题（已领取的任务，同 tasks_list 的 title）；传「暂不参与」解绑；省略时保留页面带出的（task_bind 绑定过的会自动带出）。'),
-        task_track: z.string().min(1).optional().describe('任务下的赛道名称，任务分赛道时必填，否则报 SUBMIT_TASK_NEEDS_TRACK 并列出赛道。'),
+          .describe('Inspiration or hotspot to pick in 「灵感绑定」, by its display name among this account collected ones (an inspiration name is the inspiration_collected title). 「暂不绑定」 unbinds; omitted keeps what the page carried in.'),
+        task: z.string().min(1).optional().describe('Task title to pick in 「任务绑定」 (a received task, the tasks_list title). 「暂不参与」 unbinds; omitted keeps what the page carried in.'),
+        task_track: z.string().min(1).optional().describe('Track name under the task; required when the task has tracks, else SUBMIT_TASK_NEEDS_TRACK with the tracks listed.'),
       },
       run: async (a) => {
         const { project_path, instance_id, icon_image, ...fill } = a;
@@ -1179,12 +1235,14 @@ export function createServer(deps = {}) {
     },
     {
       name: 'submit_confirm',
+      keywords: '送审 提交 审核 submit confirm',
       description:
-        '送审：在 submit_prepare 填好的提交窗口里勾选《创作者协议》（账号以前同意过、页面显示「已阅读并同意」时不用勾），再点「提交审核」，特效真正提交给平台审核，占用账号的提交次数，审核中和审核通过后提交的信息不能再改，调用前先和用户确认 submit_prepare 返回的摘要。只接手这个工程窗口里唯一一个开着的提交窗口（没有报 SUBMIT_WINDOW_NOT_OPEN，有多个报 SUBMIT_WINDOW_AMBIGUOUS），不重新填写；name 须和窗口摘要里的特效名称一致（不一致报 SUBMIT_NAME_MISMATCH），防止把填给别的特效的窗口提交出去。页面检测还在跑时先等（最多 3 分钟），没跑完（SUBMIT_CHECKS_RUNNING）或有没通过的（SUBMIT_CHECKS_FAILED）都不点。点之前还看一眼账号最新的 10 个作品：已有同名、在审核中或审核过了的（审核未通过的不算）就不点，报 SUBMIT_ALREADY_SUBMITTED，防止重复提交；作品列表读不到报 SUBMIT_LOOKUP_FAILED，也不点。点了之后页面先上传特效包和工程再提交，最多等 5 分钟，结果取页面报给编辑器的那一份（成功带 effect_id，失败带原因）：成功时关掉提交窗口，返回 effect_id、名称、触发提示、这次是否替用户勾了协议 agreement_ticked、页面的成功提示 success_text、是否提示要实名认证 needs_real_name，并到账号最新的作品列表里找这条特效放在 listed（审核状态等；没找到时 listed 为 null 并在 listed_note 说明）。页面没确认成功时（报了失败原因、停止提交却没给结果、5 分钟内没给结果）作品可能其实已经交上了，先到作品列表里找同名的这一条：找到就照成功处理，另把页面当时的情况放在 page_problem；没找到才报错，窗口保持打开，页面报了失败原因的报 SUBMIT_FAILED，其余报 SUBMIT_RESULT_UNKNOWN。这两种报错之后作品也可能稍后才出现，不要直接重新提交：先 pipeline_refresh 再用 pipeline_works 看有没有这条特效，确实没有再和用户商量重交，本工具不会自动重试。',
-      shape: {
-        ...target,
-        name: z.string().min(1).describe('要提交的特效名称，须和 submit_prepare 填进窗口、返回在 filled.name 里的一致。'),
-      },
+        'Click 「提交审核」 in the window submit_prepare filled — the effect really goes to platform review. This consumes one of the account submissions; submitted info cannot change during or after review, so confirm the submit_prepare summary with the user before calling.\n\n' +
+        'Takes over only the single open submit window of this project window (none: SUBMIT_WINDOW_NOT_OPEN, several: SUBMIT_WINDOW_AMBIGUOUS) and never refills it. name must match the summary effect name (filled.name), else SUBMIT_NAME_MISMATCH — a window filled for another effect must not go out. Ticks 《创作者协议》 first unless the page already shows 「已阅读并同意」 (agreement_ticked says whether it ticked this time).\n\n' +
+        'Guard rails before the click: page checks still running are waited for up to 3 minutes, then SUBMIT_CHECKS_RUNNING (unfinished) or SUBMIT_CHECKS_FAILED stops it; the account 10 newest works are also checked for a same-named work already reviewing or reviewed (failed reviews do not count) — that reports SUBMIT_ALREADY_SUBMITTED, and an unreadable works list reports SUBMIT_LOOKUP_FAILED; in all these cases nothing is clicked.\n\n' +
+        'After the click the page uploads the package and project before submitting (waited up to 5 minutes); the result is whatever the page reported to the editor (success with effect_id, failure with reason). On success the submit window closes; returns effect_id, name, trigger hint, agreement_ticked, success_text, needs_real_name, and listed — the work found among the newest works with its review state (null with listed_note when absent).\n\n' +
+        'When the page did not confirm success (it reported a failure, stopped without a result, or stayed silent past 5 minutes) the work may still have gone through: a same-named work found in the works list is treated as success, with the page situation in page_problem; not found, the error comes — SUBMIT_FAILED when the page gave a reason, else SUBMIT_RESULT_UNKNOWN — and the window stays open. After either error the work may still appear later, so never resubmit right away: pipeline_refresh, then pipeline_works to check for the effect; only discuss resubmission with the user once it is truly absent. This tool never retries on its own.',
+      shape: { ...target, name: z.string().min(1).describe('The effect name to submit; must equal filled.name from the submit_prepare summary.') },
       run: async (a) => {
         const { project_path, instance_id, name } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
@@ -1194,8 +1252,10 @@ export function createServer(deps = {}) {
     },
     {
       name: 'mobile_preview',
+      keywords: '手机预览 真机 二维码 preview qr',
       description:
-        '手机预览：按工具栏「手机预览」的方式打包当前工程并上传到抖音的预览服务，返回和编辑器弹出的一样的二维码图片（及其文本、有效期），用抖音 App 扫码即可在真机上看效果。二维码同时存成文件 qr_file，可直接给用户扫，不要另存到别处：到期（expires_at，一般 7 天）后自动删除。会把特效包上传到抖音服务器；内容审核不通过时报 MOBILE_PREVIEW_MODERATION_FAILED。',
+        'Packages the current project the way the toolbar 「手机预览」 does, uploads it to the Douyin preview service, and returns the same QR image the editor pops up (with its text and validity). Scanning it with the Douyin app shows the effect on a real phone.\n\n' +
+        'The QR is also saved to qr_file — hand that to the user to scan and do not store it elsewhere; it is auto-deleted past expires_at (usually 7 days). The effect package is uploaded to Douyin servers; a moderation failure reports MOBILE_PREVIEW_MODERATION_FAILED.',
       shape: { ...target },
       run: async (a) => {
         const projectPath = await projects.resolveProjectPath(a);
@@ -1217,79 +1277,90 @@ export function createServer(deps = {}) {
     {
       name: 'inspiration_list',
       refs: true,
-      description: '分页列出某个分类下的灵感（灵感是官方和创作者发布的特效创意，首页右侧「灵感」页签就是它）：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、关联热点 hotspot、封面 cover_ref（交给 image_view 看）。每次都带上全部分类 tabs。拿到 inspiration_id 后用 inspiration_detail 看详情。',
+      keywords: '灵感 列表 分类 inspiration list',
+      description: 'Page through inspirations of one tab — the ideas official and creators publish for effects (the homepage 「灵感」 tab).\n\n' +
+        'Per item: inspiration_id, title, tags (e.g. 「激励」), author, collect count, collected-or-not, AI-or-not, linked hotspot, cover cover_ref (hand to image_view). Every call carries all tabs. Next: inspiration_detail.',
       shape: {
         ...target,
-        tab: z.string().optional().describe('分类名，取上次返回的 tabs 里的一个（全部、热门音源、头饰、变形等）；省略时用第一个（全部）。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        tab: z.string().optional().describe('A tab name from the previous reply tabs (全部, 热门音源, 头饰, 变形, ...); omitted, the first one (全部).'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
         // The server answers code 1 at 100 (measured); 50 works.
-        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20。'),
+        count: z.number().int().min(1).max(50).optional().describe('Items per page, default 20.'),
       },
       run: community('inspiration_list', (out) => out.items),
     },
     {
       name: 'inspiration_detail',
-      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励（金额、说明、时间）、关联热点（热度和标签，如「66条热点相关灵感」）、关联官方工程 project（服务端只给标题、图标和「可在像塑桌面端搜索使用」，没有工程 id，2026-11-09 查了 13 个带工程的灵感都是这样；要下载就拿标题去 works_search）、已有的同灵感特效及发布量、示例视频 videos（抖音视频的播放地址 url、封面 cover_url、作者、点赞数、尺寸）、贴纸 stickers，以及当前账号是否已收藏和总收藏数。',
-      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / inspiration_collected / inspiration_search / hotspot_inspirations / growth_task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
+      keywords: '灵感 详情 激励 inspiration detail',
+      description: 'One inspiration in full: play description, effect types, incentive terms, all image addresses (images — view via image_view), author, reward (amount, terms, dates), linked hotspot (heat, tags such as 「66条热点相关灵感」), linked official project (server gives only title, icon and a "searchable in the desktop app" note — no project id; checked across 13 such inspirations 2026-11-09 — to download it, works_search by that title), existing effects of this inspiration with publish counts, sample videos videos (Douyin play URLs, covers, authors, likes, dimensions), stickers, and whether this account has collected it plus the total.\n\n' +
+        'id source: inspiration_list / inspiration_collected / inspiration_search / hotspot_inspirations / growth_task_detail, or an ID from the Xiangsu / Douyin app inspiration page.',
+      shape: { ...target, inspiration_id: z.string().min(1).describe('An inspiration_id from inspiration_list / inspiration_collected / inspiration_search / hotspot_inspirations / growth_task_detail, or from the Xiangsu / Douyin app inspiration page.') },
       run: community('inspiration_detail'),
     },
     {
       name: 'inspiration_collect',
-      description: '收藏或取消收藏一个灵感（写入当前登录账号，与灵感详情页的收藏按钮相同），之后重新查询收藏状态确认生效。',
+      keywords: '灵感 收藏 collect',
+      description: 'Collect or uncollect an inspiration (written to the logged-in account, same as the detail-page button); re-query the state afterwards to confirm it took effect.',
       shape: {
         ...target,
-        inspiration_id: z.string().min(1).describe('要收藏的 inspiration_id。'),
-        collect: z.boolean().optional().describe('true 收藏（默认），false 取消收藏。'),
+        inspiration_id: z.string().min(1).describe('The inspiration_id to collect.'),
+        collect: z.boolean().optional().describe('true collect (default), false uncollect.'),
       },
       run: community('inspiration_collect'),
     },
     {
       name: 'inspiration_collected',
       refs: true,
-      description:
-        '分页列出当前账号收藏的灵感（和首页「灵感」页签里的「收藏」页同一接口），按收藏时间从新到旧：字段同 inspiration_list，另有收藏时间 collected_at、作品类型 artwork_type（0 特效、2 模板、5 表情）、所属征集任务 task（task_id 和标题；提交时选了别的任务，这条灵感会被挤掉）。服务端没给灵感卡片的条目只有 inspiration_id 和标题，并标 card_missing=true。只列灵感，不含收藏的热点和素材。submit_prepare 的 inspiration 按标题在这些收藏里选。按 cursor 翻页，total 是收藏总数。',
+      keywords: '灵感 收藏列表 collected',
+      description: 'Page through the account collected inspirations, newest first (the 「灵感」 tab 收藏 page, same endpoint). Fields as inspiration_list, plus collected_at, artwork_type (0 effect, 2 template, 5 sticker), and the collecting task (task_id + title; picking another task at submit time displaces this inspiration).\n\n' +
+        'Entries without a server-side card carry only inspiration_id + title and are flagged card_missing=true. Only inspirations here — not collected hotspots or assets. submit_prepare picks its inspiration by title among these. Paged by cursor; total is the collection size.',
       shape: {
         ...target,
-        cursor: z.number().int().min(0).optional().describe('翻页游标（偏移量），取上一页的 next_cursor；默认 0。'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor (offset); take the previous page next_cursor. Default 0.'),
         // 100 came back as 50 (2026-11-10).
-        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20，最多 50。'),
+        count: z.number().int().min(1).max(50).optional().describe('Items per page, default 20, max 50.'),
       },
       run: community('inspiration_collected'),
     },
     {
       name: 'submit_close',
-      description: '关掉这个工程窗口里开着的提交窗口（submit_prepare 打开、还没提交的），不打开新的；返回关掉的个数 closed。要改填内容不用先关，直接再调 submit_prepare，它会先关掉旧的。',
+      keywords: '关闭 提交窗口 submit close',
+      description: 'Close the submit window open in this project window (from submit_prepare, not yet submitted); opens nothing. Returns closed (how many). To change what is filled, skip this — submit_prepare closes the old window itself.',
       shape: { ...target },
       run: plugin('submit_close'),
     },
     {
       name: 'inspiration_bind',
-      description:
-        '按 inspiration_id 把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），之后 save_project 落盘，打开提交窗口时会自动带出。提交窗口的下拉只列已收藏的灵感，没收藏的会带不出来，所以本工具会顺手收藏它（newly_collected=true 表示这次收藏的，不要了可用 inspiration_collect 取消）。只在提交时选灵感的话，也可以直接给 submit_prepare 传 inspiration：它在提交窗口的下拉里按名称选，只列当前账号收藏的灵感和热点。',
-      shape: { ...target, inspiration_id: z.string().min(1).describe('要绑定的 inspiration_id。') },
+      keywords: '灵感 绑定 bind',
+      description: 'Bind an inspiration (by inspiration_id) to the current project — the editor interface for agents; save_project persists it, and the submit window carries it in automatically.\n\n' +
+        'The submit window dropdown only lists collected inspirations, so this tool collects it first too (newly_collected=true marks the fresh one; uncollect via inspiration_collect if unwanted). Alternative: skip binding and pass inspiration to submit_prepare directly — it picks by name in the dropdown (collected inspirations and hotspots only).',
+      shape: { ...target, inspiration_id: z.string().min(1).describe('The inspiration_id to bind.') },
       run: plugin('inspiration_bind'),
     },
     {
       name: 'tasks_list',
       refs: true,
-      description:
-        '按 offset / count 分页列出首页活动中心的活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、状态说明（如「查看官方指导，帮您完成任务」）、剩余天数、收益、上下线时间、可完成次数。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。成长任务用 growth_tasks_list。',
+      keywords: '任务 活动中心 列表 tasks',
+      description: 'Page through the activity centre campaigns and effect-collection tasks: title, status (WAIT_RECEIVE awaiting claim / WAIT_SUBMIT awaiting submission), received-or-not, status note, days left, reward, online/offline dates, completion counts.\n\n' +
+        'With a task_id: task_detail for the full brief, task_receive to claim, task_bind to bind to a project (bindable=true required). Growth tasks: growth_tasks_list.',
       shape: { ...target, ...pageShape },
       run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenTasks.keep(await d.callPlugin('tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
     },
     {
       name: 'growth_tasks_list',
       refs: true,
-      description: '按 offset / count 分页列出活动中心里的成长任务：task_id、标题、奖励金额 bonus_yuan、标签、是否新手任务、参考工程。详情（参考工程、相关灵感、教程）用 growth_task_detail；特效师等级和每级目标进度看 account_status 的 growth。',
+      keywords: '成长任务 列表 growth tasks',
+      description: 'Page through activity-centre growth tasks: task_id, title, reward bonus_yuan, tags, newcomer flag, reference works. Details (reference works, related inspirations, tutorials): growth_task_detail; designer level and per-level progress: account_status growth.',
       shape: { ...target, ...pageShape },
       run: async ({ project_path, instance_id, offset = 0, count = 20 }) => text(pageOf(seenGrowth.keep(await d.callPlugin('growth_tasks_list', {}, await homeWindow({ project_path, instance_id }))), offset, count)),
     },
     {
       name: 'task_detail',
       refs: true,
-      description:
-        '一个特效征集任务的详情：状态、奖励时间、下线时间、我提交到这个任务的特效 my_effects（名称、effect_id、审核状态、拍摄数、播放数、投稿峰值、获奖金额、任务评定 task_state（pending 待评定，任务页不显示标签；unfinished 任务未完成；done 任务已完成；认不出的值原样给）和 off_theme（任务页标了「主题不符合」）、赛道）、完成状态、是否分档任务、任务页推荐工程的模板 id recommended_template_ids（去重后最多前 20 个，总数在 recommended_template_total，全部见 save_to；目前没有工具能按它直接下载，只能当线索），和整理过的任务说明 content：每个内容块（参与要求、奖项详情、近期热门、任务说明等）有名称 name、条目 items 和链接 links；条目有标题 title、正文 text（页面里的链接标记已换成文字，链接放进 links）、参考图 image_refs 和参考视频 video_refs，奖项条目另有页面原样给的金额 money、发放方式 money_mode 和名额 people（unlimited 为不限）；空地址和 blob: 地址任务页里也显示不出来，只在 unusable_media 里计数；读不懂的字段原样放进 unread。要原始返回时传 save_to。task_id 来自 tasks_list（本会话没列过时自动先读一次任务列表）；活动没有详情，成长任务用 growth_task_detail。只看自己所有作品各自绑的任务和灵感评成了什么，用 pipeline_works 每个作品的 bindings 一次取全（ref_id 是作品数据卡片里的编号，和 tasks_list 的 task_id 不一定是一套，对不上时按任务名对）。',
-      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。'), save_to: saveTo.describe('把接口的原始返回另存到这个目录（绝对路径），文件名 task_detail-<task_id>.json，长期保留。') },
+      keywords: '任务 详情 要求 task detail',
+      description: 'One effect-collection task in full: status, reward dates, offline date, my_effects submitted to it (name, effect_id, review state, shoots, plays, publish peak, prize money, task evaluation task_state — pending: not yet rated, no tag on the task page; unfinished; done; unknown values passed through verbatim — and off_theme when the task page marked 「主题不符合」, plus tracks), completion state, tiered-prize flag, recommended_template_ids from the task page (top 20 after dedup; total in recommended_template_total, all in save_to; no tool downloads by these ids — treat as leads), and content — the organized brief: blocks (participation requirements, prizes, recent hits, task notes, ...) each with name, items and links; items carry title, text (in-page link markup converted to text, links moved into links), reference images image_refs and videos video_refs; prize items add money, money_mode and people (unlimited = unlimited) as the page shows them; empty and blob: addresses are invisible on the task page too and only counted in unusable_media; unparsable fields land in unread verbatim. Raw response: save_to.\n\n' +
+        'task_id from tasks_list (missing from this session: the task list is re-read once first). Activities have no detail; growth tasks: growth_task_detail. To see what each of our works earned for its task and inspiration bindings in one shot: pipeline_works bindings (ref_id there is the data-card number, not necessarily the tasks_list task_id — match by task name when they disagree).',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from tasks_list.'), save_to: saveTo.describe('Directory (absolute path) to save the raw API response into, as task_detail-<task_id>.json, for long-term keeping.') },
       run: async (a) => {
         const { project_path, instance_id, task_id, save_to } = a;
         const win = await homeWindow({ project_path, instance_id });
@@ -1305,8 +1376,9 @@ export function createServer(deps = {}) {
     {
       name: 'growth_task_detail',
       refs: true,
-      description: '一个成长任务的详情：标题、奖励、标签、参考工程、相关灵感（封面 cover_ref）和教程。task_id 须来自本会话的 growth_tasks_list。',
-      shape: { ...target, task_id: z.string().min(1).describe('growth_tasks_list 返回的 task_id。') },
+      keywords: '成长任务 详情 growth task detail',
+      description: 'One growth task in full: title, reward, tags, reference works, related inspirations (cover cover_ref), tutorials. task_id from this session growth_tasks_list.',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from growth_tasks_list.') },
       run: async ({ project_path, instance_id, task_id }) => {
         seenGrowth.get(task_id);
         return text({ task_id, ...(await d.callPlugin('growth_task_detail', { id: task_id }, await homeWindow({ project_path, instance_id }))) });
@@ -1314,8 +1386,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'task_receive',
-      description: '领取一个征集任务（写入当前登录账号，与活动中心的「领取」按钮相同，领取后不能撤销）。只有状态为 WAIT_RECEIVE 的任务能领，其它状态直接拒绝。返回 designer_task_id 和新状态；领取后本工具会重新读一次任务列表，接着就能 task_bind。',
-      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的任务 task_id。') },
+      keywords: '领取 任务 receive',
+      description: 'Claim a collection task (written to the logged-in account, same as the activity-centre button; cannot be undone). Only WAIT_RECEIVE tasks are claimable — anything else is refused. Returns designer_task_id and the new state; the task list is re-read afterwards so task_bind can follow immediately.',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from tasks_list.') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
         const t = seenTasks.get(task_id);
@@ -1328,11 +1401,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'task_bind',
-      description:
-        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。带任务的打开要经由另一个开着的窗口发起，这个工程是唯一的窗口时，会先开一个不保存的空工程当跳板，绑完关掉。task_id 须来自本会话的 tasks_list。只在提交时选任务的话，直接给 submit_prepare 传 task（已领取任务的标题），不用重开窗口。',
+      keywords: '任务 绑定 工程 bind',
+      description: 'Bind the project to a received task — the same as 「去创作」 from the task detail page; submissions carry the task.\n\n' +
+        'The editor only writes task info at project-open time, so this tool closes the project window first (refuses with unsaved changes — save_project), then reopens it carrying the task info, returning the new pid and instance_id. The task-carrying open must be launched via another open window; when this project is the only one, an unsaved blank project stands in for it and is closed after.\n\n' +
+        'task_id from this session tasks_list (bindable=true). Alternative without reopening: pass task (a received task title) to submit_prepare.',
       shape: {
-        path: z.string().min(1).describe('工程文件夹的绝对路径。'),
-        task_id: z.string().min(1).describe('tasks_list 返回的 task_id（须 bindable=true）。'),
+        path: z.string().min(1).describe('Absolute path of the project folder.'),
+        task_id: z.string().min(1).describe('A task_id from tasks_list (bindable=true).'),
       },
       run: async ({ path: projectDir, task_id }) => {
         let t = seenTasks.get(task_id);
@@ -1363,45 +1438,52 @@ export function createServer(deps = {}) {
     {
       name: 'rank_list',
       refs: true,
-      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，每页都带上该榜当天的分类 categories（level 1 大类如人像美化、游戏玩法、人设扮演、AI 玩法，level 2 细类如基础头饰、测一测、不露脸壁纸；每个榜不同）。按主题的专题榜（如「热爆美妆特效榜」）见 rank_subjects。要看某个特效的工程，把 effect_id 和 name 交给 works_by_effect，查它在不在首页。',
+      keywords: '排行榜 榜单 投稿 rank',
+      description: 'Read one ranking board (the mobile leaderboard endpoint): rank, effect name, effect_id, level, publishes (peak / cumulative), follow-shoots, gender split, youth favour, play score, total earnings, etc.\n\n' +
+        'Filters by date, category (one per level, e.g. only 「人像美化 › 美妆」) and the options below; every page carries the board categories of the day (level 1 groups like 人像美化, 游戏玩法, 人设扮演, AI玩法; level 2 sub-tracks like 基础头饰, 测一测, 不露脸壁纸 — per board). Theme boards (e.g. 「热爆美妆特效榜」): rank_subjects. To find a homepage project for an effect: works_by_effect with its effect_id and name.',
       shape: {
         ...target,
-        rank_type: z.number().int().optional().describe(`榜单：${RANK_TYPE_TEXT}；默认 1。`),
-        date: z.string().optional().describe('榜单日期 YYYY-MM-DD，默认最新一期。'),
-        categories: z.array(z.string()).max(3).optional().describe('分类名，取上一页返回的 categories，每级最多一个，可叠加，如 ["人像美化","美妆"]（大类 + 细类）。'),
-        levels: rankFilter('levels').describe('特效等级，如 ["S","A+"]。'),
-        panels: rankFilter('panels').describe('面板，如 ["头饰","美妆"]。'),
-        preferences: rankFilter('preferences').describe('偏好。'),
-        tools: rankFilter('tools').describe('来自工具。'),
-        young_like_scores: z.array(z.number().int().min(1).max(10)).optional().describe('年轻喜爱度 1–10。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        rank_type: z.number().int().optional().describe(`The board: ${RANK_TYPE_TEXT}; default 1.`),
+        date: z.string().optional().describe('Board date YYYY-MM-DD; the latest edition by default.'),
+        categories: z.array(z.string()).max(3).optional().describe('Category names from the previous reply categories, one per level, stackable, e.g. ["人像美化","美妆"] (group + sub-track).'),
+        levels: rankFilter('levels').describe('Effect levels, e.g. ["S","A+"].'),
+        panels: rankFilter('panels').describe('Panels, e.g. ["头饰","美妆"].'),
+        preferences: rankFilter('preferences').describe('Preferences.'),
+        tools: rankFilter('tools').describe('Source tools.'),
+        young_like_scores: z.array(z.number().int().min(1).max(10)).optional().describe('Youth favour 1–10.'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
         // The server answers code 1 above 20 (measured).
-        count: z.number().int().min(1).max(20).optional().describe('每页数量，默认 20（最大 20）。'),
+        count: z.number().int().min(1).max(20).optional().describe('Items per page, default 20 (max 20).'),
       },
       run: community('rank_list'),
     },
     {
       name: 'rank_hotspots',
       refs: true,
-      description: '热点榜（按热度排序的抖音热点，每小时更新），按 offset / count 分页：名次、topic_id、标题、说明、热度、相关灵感数、封面 cover_ref。一个热点下的灵感用 hotspot_inspirations。抖音全站的实时热榜见 douyin_hot_list。',
+      keywords: '热点 榜 热度 hotspots',
+      description: 'The hotspot board (Douyin hotspots by heat, hourly), paged by offset / count: rank, topic_id, title, description, heat, linked-inspiration count, cover cover_ref. Inspirations under one hotspot: hotspot_inspirations. The site-wide Douyin real-time list: douyin_hot_list.',
       shape: { ...target, ...pageShape },
       run: community('rank_hotspots'),
     },
     {
       name: 'hotspot_inspirations',
       refs: true,
-      description: '一个热点下的灵感，按热点页页签的顺序、按 offset / count 分页：每条的页签 tab、inspiration_id、标题、标签、说明、封面 cover_ref（交给 image_view 看）；tabs 是全部页签名。详情用 inspiration_detail；把这个热点下全部灵感的图片下载到本机用 hotspot_inspiration_images。',
-      shape: { ...target, topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。'), ...pageShape },
+      keywords: '热点 灵感 hotspot',
+      description: 'Inspirations under one hotspot, in hotspot-page tab order, paged by offset / count: per item the tab, inspiration_id, title, tags, description, cover cover_ref (hand to image_view); tabs lists all tab names.\n\n' +
+        'Details: inspiration_detail. Download all images of every inspiration under this hotspot: hotspot_inspiration_images.',
+      shape: { ...target, topic_id: z.string().min(1).describe('A topic_id from rank_hotspots.'), ...pageShape },
       run: async ({ project_path, instance_id, topic_id, offset = 0, count = 20 }) =>
         text(pageOf(await d.callPlugin('hotspot_inspirations', { topic_id }, await homeWindow({ project_path, instance_id })), offset, count)),
     },
     {
       name: 'hotspot_inspiration_images',
-      description: `把一个热点下全部灵感的图片下载到本机：逐条读灵感详情，下载详情里的全部图片（封面就是第一张；多数灵感只有 1 张，也有 3 张、6 张的），同一灵感在几个页签里出现只下一次。文件名是「序号-灵感标题-第几张.扩展名」，序号按热点页的顺序；同目录的 index.json 记下每条灵感的 inspiration_id、标题、页签、文件名和原图地址。文件是临时的：存在临时目录里，24 小时后删除（MCP 服务一直开着时到点删；服务重启过的，下次调用本工具时删），要留存就自己复制走。一个热点约 70 张图，一般一分钟左右。返回目录 dir、灵感数、存下的图片数、每条灵感的文件名，以及失败的灵感和原因 failed（详情读不出、图片下载两次都失败或不是图片）；一张都没存下时报错。topic_id 来自 rank_hotspots。`,
+      keywords: '热点 灵感 下载 图片 images',
+      description: 'Download every image of every inspiration under one hotspot: each inspiration detail is read, all its images downloaded (the cover is image 1; most inspirations have 1, some 3 or 6), and an inspiration appearing in several tabs is fetched once. File names are 「序号-灵感标题-第几张.扩展名」 numbered in hotspot-page order; index.json beside them records each inspiration inspiration_id, title, tab, files and original URLs.\n\n' +
+        'Files are temporary — in the temp directory, deleted after 24 hours (on schedule while the server runs; on the next call of this tool after a restart) — copy them out to keep. About 70 images per hotspot, roughly a minute. Returns dir, inspiration count, images saved, per-inspiration file names, and failed (detail unreadable, image failed twice, or not an image); zero images saved is an error. topic_id from rank_hotspots.',
       shape: {
         ...target,
-        topic_id: z.string().min(1).describe('rank_hotspots 返回的 topic_id。'),
-        tab: z.string().min(1).optional().describe('只下这个页签的灵感（hotspot_inspirations 返回的 tabs 之一）；省略时下全部。'),
+        topic_id: z.string().min(1).describe('A topic_id from rank_hotspots.'),
+        tab: z.string().min(1).optional().describe('Download only this tab (one of hotspot_inspirations tabs); omitted, all.'),
       },
       run: async ({ project_path, instance_id, topic_id, tab }) => {
         const win = await homeWindow({ project_path, instance_id });
@@ -1458,71 +1540,84 @@ export function createServer(deps = {}) {
     {
       name: 'rank_subjects',
       refs: true,
-      description: '像塑移动版「专题合集」里按主题的榜单，最新的在前，按 cursor 翻页：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。按榜名搜用 rank_subjects_search，一个榜的全部特效用 rank_subject_detail。',
+      keywords: '专题 合集 榜单 subjects',
+      description: 'The mobile 「专题合集」 theme boards, newest first, paged by cursor: kind=effect effect subject boards (about 200 editions, e.g. 「测一测玩法特效榜 - 11月」, 「热爆美妆特效榜」, 「熊出没IP特效榜」, 「主题创新优胜特效榜」, collection campaigns quality effects), kind=template template subject boards (e.g. 「歌词玩法模板榜」, 「AI配文创意模板榜」, 「氛围转场模板榜」).\n\n' +
+        'Each board carries its first few effects and view count. Search by name: rank_subjects_search; all effects of one board: rank_subject_detail.',
       shape: {
         ...target,
         kind: subjectKind,
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
         // The server answers code 1 above 20 (measured).
-        count: z.number().int().min(1).max(20).optional().describe('每页数量，默认 20（最大 20）。'),
+        count: z.number().int().min(1).max(20).optional().describe('Items per page, default 20 (max 20).'),
       },
       run: community('rank_subjects'),
     },
     {
       name: 'rank_subjects_search',
       refs: true,
-      description: '按榜名在「专题合集」的全部期里搜索（服务端没有搜索，逐页读完再过滤），返回全部匹配的榜，不分页；每个榜带前几个特效、浏览量。',
-      shape: { ...target, kind: subjectKind, keyword: z.string().min(1).describe('榜名里的词，如「美妆」「测一测」「IP」「热梗」。') },
+      keywords: '专题 搜索 榜名 subjects search',
+      description: 'Search all 「专题合集」 editions by board name (no server-side search — pages through everything and filters); returns every matching board, unpaged; each with its first few effects and view count.',
+      shape: { ...target, kind: subjectKind, keyword: z.string().min(1).describe('A word from the board name, such as 「美妆」, 「测一测」, 「IP」, 「热梗」.') },
       run: community('rank_subjects_search'),
     },
     {
       name: 'rank_subject_detail',
       refs: true,
-      description: '「专题合集」里一个榜的全部特效（最多 20 个）：特效名、effect_id、app_effect_id、图标、说明。',
-      shape: { ...target, subject_id: z.string().min(1).describe('rank_subjects 或 rank_subjects_search 返回的 subject_id。') },
+      keywords: '专题 详情 榜单 subject detail',
+      description: 'All effects of one 「专题合集」 board (at most 20): name, effect_id, app_effect_id, icon, description.',
+      shape: { ...target, subject_id: z.string().min(1).describe('A subject_id from rank_subjects / rank_subjects_search.') },
       run: community('rank_subject_detail'),
     },
     {
       name: 'rank_innovation',
       refs: true,
-      description: '创新计划的官方精选（像塑移动版发现页的精选列表，移动版展示的是模板）：特效名、effect_id、标签 labels（同一页里同一个特效带不同标签出现多次时合成一条）、投稿量、总收益、入选日期、封面。服务端的 offset 不按条目计，翻页时上一页的特效会再出现，返回的 date 也可能变；要全看时按 effect_id 去重。',
+      keywords: '创新计划 精选 innovation',
+      description: 'The Innovation Program official picks (the mobile discovery page; the mobile view shows templates): name, effect_id, labels labels (repeated entries of one effect with different labels on one page are merged), publishes, total earnings, pick date, cover.\n\n' +
+        'The server offset is not per item: paging re-serves previous effects and the returned date may change — dedupe by effect_id to see everything.',
       shape: {
         ...target,
-        kind: z.enum(INNOVATION_KINDS).optional().describe('template 精选模板（默认），effect 精选特效。'),
-        offset: z.number().int().min(0).optional().describe('翻页偏移，取上一页的 next_offset。'),
-        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20；精选由服务端过滤，实际条数可能略少。'),
+        kind: z.enum(INNOVATION_KINDS).optional().describe('template picked templates (default), effect picked effects.'),
+        offset: z.number().int().min(0).optional().describe('Paging offset; take the previous page next_offset.'),
+        count: z.number().int().min(1).max(100).optional().describe('Items per page, default 20; server-side filtering may return slightly fewer.'),
       },
       run: community('rank_innovation'),
     },
     {
       name: 'pipeline_works',
-      description:
-        '我们全部作品走到精选的哪一步（运营平台 xiangsu.muqian.chat 的 /api/agent/works；它每 10 分钟取一次作品列表和站内信、每小时取一次数据卡片，不连编辑器）。每个作品分三条线，各带 stage、label、since（时间）和 at_kind（platform 平台给的时间、detected 我们发现的时间、derived 按规则算出的时间）：上线 online（reviewing 审核中、testing 测试中、online 已上线、rejected 审核未通过 / test_failed 测试未通过，reason 是驳回原因原文、gone 已下线或删除）；精选 pick（waiting 上线不满 3 天或绑定还在评定中、还可能进精选审核，missed 上线满 3 天且绑定评完仍没进，round1 精选首轮审核中，round2 首轮没过在二审，picked 入选，pick_rejected 落选、reason 是平台原话、几条用「；」隔开，template 模板不发精选审核消息，none 没上线）；精选奖 reward（pending / locked 要拍宣传视频解锁，unlocked 已解锁）。group 分组：act 要用户处理、wait 等结果、done 已结束；action 是要用户做的事。eta 是这一步大概什么时候出结果：ours 是我们自己作品的历史（样本数 n、中位、最慢，样本不到 3 个为 null），ours_range 是按中位和最慢推的时间，ours_passed 表示已经等过最慢的样本，official / official_by 是官方说法和日子。bindings 是绑定的任务和灵感各自的评定 label；metrics 是累计曝光、投稿、收益和最近一天的增量；successor_id 表示被驳回后已经重新提交。还带 summary（各组、各精选阶段个数）、stats（各段耗时的历史分布）、账号是否被限制提交 restricted / restriction 和提交节奏 submit_pace（next_allowed_at 之前不开提交窗口，被限制时为 null）、各块数据的健康 health（ok=false 的块写着原因和上次成功的时间，auth 是像塑登录态）、data_at 最近一次取到作品列表的时间、refreshing 是否正在重取。',
+      keywords: '作品 进度 精选 看板 pipeline works',
+      description: 'Where each of our works stands on its way to being picked (ops platform /api/agent/works; it re-fetches works and inbox mail every 10 min, data cards hourly; not connected to the editor).\n\n' +
+        'Three lines per work, each with stage, label, since, at_kind (platform = the platform gave the time, detected = we noticed, derived = computed by rule):\n' +
+        '- online: reviewing / testing / online / rejected or test_failed (reason = the rejection text) / gone (off-line or deleted)\n' +
+        '- pick: waiting (online < 3 days or bindings still rating — pick review may still happen) / missed (online ≥ 3 days, bindings rated, not picked) / round1 (first review) / round2 (failed round 1, in the second) / picked / pick_rejected (reason = platform wording, several joined by 「；」) / template (templates get no pick-review message) / none (never online)\n' +
+        '- reward: pending / locked (unlock by shooting a promo video) / unlocked\n\n' +
+        'group: act (user must act) / wait / done; action = what the user must do. eta: ours (our history — n, median, slowest; null under 3 samples), ours_range (from median + slowest), ours_passed (slowest sample already waited out), official / official_by. bindings: per-bound task/inspiration rating labels; metrics: cumulative exposure / publishes / earnings + latest-day deltas; successor_id: resubmitted after rejection.\n\n' +
+        'Plus summary (group and pick-stage counts), stats (stage-duration history), restricted / restriction + submit_pace (no submit window before next_allowed_at; null when restricted), health per data block (ok=false blocks name the cause and last success; auth = Xiangsu login), data_at (last works fetch), refreshing.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/works')),
     },
     {
       name: 'pipeline_work',
-      description:
-        '一个作品的完整信息（运营平台 /api/agent/works/:id）：pipeline_works 里那一行，加上时间线 timeline（提交、测试、上线、进精选审核、首轮没过、入选 / 落选、精选奖、加热、完成任务、绑定评定、判没进审，每步的时间、时间来源和距上一步几秒）、按天的累计曝光和投稿 days、数据卡片 figures（页面原样文字）、用到的能力 functions、流量标签 traffic（精选加热带实发和计划曝光）、上线审核记录 reviews（驳回原因原文）、收益明细 revenue、热门用户视频 videos 和作者自己拍没拍过 author_shot、这个作品的全部变化 events。effect_id 来自 pipeline_works。',
-      shape: { effect_id: z.string().regex(/^\d+$/).describe('pipeline_works 返回的 effect_id。') },
+      keywords: '作品 详情 数据 timeline pipeline work',
+      description: 'One work in full (ops platform /api/agent/works/:id): the pipeline_works row, plus timeline (submit, test, online, pick review, round-1 failure, picked / rejected, reward, promo video, task completion, binding ratings, judged-not-entered — each step with time, time source, seconds since the previous), per-day cumulative exposure / publishes days, data-card figures (page text verbatim), functions used, traffic tags (pick boosts with delivered and planned exposure), review records (rejection reasons verbatim), revenue detail, popular user videos + whether the author shot it themselves (author_shot), and all changes events. effect_id from pipeline_works.',
+      shape: { effect_id: z.string().regex(/^\d+$/).describe('An effect_id from pipeline_works.') },
       run: async ({ effect_id }) => text(await d.platformRequest(`/api/agent/works/${effect_id}`)),
     },
     {
       name: 'account_status',
-      description:
-        '账号（运营平台 /api/agent/account）：是否被限制提交 restricted 和限制详情 restriction（until 解除时间；until_source=notice 是限制通知里写的，default 是通知没写、按 24 小时算；平台解除时不发通知）、提交节奏 submit_pace（今天交了几个、上次提交时间、下次最早可交 next_allowed_at）、像塑登录态 auth（到期时间 expires_at、是否失效 logged_out、快到期 warn）、资料和数字 profile（昵称、等级、粉丝、开拍总计、本月提交、上线、收入）、收入 revenue、等级成长 growth（每级目标和进度）、本期拍视频激励 shoot_activity（任务、连续打卡档位）、精选作者计划 author_plan、最近 50 条和作品或账号有关的站内信 messages（推广不列）、对不上作品的站内信 unmatched_messages。',
+      keywords: '账号 等级 提交节奏 限制 account',
+      description: 'The account (ops platform /api/agent/account): restricted + restriction details (until = lift time; until_source notice = from the restriction notice, default = notice gave none, 24 h assumed; the platform does not notify on lift), submit_pace (today count, last submit, next_allowed_at), Xiangsu login auth (expires_at, logged_out, warn), profile numbers (nickname, level, fans, total shoots, monthly submits / online / earnings), revenue, growth (per-level goals and progress), this period shoot-video incentive shoot_activity (task, streak tiers), the pick-author program author_plan, the latest 50 works/account messages (promos excluded), and unmatched_messages.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/account')),
     },
     {
       name: 'changes_since',
-      description:
-        '从「已经告诉过用户」的进度往后的变化（运营平台 /api/agent/changes）：作品阶段变了（审核中、上线、驳回、进精选审核、首轮没过、入选、落选、判没进审、精选奖待解锁 / 已解锁）、绑定的任务和灵感评定变了、完成任务和获奖公布、精选加热、账号限制开始和到解除时间、像塑登录失效或快过期。每条有 id、type（stage、binding、notice、restriction、auth）、at 和 at_kind、作品 effect_id 和 name、一句话 text、needs_you（要用户动手）。会话开始时调一次，把变化（尤其 needs_you 的）告诉用户，告诉完再用 changes_ack 传这次返回的 up_to；不 ack 下次还会拿到。has_more 为 true 时传 after=up_to 接着取。进度是所有 agent 对话共用的，别的对话告诉过的这里不再出现。还带账号是否被限制和提交节奏。',
+      keywords: '变化 进度 告诉用户 changes',
+      description: 'Changes since the last point already told to the user (ops platform /api/agent/changes): work stages moved (reviewing, online, rejection, pick review, round-1 failure, picked, rejected, judged-not-entered, reward pending / unlocked), binding ratings moved, tasks completed and prizes announced, pick boosts, restriction start and lift time, Xiangsu login expired or expiring.\n\n' +
+        'Each item: id, type (stage / binding / notice / restriction / auth), at + at_kind, work effect_id and name, one-line text, needs_you (user must act). At session start call once, tell the user the changes (needs_you first), then changes_ack with the returned up_to; without ack they come back next time. has_more: continue with after=up_to. Progress is shared across all agent conversations — anything another conversation already told does not reappear. Also carries restriction state and submit pace.',
       shape: {
-        after: z.number().int().min(0).optional().describe('从哪个事件 id 之后取，默认是「已经告诉过用户」的进度。'),
-        limit: z.number().int().min(1).max(200).optional().describe('最多几条，默认 50。'),
-        types: z.string().regex(/^[a-z,]+$/).optional().describe('只看这几类，逗号分隔：stage、binding、notice、restriction、auth。'),
+        after: z.number().int().min(0).optional().describe('Take events after this id; default is the told-to-user progress.'),
+        limit: z.number().int().min(1).max(200).optional().describe('At most this many items, default 50.'),
+        types: z.string().regex(/^[a-z,]+$/).optional().describe('Only these types, comma-separated: stage, binding, notice, restriction, auth.'),
       },
       run: async ({ after, limit, types }) => {
         const q = new URLSearchParams();
@@ -1534,38 +1629,53 @@ export function createServer(deps = {}) {
     },
     {
       name: 'changes_ack',
-      description: '把「已经告诉过用户」的进度推到 up_to（changes_since 返回的 up_to）。只往前推，不超过最新的变化；返回新的进度 told。只在真的把这些变化告诉用户之后调。',
-      shape: { up_to: z.number().int().min(0).describe('changes_since 返回的 up_to。') },
+      keywords: '变化 确认 已告知 ack',
+      description: 'Push the told-to-user progress to up_to (from changes_since). Only moves forward, never past the newest change; returns the new progress told. Call only after those changes were actually told to the user.',
+      shape: { up_to: z.number().int().min(0).describe('The up_to from changes_since.') },
       run: async ({ up_to }) => text(await d.platformRequest('/api/agent/changes/ack', 'POST', { up_to })),
     },
     {
       name: 'pipeline_refresh',
-      description:
-        '让运营平台现在就重取一次作品列表、站内信和到点的数据卡片（POST /api/agent/refresh），刚提交、刚上线、等精选审核消息时用；平时每 10 分钟取一次。5 分钟内最多一次：太近时 started=false 带 next_allowed_at，正在重取时 started=false。交给采集进程后 15 秒内开始，一遍几秒到一两分钟，之后再调 pipeline_works 看 data_at 变没变、refreshing 是否还是 true。',
+      keywords: '刷新 重取 看板 refresh',
+      description: 'Make the ops platform re-fetch works, inbox mail and due data cards now (POST /api/agent/refresh) — right after a submission, going online, or while waiting for a pick-review message; otherwise it refreshes every 10 min. At most once per 5 minutes: too soon returns started=false with next_allowed_at, already running returns started=false. The collector starts within ~15 s; one pass takes seconds to a couple of minutes — afterwards call pipeline_works and check data_at and refreshing.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/refresh', 'POST')),
     },
     {
       name: 'brief_today',
-      description:
-        '开工简报（运营平台 /api/agent/brief），会话开始、出方向前读一次，结论在前：账号能不能交 account（restricted、until、today、next_allowed_at）；从上次告诉用户以来的变化 changes（needs_you 要用户动手的、latest 最近 10 条、up_to，告诉完用 changes_ack）；AI 按选题流程写的今天主攻建议 focus（inference=true 表示是推断：summary 一句话；focus 每个方向倒推自哪几个爆款 from_hits、人为什么想玩 interest（四类之一）、借的热点 hotspot（抖音热榜或像塑热点）和怎么放进钩子 angle、赛道的理由 why、带数字的依据 evidence、要学的入选作品 learn_from、要避开的坑 avoid、候选绑定 bind（tasks 任务标题、inspirations 灵感标题、check 绑之前要逐条对上的要求；标题都是输入里有的，绑前照样用 tasks_open / task_requirements / inspirations_new 核对）；avoid 别做的赛道；model、created_at；还没写成时 missing 说明原因）；赛道表前 12 个 tracks（平台近 30 天精选数 picks_30d、近 7 天 picks_7d 和前 7 天 picks_prev_7d、我们做了 ours、进审 entered、入选 picked、落选 pick_rejected、判没进审 missed、进审率 entry_rate，样本不到 2 个为 null）；平台近 30 天精选总数；从我们结果算出的规律 insights；失败经验前 10 条 lessons（类别 label、平台原话或赛道 reason、次数、涉及作品、最近一次）；从爆款倒推的 hits（inference=true：AI 从几个榜头部的用户视频标题归纳的共同规律 patterns，和前 10 个爆款 top 各自为什么想玩 why、原因类型 hook；ai_at 写的时间）；抖音热榜前 6 个 douyin（重点方向，只给分类里有「站内玩法」的、和做特效有关的：名称、分类、热度、走势 trend）；像塑热点前 6 个 hotspots（标题、热度、一天涨了多少 heat_delta、刚上榜 is_new、站内同题材几个 same_topic_on_site、label 扎堆 / 还早 / 有人做 / 没查、灵感数）；新出现的 fresh（第一次采到灵感以后新出现的灵感个数和前 8 个、现在挂着的【创新】灵感数、7 天内发布的任务）；我们绑过的任务 tasks（截止、有没有同类型条款、每个作品的平台分类和评定）；各块数据的健康 health。more 写了选题时按什么顺序细看：douyin_hot_list → hit_reasons → hot_topics、topic_crowd → track_board、pick_samples、failure_lessons → tasks_open、task_requirements、inspirations_new。',
+      keywords: '开工 简报 主攻 方向 brief today',
+      description: 'The morning brief (ops platform /api/agent/brief) — read once per session before ideation, conclusions first.\n\n' +
+        '- account: can we submit (restricted, until, today, next_allowed_at)\n' +
+        '- changes since last told to the user: needs_you (user must act), latest (last 10), up_to (ack via changes_ack)\n' +
+        '- focus: the AI-written track suggestion for today (inference=true marks inference): summary one-liner; each direction with from_hits (the hits it generalizes from), interest (why people play — one of four kinds), hotspot + angle (how the hook rides it), why (reason for the track), evidence (numbers), learn_from (picked works to learn from), avoid (pitfalls), bind — candidates: tasks (titles) and inspirations (titles) with check (requirements to verify one by one before binding; titles come from the brief input — still verify via tasks_open / task_requirements / inspirations_new); avoid lists tracks not to do; model, created_at; missing explains why nothing was produced\n' +
+        '- tracks: top 12 — platform picks_30d / picks_7d / picks_prev_7d, ours, entered, picked, pick_rejected, missed, entry_rate (null under 2 samples); plus total platform picks over 30 days\n' +
+        '- insights: rules computed from our own results; lessons: first 10 failure lessons (label, reason = platform wording or track, count, works, latest date)\n' +
+        '- hits: AI reverse-engineered from hit tops (inference=true): shared patterns, and the top 10 with per-work why + hook kind; ai_at\n' +
+        '- douyin: top 6 of the Douyin hot list relevant to effects (only 「站内玩法」 categories): name, categories, heat, trend\n' +
+        '- hotspots: top 6 Xiangsu hotspots — title, heat, heat_delta (vs about a day ago), is_new, same_topic_on_site, label (扎堆 / 还早 / 有人做 / 没查), inspiration count\n' +
+        '- fresh: newly appeared inspirations (count + first 8) since first seen, current 【创新】 count, tasks published within 7 days\n' +
+        '- tasks: tasks we bound (deadlines, same-type clauses, per-work track and rating); health per data block\n\n' +
+        'more names the drill-down order when ideating: douyin_hot_list → hit_reasons → hot_topics, topic_crowd → track_board, pick_samples, failure_lessons → tasks_open, task_requirements, inspirations_new.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/brief')),
     },
     {
       name: 'track_board',
-      description: '全部赛道（细分类型）的精选情况（运营平台 /api/agent/tracks）：每个赛道的上级分类 parent、平台近 30 天精选数和近 7 天 / 前 7 天、我们做了几个、进审、入选、落选、没进审、还在等、进审率，我们每个作品的阶段 our_works，最近入选的样例 samples（名称、入选日、标签、投稿、用到的能力 functions、图标）。按平台精选数排。模板合成一行「模板」。',
+      keywords: '赛道 精选 汇总 track board',
+      description: 'Pick status of every sub-track (ops platform /api/agent/tracks): per track its parent, platform picks (30 days, last 7, prior 7), how many we made, entered, picked, rejected, missed, still waiting, entry rate, our works stages (our_works), and recent pick samples (name, pick date, tags, publishes, functions, icon). Sorted by platform picks; templates collapse into one 「模板」 row.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tracks')),
     },
     {
       name: 'pick_samples',
-      description: '官方精选作品明细（运营平台 /api/agent/picks，每天采一次精选榜和入选作品详情）：名称、app_effect_id、特效或模板 kind、赛道 track（平台判定的细分类型）、标签 labels、入选日 reviewed_on、投稿、用到的编辑器能力 functions、图标地址。可按赛道、类型、最近几天筛，按入选日倒序。要看某个作品的视频用 effect_videos，工程用 works_by_effect。',
+      keywords: '精选 样例 明细 picks',
+      description: 'Official pick details (ops platform /api/agent/picks, the pick board and picked-work details collected daily): name, app_effect_id, kind (effect / template), track (platform sub-track), labels, pick date reviewed_on, publishes, editor functions, icon. Filter by track, kind, recent days; newest picks first.\n\n' +
+        'Videos of one work: effect_videos; projects: works_by_effect.',
       shape: {
-        track: z.string().max(40).optional().describe('赛道（细分类型），如「脸控游戏」「玩法测试」「模板」，取自 brief_today / track_board 的 track。'),
-        kind: z.enum(['effect', 'template']).optional().describe('effect 特效，template 模板；不传两种都要。'),
-        days: z.number().int().min(1).max(90).optional().describe('最近几天入选的，默认 30。'),
-        limit: z.number().int().min(1).max(200).optional().describe('最多几个，默认 30。'),
+        track: z.string().max(40).optional().describe('Sub-track, such as 「脸控游戏」, 「玩法测试」, 「模板」 — from brief_today / track_board track.'),
+        kind: z.enum(['effect', 'template']).optional().describe('effect or template; omitted, both.'),
+        days: z.number().int().min(1).max(90).optional().describe('Picked within the last n days, default 30.'),
+        limit: z.number().int().min(1).max(200).optional().describe('At most this many, default 30.'),
       },
       run: async ({ track, kind, days, limit }) => {
         const q = new URLSearchParams();
@@ -1578,55 +1688,68 @@ export function createServer(deps = {}) {
     },
     {
       name: 'failure_lessons',
-      description: '全部失败经验（运营平台 /api/agent/lessons，只用平台数据算）：上线审核驳回（按平台给的原因标题归，如「名称与效果不相关」）、测试未通过、精选落选（平台原话，几条分开）、精选首轮没过、没进精选审核（按赛道归）。每条有类别 kind / label、原因 reason、次数 count、涉及作品 works（按先后）、首次和最近一次的时间、一段平台原文 sample_text。同一个原因反复出现的，出方向和起名时要避开。真机试玩的教训不在这里，在规则文件里。',
+      keywords: '失败 经验 驳回 落选 lessons',
+      description: 'All failure lessons (ops platform /api/agent/lessons, platform data only): submission rejections (grouped by the platform reason title, e.g. 「名称与效果不相关」), test failures, pick rejections (platform wording, one entry each), pick round-1 failures, judged-not-entered (grouped by track). Each: kind / label, reason, count, works (in order), first and latest date, a verbatim sample_text.\n\n' +
+        'A reason that repeats must be avoided in ideation and naming. Real-device play lessons are not here — they live in the rules files.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/lessons')),
     },
     {
       name: 'hot_topics',
-      description: '像塑热点（运营平台 /api/agent/hotspots，每 6 小时取一次热点榜）：updated_at 取到的时间；items 按名次，每条有 topic_id、标题、说明、热度 heat、和约一天前比的热度涨落 heat_delta 和名次涨落 rank_delta、刚上榜 is_new、站内同题材的特效和模板 crowd（matched 几个、effects、templates、投稿最高的几个 top，每天按热点标题搜一次）、label（扎堆：同题材 6 个以上；还早：2 个以下又在涨；有人做；没查），前 10 个带热点下的灵感（标题、标签、玩法说明）；rising 是一天涨得最快的 5 个 topic_id。只有像塑自己的热点；抖音热榜（重点方向，只列站内玩法分类的）用 douyin_hot_list。',
+      keywords: '像塑 热点 扎堆 hot topics',
+      description: 'Xiangsu hotspots (ops platform /api/agent/hotspots, refreshed every 6 h): updated_at; items ranked, each with topic_id, title, description, heat, heat_delta + rank_delta vs about a day ago, is_new, crowd (same-topic effects and templates: matched count, lists, top by publishes — searched daily by hotspot title), label (扎堆: ≥6 same-topic; 还早: ≤2 and rising; 有人做; 没查), and the top 10 with their inspirations (title, tags, play description); rising: the 5 fastest risers as topic_ids.\n\n' +
+        'Xiangsu hotspots only; the Douyin hot list (key direction, 「站内玩法」 categories only) is douyin_hot_list.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/hotspots')),
     },
     {
       name: 'task_usage',
-      description: '我们绑过、还没截止的任务（运营平台 /api/agent/tasks）：标题、截止时间、说明里有没有「同一设计师提交多个同类型玩法」这类条款 same_type_clause、我们每个作品的平台分类 track 和评定 state（pending / unfinished / done / off_theme）。同一个任务有同类型条款时，新作品要和已绑的平台分类不同才绑（规则见 规范/选题与组合.md「绑任务和灵感」）。',
+      keywords: '任务 占用 评定 usage',
+      description: 'Tasks we bound that have not closed yet (ops platform /api/agent/tasks): title, deadline, same_type_clause (whether the notes carry clauses like 「同一设计师提交多个同类型玩法」), and per work of ours its platform track and rating state (pending / unfinished / done / off_theme).\n\n' +
+        'When a task has a same-type clause, only bind new works whose platform track differs from the already-bound ones (rules: 规范/选题与组合.md「绑任务和灵感」).',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/tasks')),
     },
     {
       name: 'douyin_hot_list',
-      description:
-        '抖音热榜（运营平台 /api/agent/douyin-hot，每小时取一版；重点方向：我们发到抖音，抖音会推我们的视频）：只列和做特效有关的，判据是分类 categories 里有「站内玩法」（抖音标的玩法类热点，如 2026-11-17 榜上的「茉茉手势舞」「在美术馆和另一个自己同框了」）；分类里没有站内玩法的（只标了娱乐、时尚、话题互动、二次元等）不给。updated_at 榜单版本时间、at 取到的时间、total 榜上一共几条、related 其中站内玩法分类的几条；items 按名次，每个有 hot_id、名次 rank、名称 name、分类 categories、热度 heat_text、走势 trend（up 在涨、down 在落、new 刚上榜、flat 平，没取到详情为 null）、上榜时间 listed_at，站内已有特效 effects 和等级特效 effects_leveled 只作参考（实测一直是 0，不能说明有没有人做，查扎不扎堆用 topic_crowd）。不用开编辑器。看一个热点的热度曲线用 douyin_hot_detail；像塑自己的热点用 hot_topics。',
+      keywords: '抖音 热榜 douyin hot list',
+      description: 'The Douyin hot list (ops platform /api/agent/douyin-hot, hourly; key direction — we publish to Douyin and Douyin promotes our videos): only hotspots relevant to making effects, i.e. categories containing 「站内玩法」 (the gameplay-class hotspots Douyin tags; e.g. 2026-11-17 board: 「茉茉手势舞」, 「在美术馆和另一个自己同框了」). Categories without it (only 娱乐, 时尚, 话题互动, 二次元 etc.) are excluded.\n\n' +
+        'updated_at (list version), at (fetch time), total, related (of which 「站内玩法」); items ranked, each with hot_id, rank, name, categories, heat_text, trend (up / down / new / flat; null when detail fetch failed), listed_at; effects + effects_leveled are reference only (measured always 0 — no signal on how many exist; check crowding with topic_crowd). No editor needed. Heat curve of one hotspot: douyin_hot_detail; Xiangsu hotspots: hot_topics.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/douyin-hot')),
     },
     {
       name: 'douyin_hot_detail',
-      description:
-        '一条抖音热点的详情（运营平台 /api/agent/douyin-hot/:hot_id）：名次、名称、分类、热度、走势 trend、上榜时间 listed_at、和做特效有关没有 related（分类里有站内玩法）、站内已有特效 effects 和等级特效 effects_leveled（只作参考）、第一次看到的时间 first_seen_at，以及平台原样的 detail（按天 days 和按小时 hours 的热度点、effects_text、status_text）。hot_id 取 douyin_hot_list 的。',
-      shape: { hot_id: z.string().regex(/^\d+$/).describe('douyin_hot_list 返回的 hot_id。') },
+      keywords: '抖音 热点 详情 douyin hot detail',
+      description: 'One Douyin hotspot in full (ops platform /api/agent/douyin-hot/:hot_id): rank, name, categories, heat, trend, listed_at, related (categories include 「站内玩法」), effects + effects_leveled (reference only), first_seen_at, and the verbatim platform detail (per-day days and per-hour hours heat points, effects_text, status_text). hot_id from douyin_hot_list.',
+      shape: { hot_id: z.string().regex(/^\d+$/).describe('A hot_id from douyin_hot_list.') },
       run: async ({ hot_id }) => text(await d.platformRequest(`/api/agent/douyin-hot/${hot_id}`)),
     },
     {
       name: 'hit_reasons',
-      description:
-        '从爆款倒推「为什么想玩」（运营平台 /api/agent/hits，每天取一次）：出方向的第一步。items 是年轻喜爱榜、每日投稿榜、热玩互动榜、跟拍榜各前 20 和最近入选的 20 个官方精选（去重，上了几个榜的排前面），每个有名字、app_effect_id、effect_id、图标、在哪几个榜第几 boards（young / publish / play / follow / picks）、投稿、平台给的类型 category、点赞最高的 10 条用户视频 videos（标题、点赞、跟拍、作者、封面 cover_url、播放地址 video_url），和 AI 归纳的 ai（why 人为什么想玩、hook 四类之一：和自己或身边的人有关 / 自己动手马上有反馈 / 有悬念结果不固定 / 戳中正在聊的情绪和梗、evidence 引用的视频标题、how_shot 用户怎么拍）；ai.patterns 是几个爆款共同的点。AI 部分是推断（inference=true），依据只有视频标题；要看用户实际怎么拍，把封面交给 image_view，或用 effect_videos 取视频。',
+      keywords: '爆款 倒推 为什么想玩 hits',
+      description: 'Reverse-engineered why people play the hits (ops platform /api/agent/hits, daily) — the first step of ideation.\n\n' +
+        'items: top 20 of the youth-favour, daily-publish, play-interaction and follow-shoot boards plus the 20 newest official picks, deduped (multi-board entries first): name, app_effect_id, effect_id, icon, boards (young / publish / play / follow with rank per board), publishes, platform category, the 10 highest-liked user videos (title, likes, follow-shoots, author, cover cover_url, play video_url), and AI summary ai (why people play, hook — one of: about self or people around / hands-on with instant feedback / suspense, varying outcomes / riding a live emotion or meme; evidence quotes video titles; how_shot = how users shoot); ai.patterns: what the hits share.\n\n' +
+        'The AI part is inference (inference=true) from video titles only; to see how users really shoot, hand covers to image_view or fetch videos with effect_videos.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/hits')),
     },
     {
       name: 'inspirations_new',
-      description: '灵感（运营平台 /api/agent/inspirations，每 6 小时把灵感列表「全部」页签翻完；连着翻会被限流截断，所以 current、innovation 是 24 小时内见过的）：new 是底子（baseline_at，翻完的条数涨两成以上时重定）以后才出现的灵感（最近 14 天，innovation 标【创新】），innovation 是现在挂着的全部【创新】灵感；每条有 inspiration_id、标题、标签、是否 AI 灵感、关联热点、收藏数、封面、第一次看到的时间 first_seen_at（列表不给发布时间），和绑之前要对的详情 detail（玩法说明 description；激励 incentive：从说明里的【激励说明】解析的截止 deadline、过期没有 expired、要同时绑的任务 tasks（title 和它现在还开没开 open）、奖金区间 reward，说明里没写激励时是 null；平台的大类 effect_types（只有手速比拼、脸部/五官变形、基础脸/头饰三种，测一测也标手速比拼，不当要求用）；bonus_text、奖励 award_text、关联热点 hotspot、前 3 张参考图 images 和总张数 images_total、取详情的时间 at，每 3 天刷一次；还没取到是 null）。激励要求同时绑的任务没开（open=false）或激励过期了，就别为激励绑。参考图交给 image_view 看；要灵感下的作品和视频用 inspiration_detail。',
+      keywords: '灵感 新增 创新 inspirations new',
+      description: 'Inspirations (ops platform /api/agent/inspirations, the 「全部」 tab fully paged every 6 h; continuous paging gets rate-limited and truncated, so current and innovation cover the last 24 h seen): new = inspirations that appeared after the baseline (baseline_at; re-set when the paged count grows by 20%+) within the last 14 days (【创新】 tagged innovation); innovation = all currently tagged 【创新】.\n\n' +
+        'Per item: inspiration_id, title, tags, AI-or-not, linked hotspot, collect count, cover, first_seen_at (the list gives no publish date), and detail to check before binding: play description; incentive parsed from the 【激励说明】 section — deadline, expired, tasks to co-bind (title + still open open), reward range, null when the notes carry no incentive; platform effect_types (only 手速比拼, 脸部/五官变形, 基础脸/头饰 — 测一测 also tags 手速比拼; not a requirement); bonus_text, award_text, hotspot, first 3 reference images images + total, fetched-at at (refreshed every 3 days; null before first fetch). Never bind for the incentive when its co-bind task is closed (open=false) or the incentive expired. Reference images: image_view. Works and videos under an inspiration: inspiration_detail.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/inspirations')),
     },
     {
       name: 'inspirations_find',
-      description: '按题材词在全部挂着的灵感里找（运营平台 /api/agent/inspirations/find，不用开编辑器）：平台每 6 小时把灵感列表「全部」翻完、24 小时内见过的都算挂着，【创新】、热点下的、普通的都在里面。q 里几个词用空格隔开，都要出现在标题、标签、关联热点或玩法说明里（没取到详情的只按标题、标签、热点找）；不传 q 就按 kind 列。【创新】在前、激励没过期的更前，再热点下的、普通的，一次最多 40 条，matched 是一共找到几条。每条有 inspiration_id、标题、标签、kind、关联热点、封面、first_seen_at，和 detail（玩法说明、激励 incentive：截止 deadline、过期没有 expired、要同时绑的任务 tasks 和它还开没开、奖金区间 reward；参考图前 3 张）。current 是挂着的一共几条，with_detail 是其中取到详情的。更早、已经不在列表里的灵感用 inspiration_search 搜。',
+      keywords: '灵感 找 题材 inspirations find',
+      description: 'Find inspirations across everything currently listed, by topic words (ops platform /api/agent/inspirations/find, no editor needed; "listed" = seen within 24 h of the 6-hourly full pass — 【创新】, hotspot-linked and plain alike).\n\n' +
+        'q: space-separated words, all of which must appear in title, tags, hotspot or play description (details missing: title/tags/hotspot only); without q, list by kind. Order: 【创新】 first, unexpired incentives above expired, then hotspot-linked, then plain; ≤40 per call; matched = total found. Per item: inspiration_id, title, tags, kind, hotspot, cover, first_seen_at, detail (play description, incentive: deadline / expired / co-bind tasks with open / reward range; first 3 reference images). current = total listed, with_detail = of which details fetched. Older, delisted inspirations: inspiration_search.',
       shape: {
-        q: z.string().trim().max(30).optional().describe('题材词，几个词用空格隔开，如「前任 撤回」「火锅」。'),
-        kind: z.enum(['innovation', 'hotspot', 'plain']).optional().describe('只看某一类：innovation【创新】，hotspot 挂在热点下的，plain 普通的。'),
+        q: z.string().trim().max(30).optional().describe('Topic words, space-separated, such as 「前任 撤回」 or 「火锅」.'),
+        kind: z.enum(['innovation', 'hotspot', 'plain']).optional().describe('Only one kind: innovation 【创新】, hotspot (attached to a hotspot), plain.'),
       },
       run: async ({ q, kind }) => {
         const p = new URLSearchParams();
@@ -1637,20 +1760,25 @@ export function createServer(deps = {}) {
     },
     {
       name: 'tasks_open',
-      description: '活动中心没截止的全部任务（运营平台 /api/agent/open-tasks，每 12 小时取一次）：task_id、item_id（task_detail 用它）、kind（task 征集任务 / activity 活动）、标题、状态、领没领 received、标签、发布 released_at、截止 offline_at、7 天内发布的 is_new、说明里有没有同类型条款 same_type_clause、绑之前要逐条对上的要求 requirements（「任务说明」「参与要求」里的征集类型、主题要求、配置要求、不符合任务标准这类原文，没取到详情是 null）、激励要求同时绑它的灵感 inspirations（激励没过期的：inspiration_id、标题、封面、截止 deadline）、我们放了哪些作品 ours（名字、评定 state、平台分类 track）。新发布的在前。奖项详情、灵感玩法等全文用 task_requirements；只看我们放了作品的用 task_usage。',
+      keywords: '任务 开放 截止 tasks open',
+      description: 'Every activity-centre task not yet closed (ops platform /api/agent/open-tasks, every 12 h): task_id, item_id (for task_detail), kind (task collection / activity), title, status, received-or-not, tags, released_at, offline_at deadline, is_new (published within 7 days), same_type_clause, requirements to check one by one before binding (verbatim lines on submission type / theme / config requirements / non-compliance from 「任务说明」 and 「参与要求」; null before detail fetch), inspirations the incentive asks to co-bind (unexpired ones: inspiration_id, title, cover, deadline), and ours (works we placed: name, rating state, platform track). Newest releases first.\n\n' +
+        'Prize details and inspiration notes verbatim: task_requirements; only the tasks we placed works under: task_usage.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/open-tasks')),
     },
     {
       name: 'task_requirements',
-      description: '一个任务的全部说明（运营平台 /api/agent/tasks/{item_id}/requirements，不用开编辑器）：标题、截止、同类型条款、取详情的时间 at、content（每条 block 块名、title 小标题、text 原文：任务说明、参与要求、奖项详情、灵感玩法……）。绑任务前逐条对要求用；内容块里的参考图和推荐工程用 task_detail。只有没截止的任务和我们绑过的任务有详情，没有时返回 error。',
-      shape: { item_id: z.string().regex(/^\d+$/).describe('tasks_open 返回的 item_id。') },
+      refs: true,
+      keywords: '任务 要求 说明 requirements',
+      description: 'One task full notes (ops platform /api/agent/tasks/{item_id}/requirements, no editor needed): title, deadline, same-type clauses, fetched-at at, and content — blocks each with block name, title and verbatim text (任务说明, 参与要求, 奖项详情, 灵感玩法, ...). Check task requirements one by one against it before binding; reference images and recommended works inside blocks: task_detail. Only unclosed tasks and tasks we bound have details; otherwise the reply is an error.',
+      shape: { item_id: z.string().regex(/^\d+$/).describe('An item_id from tasks_open.') },
       run: async ({ item_id }) => text(await d.platformRequest(`/api/agent/tasks/${item_id}/requirements`)),
     },
     {
       name: 'topic_crowd',
-      description: '查一个题材词在站内扎不扎堆（运营平台 /api/agent/topic）：特效和模板各搜两页，作品名一半以上的相邻两字出现在题材词里才算同题材。返回 matched 同题材几个、effects、templates、投稿最高的几个 top、label（扎堆 6 个以上 / 很少 2 个以下 / 有人做）、搜的时间 at。24 小时内搜过的直接给；没有就交给平台采集进程去搜，这个工具最多等 60 秒，还没好返回 status=pending，过一会儿再调。',
-      shape: { q: z.string().trim().min(1).max(30).describe('题材词，如「前任撤回」「冬眠」。') },
+      keywords: '题材 扎堆 查重 topic crowd',
+      description: 'How crowded a topic already is (ops platform /api/agent/topic): searches effects and templates (two pages each), works whose title shares half its adjacent character pairs with the topic. Returns matched count, effects, templates, top by publishes, label (扎堆 ≥6 / 很少 ≤2 / 有人做), searched-at at. A 24-hour cache; a miss hands the query to the collector — up to 60 s wait, then status=pending and ask again.',
+      shape: { q: z.string().trim().min(1).max(30).describe('Topic words, such as 「前任撤回」 or 「冬眠」.') },
       run: async ({ q }) => {
         let r = await d.platformRequest('/api/agent/topic', 'POST', { q });
         for (let waited = 0; r.status === 'pending' && waited < TOPIC_WAIT_MS; waited += TOPIC_POLL_MS) {
@@ -1663,68 +1791,73 @@ export function createServer(deps = {}) {
     {
       name: 'effect_detail',
       refs: true,
-      description:
-        '任意一个已上线特效或模板的详情（像塑移动版「发现」页特效详情同一接口，别人的特效也能看）：名称、类型（特效 / 模板）、effect_id、上线时间、等级代码 level_code、累计投稿 / 点赞 / 评论（页面原样文字）、年轻 / 男生喜爱度、热玩分、男女投稿比例、受众（年龄、性别）、风格（如潮酷）、平台判定的类型 category（如「社交测试」「美妆」）、来自哪个工具、流量状态、用到的编辑器能力 functions（如美瞳、屏幕液化、3D 模型动画、辉光、滤镜，看出爆款怎么组合）、作者及等级、图标 icon_ref、几条示例视频（video_ref 和封面 cover_ref）。category、functions、designer、点赞评论数这几块服务端有时不返回（同一个特效连查也会时有时无），缺的给 null，隔一会儿再查；读不懂的字段原样放 unread。用这个特效拍的视频（标题、跟拍数）用 effect_videos，工程用 works_by_effect。',
-      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('特效在抖音上的 ID：rank_list、rank_subject_detail、rank_innovation、effect_search、pipeline_works 返回的 app_effect_id。') },
+      keywords: '特效 详情 数据 effect detail',
+      description: 'Full detail of any published effect or template (the mobile effect-detail endpoint; others works too): name, kind, effect_id, online date, level_code, cumulative publishes / likes / comments (page text), youth + male favour, play score, gender split, audience (age, gender), style (e.g. 潮酷), platform category (e.g. 「社交测试」, 「美妆」), source tool, traffic state, editor functions (e.g. 美瞳, 屏幕液化, 3D 模型动画, 辉光, 滤镜 — how hits combine), designer + level, icon icon_ref, a few sample videos (video_ref + cover cover_ref).\n\n' +
+        'category, functions, designer, likes/comments are sometimes missing server-side (flaky even back-to-back on the same effect) — null then, retry later; unparsable fields land in unread. Videos shot with it: effect_videos; project: works_by_effect.',
+      shape: { ...target, app_effect_id: z.string().regex(/^\d+$/).describe('The Douyin-side ID: an app_effect_id from rank_list / rank_subject_detail / rank_innovation / effect_search / pipeline_works.') },
       run: community('effect_detail'),
     },
     {
       name: 'effect_videos',
       refs: true,
-      description:
-        '用一个特效拍的抖音视频（像塑移动版「作品详情」页的视频卡片，别人的特效也能看）：累计点赞和跟拍（页面原样文字），以及几条热门视频 videos（实测 5 条）：抖音视频 ID item_id、标题、作者、点赞、跟拍、封面 cover_ref 和视频 video_ref（交给 image_view 拿地址）。看别人怎么拍、文案怎么写。自己刚上线、还没人拍的特效列表是空的。',
+      keywords: '视频 用户怎么拍 跟拍 effect videos',
+      description: 'Douyin videos shot with one effect (the mobile work-detail video card; others works too): cumulative likes and follow-shoots (page text), plus the popular videos videos (measured 5): Douyin item_id, title, author, likes, follow-shoots, cover cover_ref and video video_ref (hand to image_view for addresses). Learn how people shoot and what captions they write. A just-online effect nobody has shot yet returns an empty list.',
       shape: {
         ...target,
-        effect_id: z.string().regex(/^\d+$/).describe('特效 ID（rank_list、effect_search、pipeline_works 等返回的 effect_id）。'),
-        app_effect_id: z.string().regex(/^\d+$/).describe('同一个特效的 app_effect_id。'),
+        effect_id: z.string().regex(/^\d+$/).describe('The effect ID (from rank_list, effect_search, pipeline_works, ...).'),
+        app_effect_id: z.string().regex(/^\d+$/).describe('The same effect app_effect_id.'),
       },
       run: community('effect_videos'),
     },
     {
       name: 'effect_search',
       refs: true,
-      description: `按关键词搜索像塑全平台已上线的特效或模板（像塑移动版搜索页同一接口）：effect_id、app_effect_id、名称、说明、等级代码、年轻喜爱度、累计投稿（页面原样文字）、图标 icon_ref。特效最多翻到 100 条。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。顺序是服务端定的，前几名多是累计投稿很高的老特效；接口不认排序参数（2026-11-09 试了 sort_type、order_by、sort 等 12 种写法，顺序都不变），要看现在火的用 rank_list / rank_subjects。只搜首页工程用 works_search；拿到特效后用 effect_detail 看详情、effect_videos 看视频、works_by_effect 找工程。搜灵感用 inspiration_search，搜教程用 tutorial_search。`,
+      keywords: '特效 搜索 全平台 effect search',
+      description: `Keyword search over all published effects or templates (the mobile search endpoint): effect_id, app_effect_id, name, description, level_code, youth favour, cumulative publishes (page text), icon icon_ref. Effects page up to 100 items; ≤${SEARCH_MAX} per page, cursor paging. The server fixes the order — top entries are old high-publish effects; no sort parameter exists (tried sort_type / order_by / sort and 9 more spellings 2026-11-09, order never changed) — for what is hot now use rank_list / rank_subjects. Homepage projects only: works_search. Next on an effect: effect_detail, effect_videos, works_by_effect. Inspirations: inspiration_search; tutorials: tutorial_search.`,
       shape: {
         ...target,
-        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
-        kind: z.enum(EFFECT_SEARCH_KINDS).optional().describe('effect 特效（默认），template 模板。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+        query: z.string().min(1).describe('Keyword, such as 「美妆」, 「测一测」, 「变装」.'),
+        kind: z.enum(EFFECT_SEARCH_KINDS).optional().describe('effect (default), template.'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`Items per page, default ${SEARCH_MAX} (max ${SEARCH_MAX}; more errors server-side).`),
       },
       run: community('effect_search'),
     },
     {
       name: 'inspiration_search',
       refs: true,
-      description: `按关键词搜索灵感（像塑移动版搜索页同一接口；inspiration_list 只能按分类翻）：字段同 inspiration_list。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。`,
+      keywords: '灵感 搜索 inspiration search',
+      description: `Keyword search over inspirations (the mobile search endpoint; inspiration_list only pages by tab): fields as inspiration_list. Cursor paging, ≤${SEARCH_MAX} per page.`,
       shape: {
         ...target,
-        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+        query: z.string().min(1).describe('Keyword, such as 「美妆」, 「测一测」, 「变装」.'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`Items per page, default ${SEARCH_MAX} (max ${SEARCH_MAX}; more errors server-side).`),
       },
       run: community('inspiration_search'),
     },
     {
       name: 'tutorial_search',
       refs: true,
-      description: `按关键词搜索像塑官方教程（像塑移动版搜索页同一接口）：字段同 tutorials_list。按 cursor 翻页，每页最多 ${SEARCH_MAX} 条。`,
+      keywords: '教程 搜索 tutorial search',
+      description: `Keyword search over official tutorials (the mobile search endpoint): fields as tutorials_list. Cursor paging, ≤${SEARCH_MAX} per page.`,
       shape: {
         ...target,
-        query: z.string().min(1).describe('关键词，如「美妆」「测一测」「变装」。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`每页数量，默认 ${SEARCH_MAX}（最大 ${SEARCH_MAX}，更多服务端报错）。`),
+        query: z.string().min(1).describe('Keyword, such as 「美妆」, 「测一测」, 「变装」.'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
+        count: z.number().int().min(1).max(SEARCH_MAX).optional().describe(`Items per page, default ${SEARCH_MAX} (max ${SEARCH_MAX}; more errors server-side).`),
       },
       run: community('tutorial_search'),
     },
     {
       name: 'tutorials_list',
       refs: true,
-      description:
-        '像塑官方教程（移动版「教程」页同一组接口）：每次都带上全部分类 tabs（特效：新手入门、特效进阶、精选课程、PC工具、工程实操、三方工具、爆款分享、账号运营、视频教程；模板：模板入门、模板进阶等），按 tab_id 列出一个分类的教程，不传时列出全部（约 190 篇，比各分类之和多）。每篇有标题、标签（如「新手必看」「拍视频脚本」）、学习人数、作者、上线日期、是否付费、文档链接 link（飞书文档，要登录飞书才能打开，agent 读不到正文，只能看标题和标签）、封面 cover_ref 和视频 video_ref（视频教程才有，交给 image_view 拿到的地址能直接打开）。按 offset / count 分页。按关键词找教程用 tutorial_search。',
+      keywords: '教程 官方 列表 tutorials',
+      description: 'Official tutorials (the mobile 「教程」 endpoints): every call carries all tabs (effects: 新手入门, 特效进阶, 精选课程, PC工具, 工程实操, 三方工具, 爆款分享, 账号运营, 视频教程; templates: 模板入门, 模板进阶, ...); with tab_id, one tab; without, everything (about 190 — more than the tabs sum).\n\n' +
+        'Per tutorial: title, tags (e.g. 「新手必看」, 「拍视频脚本」), learners, author, release date, paid-or-not, doc link (Feishu docs — need a Feishu login, agents cannot read the body, only title and tags), cover cover_ref, and video video_ref on video tutorials (the address image_view returns opens directly). Paged by offset / count. Search: tutorial_search.',
       shape: {
         ...target,
-        tab_id: z.number().int().optional().describe('分类 ID，取返回的 tabs 里的 tab_id；省略时列出全部教程。'),
+        tab_id: z.number().int().optional().describe('A tab_id from the reply tabs; omitted, all tutorials.'),
         ...pageShape,
       },
       run: community('tutorials_list'),
@@ -1732,44 +1865,48 @@ export function createServer(deps = {}) {
     {
       name: 'shoot_scripts',
       refs: true,
-      description: `像塑官方的拍摄脚本（移动版「拍摄脚本」同一接口）：教你用特效拍什么样的视频（如「【测一测】表演有梗结果」「【美妆】带特效前后反差」），每条有脚本 ID、名称、完整说明 description（脚本解读和「尝试拍一个」的具体做法）、标签代码 tags、播放数 views、拍摄数 shoots、封面 cover_ref 和示范视频 video_ref。tag 按标签代码筛选，App 里没有标签名，实测各代码下的脚本：${SCRIPT_TAG_TEXT}。type 是接口给的脚本类型代码，含义也没给出（1 多为技巧合集，2 多为具体演绎）。全部约 50 条，按 offset / count 分页。`,
+      keywords: '拍摄脚本 玩法 shoot scripts',
+      description: `Official shooting scripts (the mobile 「拍摄脚本」 endpoint): how to shoot an effect (e.g. 「【测一测】表演有梗结果」, 「【美妆】带特效前后反差」) — script ID, name, full description description (script read-out and the 「尝试拍一个」 how-to), tags tags, views views, shoots shoots, cover cover_ref, demo video video_ref. Tag codes: ${SCRIPT_TAG_TEXT}. type is the platform script-type code (1 mostly 技巧合集, 2 mostly 具体演绎). ≤${SCRIPT_MAX} per page by offset / count.`,
       shape: {
         ...target,
-        tag: z.coerce.number().int().optional().describe(`标签代码（整数，写成 "3" 也行）：${SCRIPT_TAG_TEXT}；省略时全部。`),
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(SCRIPT_MAX).optional().describe(`每页数量，默认 20（最大 ${SCRIPT_MAX}）。`),
+        tag: z.coerce.number().int().optional().describe(`Tag code (integer, "3" works too): ${SCRIPT_TAG_TEXT}; omitted, all.`),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+        count: z.number().int().min(1).max(SCRIPT_MAX).optional().describe(`Items per page, default 20 (max ${SCRIPT_MAX}).`),
       },
       run: community('shoot_scripts'),
     },
     {
       name: 'music_categories',
-      description: '抖音音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等）的 code 和名称，交给 music_list 看分类里的歌。',
+      keywords: '音乐 分类 music categories',
+      description: 'Douyin music library categories (像塑原创, 推荐, 抖音收藏, 潮流心选, ...) with their codes; feed a code to music_list.',
       shape: { ...target },
       run: community('music_categories'),
     },
     {
       name: 'music_list',
       refs: true,
-      description: '抖音音乐库一个分类的一页（每页约 35 首，按 cursor 翻页）：music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效），以及下一页的 next_cursor、has_more。分类 code 从 music_categories 取；按关键词找歌用 music_search。',
-      shape: { ...target, category_code: z.string().min(1).describe('music_categories 返回的分类 code。'), cursor: musicCursor },
+      keywords: '音乐 列表 分类 music list',
+      description: 'One page (about 35 tracks, cursor paging) of a music library category: music_id, title, author, duration_sec, cover cover_ref, preview preview_ref (audio reference), has_copyright (false or null: do not use in effects meant for publishing), next_cursor, has_more. Category code from music_categories; search: music_search.',
+      shape: { ...target, category_code: z.string().min(1).describe('A category code from music_categories.'), cursor: musicCursor },
       run: async ({ project_path, instance_id, category_code, cursor }) => text(seenMusic.keep(await d.callPlugin('music_list', { category_code, ...(cursor === undefined ? {} : { cursor }) }, await homeWindow({ project_path, instance_id })), { category_code })),
     },
     {
       name: 'music_search',
       refs: true,
-      description: '按关键词搜抖音音乐，一页约 35 首、按 cursor 翻页：每首的 music_id、标题、作者、时长 duration_sec、封面 cover_ref、试听 preview_ref（音频引用）和 has_copyright（false 或 null 的不要用于要发布的特效），以及 next_cursor、has_more。',
-      shape: { ...target, query: z.string().min(1).describe('搜索关键词。'), cursor: musicCursor },
+      keywords: '音乐 搜索 music search',
+      description: 'Search the Douyin music library by keyword — one page (about 35 tracks, cursor paging): music_id, title, author, duration_sec, cover cover_ref, preview preview_ref, has_copyright (false or null: not for publishing), next_cursor, has_more.',
+      shape: { ...target, query: z.string().min(1).describe('Search keyword.'), cursor: musicCursor },
       run: async ({ project_path, instance_id, query, cursor }) => text(seenMusic.keep(await d.callPlugin('music_search', { query, ...(cursor === undefined ? {} : { cursor }) }, await homeWindow({ project_path, instance_id })), { category_code: null })),
     },
     {
       name: 'music_apply',
-      description:
-        '把一首抖音音乐设为特效的音乐，和音乐库里点「使用」相同：下载音频进工程、写入音乐信息，并在场景里加入抖音音乐对象（再次使用会替换上一首）。start_sec / end_sec 截取片段，默认整首。music_id 须来自本会话的 music_list 或 music_search。之后 capture_preview 验收、save_project 落盘。',
+      keywords: '音乐 使用 设置 music apply',
+      description: 'Set a Douyin track as the effect music — the music library 「使用」 button: downloads the audio into the project, writes the music info, and adds a Douyin music object to the scene (applying again replaces the previous track). start_sec / end_sec cut a segment; the full track by default. music_id from this session music_list / music_search. Then capture_preview to verify, save_project to persist.',
       shape: {
         ...target,
-        music_id: z.string().min(1).describe('music_list 或 music_search 返回的 music_id。'),
-        start_sec: z.number().min(0).optional().describe('片段开始（秒），默认 0。'),
-        end_sec: z.number().positive().optional().describe('片段结束（秒），默认整首时长。'),
+        music_id: z.string().min(1).describe('A music_id from music_list / music_search.'),
+        start_sec: z.number().min(0).optional().describe('Segment start (s), default 0.'),
+        end_sec: z.number().positive().optional().describe('Segment end (s), default full duration.'),
       },
       run: async (a) => {
         const { project_path, instance_id, music_id, start_sec, end_sec } = a;
@@ -1781,13 +1918,15 @@ export function createServer(deps = {}) {
     },
     {
       name: 'scene_tree',
+      keywords: '场景 结构 树 对象 scene tree',
       description:
-        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比官方 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数；要渲染组和对象的完整 JSON 用 get_scene。subtree 只看某个对象：guid、名称，或层级路径（从渲染组名起，或只给末尾几段，如「2D 前景/2D 摄像机」；同名对象常见，重名时报 AMBIGUOUS_OBJECT 并列出各自的 guid 和路径），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
+        'The scene structure as compact indented text: render groups and, per object, guid, name, hidden state, component types. More readable than the official get_scene JSON — use it for a first look, then inspect_many for parameters; raw JSON via get_scene.\n\n' +
+        'subtree narrows to one object: guid, name, or hierarchical path (subtree of the render-group name, or trailing segments only, such as 「2D 前景/2D 摄像机」; ambiguous names report AMBIGUOUS_OBJECT with the candidates), depth caps depth (default 6; unexpanded children are counted). project_dir reads a downloaded project directory directly, no window (Assets/main.scene and its .extra; objects keyed by #index; component types as the editor shows them; no render-group layer). save_to saves the text to that directory as scene_tree.txt.',
       shape: {
         ...target,
-        project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
-        subtree: z.string().min(1).optional().describe('只输出这个对象及其子对象：guid（project_dir 时是 #序号）、名称或层级路径。'),
-        depth: z.number().int().min(1).max(30).optional().describe('展开层数，默认 6。'),
+        project_dir: z.string().min(1).optional().describe('Read this project directory directly, no window; ignores project_path / instance_id.'),
+        subtree: z.string().min(1).optional().describe('Only this object and its subtree: guid (project_dir mode: #index), name, or hierarchical path.'),
+        depth: z.number().int().min(1).max(30).optional().describe('Depth cap, default 6.'),
         save_to: saveTo,
       },
       run: async (a) => {
@@ -1815,15 +1954,18 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspect_many',
-      description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect；只看一个对象的完整原始数据时直接用 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。fields 也会留下内部某一层属性名包含这些片段的整块参数（如后处理的 bloom 块里的 pBloomThreshold）。妆容层（FaceMask / FaceMaskDY）的混合模式编号旁边加上 blendMode_name / surfaceBlendMode_name（如「正片叠底」）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/Transparency/权重/颜色类属性、AI 脸的 Channel（Texture 皮肤路 / Distortion 形变路）、内部含强度类参数的整块参数（如后处理的发光、调色）、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数；空的贴图槽（编辑器的「缺失纹理」）和完全透明的黑色（妆容层没用到的珠光色等）会丢掉（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用；fields 点名的属性即使空着也留下）。guids 里每一项可以是 guid、对象名称或层级路径（同 scene_tree 的 subtree：从渲染组名起，或只给末尾几段；重名时该项报 AMBIGUOUS_OBJECT 并列出候选）；不是场景对象的 guid（组件、资源）原样交给官方 inspect。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guid 是 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+      keywords: '查看 参数 组件 批量 inspect',
+      description: 'Component parameters of several objects in one call (official inspect per object; one object raw and full: inspect directly). Values unwrapped ({type, data} → the value), over-long arrays reduced to length + first items, bound resources as {resource, type, file}, referenced objects as {object, name}.\n\n' +
+        'Filters: component_types keeps those component types; fields keeps properties whose name contains any fragment (case-insensitive, e.g. ["intensity", "position"] — nested matches keep the whole block, e.g. the bloom block of post-processing for pBloomThreshold). Makeup layers (FaceMask / FaceMaskDY) get blend-mode names beside the numbers (blendMode_name / surfaceBlendMode_name, e.g. 「正片叠底」).\n\n' +
+        'preset="key" keeps the parameters that usually decide the effect: position/scale/rotation, visibility & enable, intensity/opacity/Transparency/weight/color-like, the AI-face Channel (Texture skin path / Distortion distortion path), blocks containing intensity-like parameters (glow, grading), text content (str) and 2D sizes (sizeDelta), bound resources, and all script-component parameters from the scene file. Empty texture slots and fully transparent blacks are dropped (a picked list built from makeup, distortion, sticker and text work — extend with fields; fields keeps named properties even when empty).\n\n' +
+        'guids: guid, object name, or hierarchical path (like scene_tree subtree; ambiguous entries report AMBIGUOUS_OBJECT with candidates). Non-object guids (components, resources) pass through to official inspect. project_dir reads the scene file directly, no window (editor-panel values included, e.g. makeup textures and strengths), guids are the scene_tree #index; built-in resources surface as {builtin: id}, runtime-generated ones as {path}. Per-object failures note their own reason. save_to saves inspect_many.json.',
       shape: {
         ...target,
-        project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
-        guids: z.array(z.string().min(1)).min(1).max(40).describe('要看的对象：guid（scene_tree / get_scene 返回的；project_dir 时是 #序号）、名称或层级路径；开窗口时也可以是组件或资源的 guid。'),
-        component_types: z.array(z.string().min(1)).min(1).optional().describe('只保留这些类型的组件。'),
-        fields: z.array(z.string().min(1)).min(1).optional().describe('只保留属性名包含这些片段的属性。'),
-        preset: z.enum(['key']).optional().describe('key：只留关键参数，见工具说明。'),
+        project_dir: z.string().min(1).optional().describe('Read this project directory directly, no window; ignores project_path / instance_id.'),
+        guids: z.array(z.string().min(1)).min(1).max(40).describe('Objects to inspect: guid (from scene_tree / get_scene; project_dir mode: #index), name, or hierarchical path. With a window, component / resource guids also pass through.'),
+        component_types: z.array(z.string().min(1)).min(1).optional().describe('Keep only these component types.'),
+        fields: z.array(z.string().min(1)).min(1).optional().describe('Keep only properties whose name contains any of these fragments.'),
+        preset: z.enum(['key']).optional().describe('key: keep the usually-deciding parameters (see description).'),
         save_to: saveTo,
       },
       run: async (a) => {
@@ -1865,10 +2007,12 @@ export function createServer(deps = {}) {
     },
     {
       name: 'makeup_layers',
-      description:
-        '列出一个工程的全部美妆层（FaceMask 妆容层、旧版 FaceMaskDY 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）；层上设了着色 tint 时另给贴图色乘上着色的 tinted_color / tinted_hsl（按着色和贴图相乘算的，没有实测核对）。整张不透明的贴图（底色是白或黑、靠颜色深浅起作用）按每个像素离该混合模式下「不改变皮肤」的颜色多远来算颜色和范围，并在 texture_note 里注明；几乎全是这种中性色的层没有颜色，texture_note 说明它几乎不改变皮肤。texture_source 标出贴图从哪来：AI 妆容（素材库「AI 妆容」提取的，带 task_id 和部位 part，即 ai_makeup_import 导入的那种）、素材广场（应用素材广场的 AI 妆容卡片得来，id 是卡片的 id）、官方素材包（package_id 是这个包在素材库里的 template_id；整套美妆和部分素材包解压在按包名命名的文件夹里，这时给的是 package_folder，如「清冷_美妆」）、作者导入（file 是作者导入时的文件名）或未知，copy 为 true 表示是复制出来的副本（常是作者在官方贴图上改过）。FaceMask 的 intensity 是面板上的「不透明度」：单独加的层实际画出的浓度 opacity = intensity × 男女强度 × 外部强度；挂在整套美妆（AI 实时变脸）下的子项由 GAN 接管，改 intensity 不起作用，opacity 只按男女强度 × 外部强度算。FaceMaskDY 面板上只有一个强度（intensity），男女强度取它运行时各自的不透明度（实际渲染用的是这两个）；它的唇部质地写成 surface（混合模式和强度）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
+      keywords: '美妆 妆容 层 拆解 makeup layers',
+      description: 'All makeup layers of a project (FaceMask, legacy FaceMaskDY, and EyeColorV2 contacts) with per-layer part, color, female/male strengths, and whether it is active (hidden object or ancestor, disabled component, or both strengths 0 = inactive).\n\n' +
+        'Region (全脸 / 眼部 / 睫毛 / 唇部 / 牙齿) comes from the layer type; part from layer-name keywords first (眉, 眼线, 腮红, 口红, ...), else from texture pixels (part_from says which); color is the alpha-weighted mean over the painted area (color, hsl); a tint multiplies into tinted_color / tinted_hsl (computed, not verified on device). An opaque full-cover texture (white/black base working by shade) is measured by distance from the blend-mode neutral colour, noted in texture_note; layers that are almost entirely neutral report as no colour. texture_source: AI 妆容 (extracted via the library panel, with task_id + part — the ai_makeup_import kind), 素材广场 (applied AI-makeup card, card id), 官方素材包 (package template_id; whole sets unpacked per-package folder give package_folder, e.g. 「清冷_美妆」), author-imported (file), or unknown; copy=true marks a duplicate (often an author edit over an official texture).\n\n' +
+        'FaceMask intensity is the panel 「不透明度」: a standalone layer paints at opacity = intensity × female/male × external strength; sub-layers under a full AI-makeup set (GAN) ignore intensity. FaceMaskDY has one intensity; female/male are its runtime opacities (what actually renders); lip finish surfaces as surface (blend mode + strength). groups sums active layers by 眉 / 眼妆 / 美瞳 / 颊 / 轮廓 / 唇 / 点缀; absent lists missing parts of a set — use it to find gaps in our makeup or to break down another work (a works_download project). Reads the project scene file: save_project an open project first.',
       shape: {
-        project_dir: z.string().min(1).describe('工程目录的绝对路径（含 Assets/main.scene），如 works_download 返回的 project_path 或自己的工程。'),
+        project_dir: z.string().min(1).describe('Absolute path of the project directory (contains Assets/main.scene), e.g. a works_download project_path or your own project.'),
         save_to: saveTo,
       },
       run: async ({ project_dir, save_to }) => {
@@ -1879,7 +2023,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'makeup_compare',
-      description: `在同一张脸上比较几种妆容状态：重置预览、播放 at_ms 后截基线（当前状态），再依次把每个 variant 的改动临时套上、等预览画出来、截一帧、改回去，最后再截一次基线。要用静态照片做的预览视频（如「模特D清秀||女」这些模特视频，每一帧都是同一张照片）：会动的视频每次截到的是不同的帧，两次基线的平均亮度差超过 ${DRIFT_MEAN} 时返回提示。预览暂停后不再重绘，所以不能靠暂停停住画面。改动有两种，都实时生效、跑完改回原值：一是妆容层的 female / male（男女强度）和 intensity（面板上的「不透明度」，单独加的层实际画出的浓度是它 × 男女强度；整套美妆的子项由 AI 脸接管，改它不起作用）、美瞳和滤镜的 intensity；二是任意组件的一个数值属性：object_path + component（inspect 里的组件类型名，如 GanComponent、PostProcess）+ property（如 Transparency、bloom.pBloomIntensity）+ value，经官方 set_component 设置，用来比 AI 脸皮肤路强度、发光强度这类参数。换贴图、换混合模式要重载预览，不在这里比。整套妆的子项也可以这样调，强度改回原值，不会删层。regions 是按画面比例（0–1）给的区域，如眼下、脸颊、唇：每个区域返回每种状态的平均色 RGB / HSL、亮度 luma（Rec.601）、皮肤细节 detail（亮度减去 σ ${DETAIL_SIGMA} px 高斯模糊后的平均绝对差，越高纹理越多），以及相对基线的差值；再给一张并排放大图（基线在最前，之后按 variants 顺序，像素直接放大不插值，一行放不下时换行）。给了 reference（参考图）时，区域的 ref 是同一部位在参考图上的框（按参考图的比例），每种状态另给 to_reference（相对参考图的差值），并排图最后一格是参考图的这一块（缩放到同样大小）。同一张静态照片上前后两帧在眼部的噪声约 0.5–0.8（平均，最大 13–18），差值比这个小的看不出区别。videos 依次在几个预览视频上各比一次，完了切回原视频。跑完所有改动都已改回；切换过视频或改过参数后工程会显示「已修改」。`,
+      keywords: '妆容 对比 调强度 makeup compare',
+      description: `Compare makeup states on one face: reset the preview, play at_ms, shoot the baseline (current state), then apply each variant temporarily, wait for the preview to repaint, shoot, and revert; a final baseline follows. Use a still-photo preview video (e.g. the 「模特D清秀||女」 model videos — every frame is the same photo); with a moving video the two baselines drift apart beyond ${DRIFT_MEAN} mean luma and the reply warns. A paused preview stops repainting, so pausing cannot freeze the frame.\n\n` +
+        'Two kinds of change, both live (no reload) and reverted after the run:\n' +
+        '- makeup strengths: female / male and intensity (the panel 「不透明度」; standalone layers paint at intensity × female/male; full-makeup-set sub-layers are GAN-driven and ignore it), contact and filter intensity\n' +
+        '- any numeric component property: object_path + component (a type from inspect, e.g. GanComponent, PostProcess) + property (e.g. Transparency, bloom.pBloomIntensity) + value, via official set_component — for AI-face skin strength, glow strength and the like. Texture or blend-mode changes need a reload — not comparable here. Full-set sub-layers adjust the same way; strengths revert, layers are not deleted.\n\n' +
+        `regions are frame fractions (0–1), e.g. under-eye, cheek, lip: per region each state gets mean RGB / HSL, luma (Rec.601), and skin detail (mean absolute difference after a σ ${DETAIL_SIGMA} px gaussian — higher = more texture), plus deltas vs the baseline; plus a zoomed side-by-side (baseline first, then variants, nearest-neighbour, wrapped when too wide). With reference (a reference image), each region takes ref (the same part on the reference, as fractions), states also get to_reference deltas, and the last tile is the reference crop (resized to match). On one still photo, frame-to-frame eye noise is about 0.5–0.8 (mean; 13–18 max) — smaller deltas are not visible.\n\n` +
+        'videos compares once per preview video in order, switching back afterwards. All changes are reverted; the project may show 「已修改」 afterwards (no need to save).',
       shape: {
         ...target,
         variants: z
@@ -1890,15 +2040,15 @@ export function createServer(deps = {}) {
                 .array(
                   z.union([
                     z.strictObject({
-                      object_path: z.string().min(1).describe('妆容层、美瞳或滤镜对象的层级路径（或能唯一定位的末尾几段）。'),
+                      object_path: z.string().min(1).describe('Hierarchical path of the makeup layer, contact or filter object (or uniquely-identifying trailing segments).'),
                       female: z.number().min(0).max(1).optional(),
                       male: z.number().min(0).max(1).optional(),
-                      intensity: z.number().min(0).max(1).optional().describe('妆容层：面板上的不透明度；美瞳、滤镜：强度。'),
+                      intensity: z.number().min(0).max(1).optional().describe('Makeup layer: panel opacity; contacts and filters: intensity.'),
                     }),
                     z.strictObject({
-                      object_path: z.string().min(1).describe('对象的 guid、名称或层级路径（同 inspect_many）。'),
-                      component: z.string().min(1).describe('组件类型名，如 GanComponent、PostProcess。'),
-                      property: z.string().min(1).describe('属性名，嵌套的用点路径，如 Transparency、bloom.pBloomIntensity。'),
+                      object_path: z.string().min(1).describe('Object guid, name or hierarchical path (like inspect_many).'),
+                      component: z.string().min(1).describe('Component type name, e.g. GanComponent, PostProcess.'),
+                      property: z.string().min(1).describe('Property name, dotted when nested, e.g. Transparency, bloom.pBloomIntensity.'),
                       value: z.union([z.number(), z.boolean()]),
                     }),
                   ]),
@@ -1914,13 +2064,13 @@ export function createServer(deps = {}) {
           .min(1)
           .max(MAX_COMPARE_REGIONS)
           .optional()
-          .describe('区域：按画面比例给框（模特的眼睛位置各不相同，同一个比例框在别的模特脸上会框偏，换模特时按截图重新给框）。与 preset_regions 二选一。'),
-        preset_regions: z.enum(['H', 'G']).optional().describe('用 makeup_light_metrics 的 H/G 标准取样框作为 regions；与 regions 二选一。'),
-        reference: z.string().min(1).optional().describe('参考图（PNG / JPEG）的绝对路径；和区域的 ref 一起用。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
-        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，默认 face。'),
-        at_ms: z.number().int().min(0).max(20000).optional().describe(`重置后播放多久再截基线（毫秒），默认 ${HOLD_AT_MS}（AI 变脸要过一会儿才完全生效）。`),
-        zoom: z.number().int().min(1).max(8).optional().describe('并排图的放大倍数，默认 3。'),
+          .describe('Regions as frame fractions (model eye positions differ — a fixed fraction box shifts between models; re-give boxes per model from a screenshot). Either this or preset_regions.'),
+        preset_regions: z.enum(['H', 'G']).optional().describe('Use the makeup_light_metrics H/G sample boxes as regions; either this or regions.'),
+        reference: z.string().min(1).optional().describe('Reference image (PNG / JPEG) absolute path; used together with region ref boxes.'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('Preview video names in order (video_name from preview_videos); omitted, the current video.'),
+        tracking_type: z.string().min(1).optional().describe('The tracking_type of videos, default face.'),
+        at_ms: z.number().int().min(0).max(20000).optional().describe(`How long to play after the reset before the baseline (ms), default ${HOLD_AT_MS} (AI face changes need a moment to fully apply).`),
+        zoom: z.number().int().min(1).max(8).optional().describe('Side-by-side zoom, default 3.'),
         save_to: saveTo,
       },
       run: async (a) => {
@@ -2019,8 +2169,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_videos',
-      description: '可用的预览视频名，按 tracking_type 分组（face、two_person、body、hand、pet、environment），外加当前视频 current：只给名字，用来挑 preview_frames、makeup_compare 的 videos 和官方 set_preview_video 的 video_name。要地址、有没有本地文件等全部字段用官方 list_preview_videos（约 70 KB）。',
-      shape: { ...target, tracking_type: z.string().min(1).optional().describe('只列这一类，如 face；不给就全列。') },
+      keywords: '预览视频 名单 preview videos',
+      description: 'Available preview video names grouped by tracking_type (face, two_person, body, hand, pet, environment), plus the current video: names only, for picking the videos of preview_frames / makeup_compare and the official set_preview_video video_name. Full fields (URLs, local files): the official list_preview_videos (about 70 KB).',
+      shape: { ...target, tracking_type: z.string().min(1).optional().describe('Only this type, e.g. face; omitted, all.') },
       run: async (a) => {
         const instance_id = await officialInstance(a);
         const all = await d.official.callJson('list_preview_videos', { instance_id, intention: '列出预览视频名' });
@@ -2035,15 +2186,16 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_frames',
-      description:
-        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 preview_videos，如 preview_single_shake_head||女），全部截完切回原视频，并等编辑器把视频写回工程信息，工程原来没有未保存的改动时，截完仍是干净的（note 里说明）。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
+      keywords: '截图 连续 帧 预览 preview frames',
+      description: 'Capture preview frames over time at the preview resolution (720×1280; the official screenshot is the downscaled 320×569), taken from the render output — works while the window is minimized (frame rate is raised temporarily during the shots). By default: reset the preview, wait for the reloaded frame, then shoot count frames (≤24 per call) every interval_ms — for motion, head-shakes, side profiles.\n\n' +
+        'videos switches through several preview videos, one group each (names from preview_videos, e.g. preview_single_shake_head||女), switching back after; the editor then writes the video back into the project info, so a previously clean project stays clean (noted in note). crop trims a region by frame fractions (0–1), e.g. the face. Every frame is saved and returned; files carries the paths — paste them to the user directly. Temp directory by default (24 h); save_to keeps them. Each frame notes the capture time (ms since the reset finished).',
       shape: {
         ...target,
-        count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
-        interval_ms: z.number().int().min(100).max(10000).optional().describe('相邻两张的间隔（毫秒），默认 700。'),
-        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（preview_videos 列出的 video_name）；不给就用当前视频。'),
-        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，如 face、body、hand，默认 face。'),
-        reset: z.boolean().optional().describe('每组截图前先重置预览，默认 true。'),
+        count: z.number().int().min(1).max(12).optional().describe('Frames per video, default 4.'),
+        interval_ms: z.number().int().min(100).max(10000).optional().describe('Gap between frames (ms), default 700.'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('Preview video names in order (video_name from preview_videos); omitted, the current video.'),
+        tracking_type: z.string().min(1).optional().describe('The tracking_type of videos, e.g. face, body, hand; default face.'),
+        reset: z.boolean().optional().describe('Reset the preview before each group, default true.'),
         crop: z
           .object({
             x: z.number().min(0).max(1),
@@ -2052,7 +2204,7 @@ export function createServer(deps = {}) {
             height: z.number().gt(0).max(1),
           })
           .optional()
-          .describe('裁剪区域，按画面宽高的比例，左上角为 (0, 0)。'),
+          .describe('Crop region as frame fractions, top-left (0, 0).'),
         save_to: saveTo,
       },
       run: async (a) => {
@@ -2131,12 +2283,14 @@ export function createServer(deps = {}) {
     },
     {
       name: 'menu_list',
-      description:
-        `列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 edit_by_dsl 的 add_builtin_object 命令只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。details=true 时每项再带说明 description 和示意图（编辑器悬停提示里的图：在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null），按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看；details 一次最多 ${MAX_MENU_PREVIEW} 项，query 匹配更多时报错。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。`,
+      keywords: '添加对象 菜单 官方功能 menu',
+      description: `Every official item of the 「添加对象」 add-object menu (toolbar makeup / reshape / AI live face, and face / body / 2D / 3D / AI / interaction / pet / music groups): menu_id, Chinese name, path, kind. The official edit_by_dsl add_builtin_object covers only part of them; face-lift, wrinkle removal, face generation (烟熏妆, cartoon faces), expression generation (香肠嘴, 呲牙尬笑), gender/age, feature shaping, body dress-up etc. go through menu_add.\n\n` +
+        `query filters by name, path or menu_id. details=true adds description and demo images (from the editor hover tip: image_url on the CDN, or image_file when bundled with the editor; null when neither) — hand them to image_view to pick AI faces, beauty fixes and the like by looks; ≤${MAX_MENU_PREVIEW} items per details call, more matches are an error.\n\n` +
+        'Cloud AI generation is not in this menu; the post-photo cloud-generation 「AI 组合效果」 is ai_combine_new / ai_combine_apply.',
       shape: {
         ...target,
-        query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。'),
-        details: z.boolean().optional().describe(`同时返回说明和示意图，默认 false；匹配项须不超过 ${MAX_MENU_PREVIEW} 个。`),
+        query: z.string().optional().describe('Filter by Chinese name, path or menu_id, such as 「表情」, 「美容」, 「烟熏妆」.'),
+        details: z.boolean().optional().describe(`Also return descriptions and demo images, default false; matches must be ≤${MAX_MENU_PREVIEW}.`),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -2145,56 +2299,66 @@ export function createServer(deps = {}) {
     },
     {
       name: 'menu_add',
-      description: '按 menu_id 往场景添加一个官方功能对象，与在编辑器菜单里点选等效（可撤销）。kind=package 的项会先下载官方素材包再导入。返回 added_objects（新对象名和 object_path）。',
-      shape: { ...target, menu_id: z.string().min(1).describe('menu_list 返回的 menu_id。') },
+      keywords: '添加对象 加 功能 menu add',
+      description: 'Add one official menu object to the scene by menu_id — the same as picking it in the editor menu (undoable). kind=package items download the official package first. Returns added_objects (names + object_path).',
+      shape: { ...target, menu_id: z.string().min(1).describe('A menu_id from menu_list.') },
       run: plugin('menu_add', 180000),
     },
     {
       name: 'ai_combine_new',
+      keywords: 'AI 组合 工作流 新建 ai combine',
       description:
-        '新建一张「AI 组合效果」工作流（用户拍照后在云端按工作流出图或出视频），等同 AI 效果窗口的「新建工作流」：在本地建 AI Graph，只有「输入图」和「效果组合」两个节点且未连线；不联网、不扣额度、不建云端草稿。返回 ai_graph_id 和各节点的 node_id，交给官方 get_workflow_context / get_workflow_capabilities / apply_workflow_patch 添加生图节点、写 prompt、连线（图生视频节点官方工具建不了，用 ai_video_node）（官方 apply_workflow_patch 每次改完会把工作流保存成账号下的云端 AI 效果草稿），要看效果用官方 generate_workflow（扣额度）。改好后用 ai_combine_apply 放进场景。「添加对象」菜单里的 AI 组合效果只建空壳，不要用 menu_add。',
+        "Create a new 「AI 组合效果」 AI workflow (the user photographs, the cloud renders images or video by the graph) — the AI effects window 「新建工作流」: builds the AI graph locally with just an 「输入图」 input node and an 「效果组合」 combination node, unconnected. No network, no quota, no cloud draft. Returns ai_graph_id and per-node node_id; edit it with the official get_workflow_context / get_workflow_capabilities / apply_workflow_patch (add image-generation nodes, write prompts, wire) — video-generation nodes the official tools cannot create: ai_video_node (apply_workflow_patch saves each change as a cloud AI draft under the account). To preview: official generate_workflow (spends quota). When done, ai_combine_apply places it into the scene.\n\n" +
+        'The 「添加对象」 menu AI item only builds an empty shell — do not use menu_add.',
       shape: { ...target },
       run: plugin('ai_combine_new'),
     },
     {
       name: 'ai_combine_apply',
+      keywords: 'AI 组合 应用 场景 ai combine apply',
       description:
-        '把一张 AI 工作流放进场景，等同 AI 效果窗口的「应用」（可撤销）：编辑器编译工作流、把工作流文件上传到特效平台，再添加「AI 组合效果」对象（场景里没有 2D 前景时一并建「2D 前景」「2D 摄像机」）。不扣额度，不新建草稿；工作流生成过预览视频时一并上传供审核。效果组合节点没有输入连线等情况下编辑器会拒绝，返回 AI_COMBINE_APPLY_FAILED 和编辑器的提示原文（如「请先连接效果组合器」）。返回 added_objects（新对象名和 object_path）和 draft_id（工作流已存成云端草稿时才有，否则为 null）。之后 save_project。',
-      shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
+        "Place an AI workflow into the scene — the AI effects window 「应用」 (undoable): the editor compiles the workflow, uploads the workflow file to the effect platform, and adds a 「AI 组合效果」 object (creating 「2D 前景」 and 「2D 摄像机」 too when the scene has no 2D foreground). No quota, no new draft; a workflow that generated a preview video uploads it for review as well. The editor refuses when the combination node lacks input wires etc., reporting AI_COMBINE_APPLY_FAILED with the editor message verbatim (e.g. 「请先连接效果组合器」). Returns added_objects (names + object_path) and draft_id (set when the workflow was saved as a cloud draft, else null). Then save_project.",
+      shape: { ...target, graph_id: z.string().min(1).describe('An ai_graph_id from ai_combine_new or the official get_workflow_context.') },
       run: plugin('ai_combine_apply', 180000),
     },
     {
       name: 'ai_video_node',
+      keywords: '图生视频 工作流 节点 ai video node',
       description:
-        '在 AI 工作流里加或改一个「视频生成」节点，即 AI 效果窗口的「图生视频」（Seedance 系列：照片 + 提示词生成一段视频）；官方 apply_workflow_patch 只能建生图节点。不传 node_id 时新建：按节点编辑面板的做法用所选模型初始化，把图里的「输入图」连到它的第一个图片口、它的输出连到「效果组合」的空输入口，摆在两者之间（图里有多个输入图时要传 input_node_id，效果组合没有空口时报 COMBINATION_PORT_TAKEN，都在改图之前报）。传 node_id 时只改这个节点的参数；换模型时从新模型的默认参数开始，提示词沿用。参数按所选模型的面板核对，各模型不同（如 Seedance 2.0 Mini 时长 5–15 秒、分辨率 480p / 720p，Seedance 2.5 时长 4–30 秒、多 1080p），不合法时报错并列出可选值。改完照官方补丁的做法把工作流存成云端草稿（saved；没存上时 save_error 是原因）。不联网生成、不扣额度。之后照常：upload_workflow_image + apply_workflow_patch（update_node_params）给输入图绑照片，generate_workflow 看效果（扣模型次数），ai_combine_apply 放进场景。返回 node_id、created、model（id、name）、params（节点存的参数）、新建时的 connected。',
+        "Add or edit a 「视频生成」 node in an AI workflow — the AI effects window 「图生视频」 (Seedance: photo + prompt → a video clip); the official apply_workflow_patch can only create image-generation nodes.\n\n" +
+        'Without node_id it creates one: initialized per the chosen model panel defaults, wired 「输入图」 → its first image port → its output into the combination node free port, placed between them (multiple input nodes: pass input_node_id; no free combination port: COMBINATION_PORT_TAKEN — both checked before any graph edit). With node_id it edits that node only; a model switch starts from the new model defaults, prompt carried over. Parameters follow the chosen model panel (Seedance 2.0 Mini: 5–15 s, 480p/720p; Seedance 2.5: 4–30 s, adds 1080p); invalid values error with the valid options. The graph is saved as a cloud draft like an official patch (saved; save_error names the reason). No generation, no quota.\n\n' +
+        'Usual sequence: upload_workflow_image + apply_workflow_patch (update_node_params) to bind the input photo, generate_workflow to preview (spends model quota), ai_combine_apply to place. Returns node_id, created, model (id, name), params, and connected (when created).',
       shape: {
         ...target,
-        graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。'),
-        node_id: z.string().min(1).optional().describe('要改的视频生成节点（get_workflow_context 里 type 为 Video 的 id）；省略时新建一个。'),
-        model: z.string().min(1).optional().describe('模型的显示名，如「Seedance 2.0 Mini」「Seedance 2.0 Fast」「Seedance 2.0」「Seedance 2.5」；新建时默认 Seedance 2.0 Mini，改节点时省略则不换模型。写错时报 UNKNOWN_VIDEO_MODEL 并列出可选的。'),
-        prompt: z.string().min(1).optional().describe('提示词：描述要生成的画面和动作。新建时必填。'),
-        duration: z.number().positive().optional().describe('视频时长（秒），范围看模型；省略时用模型默认（Mini 是 10）。'),
-        aspect_ratio: z.string().min(1).optional().describe('视频比例，如 9:16、16:9、1:1；省略时用模型默认（9:16）。'),
-        resolution: z.string().min(1).optional().describe('分辨率，如 480p、720p；省略时用模型默认（480p）。'),
-        input_node_id: z.string().min(1).optional().describe('新建时要连的输入图节点；图里只有一个输入图时可省略。'),
+        graph_id: z.string().min(1).describe('An ai_graph_id from ai_combine_new or the official get_workflow_context.'),
+        node_id: z.string().min(1).optional().describe('The video node to edit (a type=Video id in get_workflow_context); omitted, create one.'),
+        model: z.string().min(1).optional().describe('Model display name: 「Seedance 2.0 Mini」, 「Seedance 2.0 Fast」, 「Seedance 2.0」, 「Seedance 2.5」. Creation defaults to Seedance 2.0 Mini; editing without it keeps the model. Unknown: UNKNOWN_VIDEO_MODEL with the options.'),
+        prompt: z.string().min(1).optional().describe('Prompt: the scene and motion to generate. Required on creation.'),
+        duration: z.number().positive().optional().describe('Video duration (s), per model; omitted, the model default (Mini: 10).'),
+        aspect_ratio: z.string().min(1).optional().describe('Aspect ratio, e.g. 9:16, 16:9, 1:1; omitted, the model default (9:16).'),
+        resolution: z.string().min(1).optional().describe('Resolution, e.g. 480p, 720p; omitted, the model default (480p).'),
+        input_node_id: z.string().min(1).optional().describe('The input-image node to wire on creation; omit when the graph has exactly one.'),
       },
       run: plugin('ai_video_node', 120000),
     },
     {
       name: 'ai_video_results',
+      keywords: '图生视频 结果 预览 ai video results',
       description:
-        '读 AI 工作流里「视频生成」节点和「效果组合」节点的生成结果（官方 generate_workflow 成功后用；官方 download_workflow_node_asset 只认生图节点）：每个节点的状态 state（waiting / success 等）和生成的视频 videos：本机文件 local_path（编辑器 AI 效果窗口预览用的那份缓存，没有下载时加的水印；缓存被清掉时为 null，重新生成才有）、宽高、时长 duration_s。看效果用 ffmpeg 抽帧再 image_view。只读，不联网。',
-      shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
+        "Generation results of the 「视频生成」 node and its combination node (official generate_workflow succeeded; the official download_workflow_node_asset only reads image nodes): per node state state (waiting / success, ...) and generated videos videos — local files local_path (the editor AI preview cache copy, no watermark; a null when the cache was cleared, re-generate to get), width/height, duration duration_s. To view: ffmpeg frame extraction then image_view. Read-only, no network.",
+      shape: { ...target, graph_id: z.string().min(1).describe('An ai_graph_id from ai_combine_new or the official get_workflow_context.') },
       run: plugin('ai_video_results'),
     },
     {
       name: 'ai_makeup_submit',
       refs: true,
-      description: `素材库「AI 妆容」的「立即提取」：上传一张带妆的人像参考图，AI 从中提取面部（腮红、修容这类）、美瞳、眼部、睫毛、唇部五张妆容贴图和每个部位的推荐强度，返回 task_id。任务走面板自己的 AIMakeupManager，面板的生成记录里同样能看到。参考图须是 ${AI_MAKEUP_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}、不超过 ${AI_MAKEUP_IMAGE_LIMIT.maxMB} MB，主体清晰、无遮挡（面板的提示），越接近正脸近景提取得越准。有任务在跑时拒绝提交（报 AI_MAKEUP_RUNNING；面板此时也禁用「立即提取」）。默认等任务完成（最多 wait_s 秒，2026-11-11 实测每次 5–8 秒），完成后返回：parts（每个部位的 part、name、贴图 image_ref、推荐的 intensity 面板不透明度、female / male 男女强度、blend_mode 混合模式及其名称；美瞳是 intensity、reflect_intensity 反光强度和两种混合模式）、参考原图 reference_image_ref，以及 preview_file（面板的「整妆」预览：妆画在编辑器内置样例脸上，交给 image_view 看）。没等到完成时 status 是 running，之后用 ai_makeup_tasks（task_id + wait_s）。满意后用 ai_makeup_import 导入工程。是否扣账号额度以编辑器为准，编辑器代码里没有相关提示（历史记录里的 cost 是任务耗时的秒数，不是额度）。`,
+      keywords: 'AI 妆容 提取 参考图 ai makeup',
+      description: `The library 「AI 妆容」 「立即提取」: upload a made-up reference portrait; AI extracts five makeup textures — face (blush, contour), contacts, eye area, lashes, lips — with recommended strengths per part, returning task_id. The task runs in the panel own AIMakeupManager, equally visible in its history.\n\n` +
+        `Reference image: ${AI_MAKEUP_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}, ≤${AI_MAKEUP_IMAGE_LIMIT.maxMB} MB, subject clear and unobstructed (the panel note); the closer to a front close-up, the better the extraction. Rejects while another task is running (AI_MAKEUP_RUNNING; the panel disables 「立即提取」 then). Waits by default, up to wait_s (measured 5–8 s each, 2026-11-11); when done returns: parts (per part name, texture image_ref, recommended intensity panel opacity, female / male strengths, blend_mode + its name; contacts add intensity, reflect_intensity and two blend modes), reference_image_ref, and preview_file (the panel 「整妆」 preview on the built-in sample face — hand to image_view). Unfinished: status running, continue with ai_makeup_tasks (task_id + wait_s). Happy: ai_makeup_import into the project. Whether it spends account quota is up to the editor — the editor code gives no hint (the history cost field is task seconds, not quota).`,
       shape: {
         ...target,
-        image_path: z.string().min(1).describe('参考图的绝对路径。'),
-        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe(`最多等任务完成的秒数，默认 ${AI_MAKEUP_WAIT_S}；0 表示提交后立即返回。`),
+        image_path: z.string().min(1).describe('Absolute path of the reference image.'),
+        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe(`Seconds to wait for the task at most, default ${AI_MAKEUP_WAIT_S}; 0 returns right after submission.`),
       },
       run: async (a) => {
         const { project_path, instance_id, wait_s = AI_MAKEUP_WAIT_S, ...params } = a;
@@ -2205,13 +2369,14 @@ export function createServer(deps = {}) {
     {
       name: 'ai_makeup_tasks',
       refs: true,
-      description: `素材库「AI 妆容」的提取记录（当前账号，与面板右侧的记录同一份），最新的在前。不传 task_id 时按 cursor 分页列出：状态（running / finished / failed）、创建和完成时间、参考原图 reference_image_ref、失败原因 failure，完成的带 parts（各部位贴图 image_ref 和推荐强度、混合模式，字段同 ai_makeup_submit）。传 task_id 时只查这一个，再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI_MAKEUP_MAX_WAIT_S} 秒）；完成的另给 preview_file（面板的「整妆」预览，交给 image_view 看）。`,
+      keywords: 'AI 妆容 记录 任务 ai makeup tasks',
+      description: `Extraction history of the library 「AI 妆容」 (this account, the panel right-side list), newest first. Without task_id, paged by cursor: status (running / finished / failed), created / finished times, reference image reference_image_ref, failure reason failure, and finished tasks with parts (per-part texture image_ref, recommended strengths, blend modes — fields as ai_makeup_submit). With task_id, only this one; adding wait_s waits until it leaves running or the time runs out (max ${AI_MAKEUP_MAX_WAIT_S} s); finished ones also carry preview_file (the panel 「整妆」 preview, hand to image_view).`,
       shape: {
         ...target,
-        task_id: z.string().min(1).optional().describe('只查这个任务（ai_makeup_submit 返回的 task_id）。'),
-        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(AI_MAKEUP_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AI_MAKEUP_HISTORY_PAGE}（服务端上限）。`),
+        task_id: z.string().min(1).optional().describe('Only this task (a task_id from ai_makeup_submit).'),
+        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
+        count: z.number().int().min(1).max(AI_MAKEUP_HISTORY_PAGE).optional().describe(`Items per page, default ${AI_MAKEUP_HISTORY_PAGE} (server cap).`),
       },
       run: async (a) => {
         const { project_path, instance_id, task_id, wait_s = 0, cursor, count } = a;
@@ -2223,16 +2388,18 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai_makeup_import',
+      keywords: 'AI 妆容 导入 建层 ai makeup import',
       description:
-        '把一个已完成的 AI 妆容任务导入目标工程，等同面板里勾选部位后点「导入素材」（不动面板里自己勾选的项）：每个部位的贴图以面板的文件名「AI 美妆_面部.png」等导入 Assets（工程里已有同名文件时编辑器自动改名为「AI 美妆_面部 (1).png」，不会覆盖之前导入的），在「面部面具」下建同名的层（场景里没有「面部面具」时连同它的摄像机一起建），强度、男女强度和混合模式取 AI 的推荐值。美瞳层另外处理：编辑器 9.8.1 的面板会把美瞳的贴图和强度写到一个美瞳层上并不存在的组件，导入后的美瞳层其实是内置的默认棕色瞳色、强度 0.8；本工具把 AI 的美瞳贴图、推荐强度、反光强度和混合模式写到美瞳组件（EyeColorV2）上，并照面板的意图关掉透明度贴图。可撤销（编辑器每个部位记两步）。parts 只导部分部位，默认全部五个。返回 added_objects、layers（每层的 object_path、贴图 texture、读回的 intensity / female / male / blend 等，美瞳是 intensity）、skipped_parts（这次提取没给贴图的部位）和 package_folders。之后用 makeup_compare 调强度，save_project。',
+        'Import a finished AI makeup task into the target project — the panel 「导入素材」 with parts checked (panel checkboxes untouched): each part texture is imported into Assets under the panel file name (「AI 美妆_面部.png」 etc.; an existing name gets 「 (1)」 appended, never overwriting), and a same-named layer is created under 「面部面具」 (with its camera when missing), strengths / female / male / blend modes from the AI recommendations. Contact layers get a fix on top: editor 9.8.1 writes the contact texture and strength onto a component the layer does not have, leaving a default brown iris at 0.8 — this tool writes the AI texture, recommended strength, reflect strength and blend modes onto the EyeColorV2 component and disables the opacity map per the panel intent. Undoable (two steps per part).\n\n' +
+        'parts imports a subset; all five by default. Returns added_objects, layers (per-layer object_path, texture, read-back intensity / female / male / blend — contacts intensity), skipped_parts (parts this extraction did not provide) and package_folders. Then makeup_compare to tune strengths, save_project.',
       shape: {
         ...target,
-        task_id: z.string().min(1).describe('ai_makeup_submit / ai_makeup_tasks 返回的 task_id（须 status=finished）。'),
+        task_id: z.string().min(1).describe('A task_id from ai_makeup_submit / ai_makeup_tasks (status=finished).'),
         parts: z
           .array(z.enum(['rest', 'pupil', 'eyepart', 'eyelash', 'lip']))
           .min(1)
           .optional()
-          .describe('只导这些部位：rest 面部、pupil 美瞳、eyepart 眼部、eyelash 睫毛、lip 唇部；默认全部。'),
+          .describe('Import only these parts: rest face, pupil contacts, eyepart eye area, eyelash lashes, lip lips; all five by default.'),
       },
       run: async (args) => {
         const { project_path, instance_id, ...params } = args;
@@ -2242,14 +2409,16 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_image_submit',
-      description: `素材库「AI 3D › 3D模型」（图生 3D）：上传一张参考图，在云端生成 3D 模型（静态网格，没有骨骼和动画），返回 task_id。参考图须是 ${AI3D_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_IMAGE_LIMIT.maxMB} MB、长宽不超过 ${AI3D_IMAGE_LIMIT.maxSide} 像素；主体完整清晰、无遮挡，背景尽量纯色（编辑器的建议）。卡通角色可以先用官方 generate_image 出一张正面全身、纯色背景的图再交给本工具。同一类型最多同时跑 ${AI3D_MAX_RUNNING} 个任务。之后用 ai3d_tasks（带 task_id 和 wait_s）等它完成，再用 ai3d_import 放进工程。是否扣账号额度以编辑器为准，编辑器代码里没有相关提示。`,
+      keywords: 'AI 3D 图生 3D 模型 ai3d image',
+      description: `The library 「AI 3D › 3D模型」 (image-to-3D): one reference image → a static 3D mesh in the cloud (no bones, no animation), returning task_id. Reference image: ${AI3D_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}, ≤${AI3D_IMAGE_LIMIT.maxMB} MB, sides ≤${AI3D_IMAGE_LIMIT.maxSide} px; subject complete, clear, unobstructed, plain background preferred (the editor advice). A cartoon character: generate_image first for a front full-body shot on a plain background, then feed it here. Up to ${AI3D_MAX_RUNNING} tasks of this kind at once.\n\n` +
+        'Next: ai3d_tasks (task_id + wait_s) to wait, then ai3d_import to place it. Quota is up to the editor — no hint in the editor code.',
       shape: {
         ...target,
-        image_path: z.string().min(1).describe('参考图的绝对路径。'),
+        image_path: z.string().min(1).describe('Absolute path of the reference image.'),
         precision: z
           .enum(Object.keys(AI3D_FACE_NUM))
           .optional()
-          .describe(`精度（面数）：${Object.entries(AI3D_FACE_NUM).map(([k, v]) => `${k}=${v}`).join('、')}，对应编辑器的低 / 中 / 高面数；默认 medium。`),
+          .describe(`Precision (face count): ${Object.entries(AI3D_FACE_NUM).map(([k, v]) => `${k}=${v}`).join(', ')} — the editor low / medium / high; default medium.`),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -2258,11 +2427,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_animation_submit',
-      description: `素材库「AI 3D › 3D动画」：把参考视频里人的动作做成动画，套到一个带标准人形骨骼的 FBX 上，返回 task_id。model 可选内置的 ${Object.keys(AI3D_PRESET_MODELS).join(' / ')}（全身 / 上半身 / 下半身 / 手臂，编辑器自带的人形模型），或一个本地 .fbx 的绝对路径：须有骨骼（Hips、Spine、LeftUpLeg 等 20 根标准人形骨骼，名字完全一致、不带 mixamorig_ 前缀，缺了编辑器也只提醒，返回里会有 warning），骨骼和面数不超过编辑器的导入上限。参考视频须是 ${AI3D_VIDEO_LIMIT.animation.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_VIDEO_LIMIT.animation.maxSeconds} 秒、${AI3D_VIDEO_LIMIT.animation.maxMB} MB、长宽不超过 ${AI3D_VIDEO_LIMIT.animation.maxSide}，建议单人、全身出镜。图生 3D（ai3d_image_submit）出来的模型没有骨骼，不能直接用作 model。之后 ai3d_tasks 等完成、ai3d_import 导入（导入的是带动画的 FBX）。`,
+      keywords: 'AI 3D 动画 动作迁移 ai3d animation',
+      description: `The library 「AI 3D › 3D动画」: bake the motion of a person in a reference video onto an FBX with a standard humanoid skeleton, returning task_id. model: a built-in ${Object.keys(AI3D_PRESET_MODELS).join(' / ')} (full body / upper / lower / arms — editor-provided humanoid models) or a local .fbx path: must have the 20 standard humanoid bones (Hips, Spine, LeftUpLeg, ..., exact names, no mixamorig_ prefix — the editor only warns on missing ones and the reply carries warning), bones and face count within the editor import caps. Reference video: ${AI3D_VIDEO_LIMIT.animation.exts.join(' / ').toUpperCase()}, ≤${AI3D_VIDEO_LIMIT.animation.maxSeconds} s, ${AI3D_VIDEO_LIMIT.animation.maxMB} MB, sides ≤${AI3D_VIDEO_LIMIT.animation.maxSide}; single person, full body preferred. A model from ai3d_image_submit has no bones — not usable as model here.\n\n` +
+        'Next: ai3d_tasks to wait, ai3d_import (imports the animated FBX).',
       shape: {
         ...target,
-        video_path: z.string().min(1).describe('参考视频的绝对路径。'),
-        model: z.string().min(1).optional().describe(`${Object.keys(AI3D_PRESET_MODELS).join(' / ')} 之一，或本地 .fbx 的绝对路径；默认 whole。`),
+        video_path: z.string().min(1).describe('Absolute path of the reference video.'),
+        model: z.string().min(1).optional().describe(`${Object.keys(AI3D_PRESET_MODELS).join(' / ')}, or a local .fbx absolute path; default whole.`),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -2272,11 +2443,12 @@ export function createServer(deps = {}) {
     {
       name: 'ai3d_gs_segment',
       refs: true,
-      description: `素材库「AI 3D › 高精度模型重建」第一步：上传一段实物 360 度环绕视频，云端识别出要重建的主体，返回 seg_task_id 和主体图 subject_image_ref（交给 image_view 看）。确认主体没问题后用 ai3d_gs_submit 正式生成 3D 高斯点云（.ply）；主体不对就换视频或重拍。视频须是 ${AI3D_VIDEO_LIMIT.gs.exts.join(' / ').toUpperCase()}、不超过 ${AI3D_VIDEO_LIMIT.gs.maxSeconds} 秒、${AI3D_VIDEO_LIMIT.gs.maxMB} MB、长宽不超过 ${AI3D_VIDEO_LIMIT.gs.maxSide}，主体清晰、光线充足、各角度都拍到。识别一般约 20 秒，最多等 wait_s 秒，超时编辑器会取消这次识别。`,
+      keywords: 'AI 3D 高精度 重建 分割 ai3d gs',
+      description: `The library 「AI 3D › 高精度模型重建」 step 1: upload a 360° orbit video of an object; the cloud identifies the subject, returning seg_task_id and subject_image_ref (hand to image_view). Confirm the subject is right, then ai3d_gs_submit generates the 3D Gaussian point cloud (.ply); wrong subject — re-shoot or switch videos. Video: ${AI3D_VIDEO_LIMIT.gs.exts.join(' / ').toUpperCase()}, ≤${AI3D_VIDEO_LIMIT.gs.maxSeconds} s, ${AI3D_VIDEO_LIMIT.gs.maxMB} MB, sides ≤${AI3D_VIDEO_LIMIT.gs.maxSide}; subject clear, good light, every angle covered. Identification takes ~20 s, waited up to wait_s; past that the editor cancels the run.`,
       shape: {
         ...target,
-        video_path: z.string().min(1).describe('环绕视频的绝对路径。'),
-        wait_s: z.number().int().min(10).max(AI3D_MAX_WAIT_S).optional().describe(`最多等待识别的秒数，默认 ${AI3D_SEGMENT_WAIT_S}。`),
+        video_path: z.string().min(1).describe('Absolute path of the orbit video.'),
+        wait_s: z.number().int().min(10).max(AI3D_MAX_WAIT_S).optional().describe(`Seconds to wait for identification at most, default ${AI3D_SEGMENT_WAIT_S}.`),
       },
       run: async (a) => {
         const { project_path, instance_id, wait_s = AI3D_SEGMENT_WAIT_S, ...params } = a;
@@ -2287,8 +2459,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_gs_submit',
-      description: '素材库「AI 3D › 高精度模型重建」第二步：按 ai3d_gs_segment 识别出的主体正式生成 3D 高斯点云，等同识别窗口里的「确认主体」，返回 task_id。之后 ai3d_tasks（kind=gs）等完成、ai3d_import 导入。',
-      shape: { ...target, seg_task_id: z.string().min(1).describe('ai3d_gs_segment 返回的 seg_task_id。') },
+      keywords: 'AI 3D 高精度 生成 ai3d gs submit',
+      description: 'The library 「AI 3D › 高精度模型重建」 step 2: generate the 3D Gaussian point cloud from the subject identified by ai3d_gs_segment — the identification window 「确认主体」, returning task_id. Next: ai3d_tasks (kind=gs) to wait, ai3d_import to import.',
+      shape: { ...target, seg_task_id: z.string().min(1).describe('A seg_task_id from ai3d_gs_segment.') },
       run: async (a) => {
         const { project_path, instance_id, seg_task_id } = a;
         const seg = segments.get(seg_task_id);
@@ -2298,14 +2471,15 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_tasks',
-      description: `素材库「AI 3D」的生成任务（当前账号）。不传 task_id 时按 kind（必填）分页列出历史任务：状态（running / finished / failed）、创建和完成时间、输入（图生 3D 的精度、3D 动画的模型）、失败原因，以及结果是否已下载到本机和本机的预览图 / 预览视频（preview_image_file 交给 image_view 看）。传 task_id 时只查这一个（不用给 kind）；再给 wait_s 就一直等到它不再是 running 或时间到（最多 ${AI3D_MAX_WAIT_S} 秒），status=finished 后用 ai3d_import 导入。`,
+      keywords: 'AI 3D 任务 记录 ai3d tasks',
+      description: `Generation tasks of the library 「AI 3D」 (this account). Without task_id, page the history by kind (required): status (running / finished / failed), created / finished times, input (image-to-3D precision, animation model), failure reason, and whether the result was downloaded with its local preview image / video (preview_image_file — hand to image_view). With task_id, only this one (no kind needed); adding wait_s waits until it leaves running or the time runs out (max ${AI3D_MAX_WAIT_S} s), then ai3d_import on status=finished.`,
       shape: {
         ...target,
-        kind: z.enum(['image', 'animation', 'gs']).optional().describe('列历史时必填：image=3D模型（图生 3D）、animation=3D动画、gs=高精度模型重建。只查一个 task_id 时不用给。'),
-        task_id: z.string().min(1).optional().describe('只查这个任务（不用给 kind）。'),
-        wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
-        count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AI3D_HISTORY_PAGE}（服务端上限）。`),
+        kind: z.enum(['image', 'animation', 'gs']).optional().describe('To list history (required): image = 3D模型 (image-to-3D), animation = 3D动画, gs = 高精度模型重建. Not needed for one task_id.'),
+        task_id: z.string().min(1).optional().describe('Only this task (no kind needed).'),
+        wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
+        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
+        count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`Items per page, default ${AI3D_HISTORY_PAGE} (server cap).`),
       },
       run: async (a) => {
         const { project_path, instance_id, kind, task_id, wait_s = 0, cursor, count } = a;
@@ -2318,19 +2492,21 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai3d_import',
+      keywords: 'AI 3D 导入 场景 ai3d import',
       description:
-        '把一个已完成的 AI 3D 任务结果下载到编辑器的 AI 3D 缓存目录（面板里同样能看到），导入工程并放进场景（可撤销），与面板里勾选后点「导入素材」相同：图生 3D 导入 GLB（外层对象「模型大小控制」放大 15 倍）、3D 动画导入带动画的 FBX、高精度模型重建导入 PLY 点云（缩小到 0.3）。返回 added_objects（新对象名和 object_path）、package_folders 和本机预览文件。之后用 capture_preview 看大小和位置，save_project。',
+        'Download a finished AI 3D result into the editor AI 3D cache (visible in the panel too), import it into the project and place it into the scene (undoable) — the panel 「导入素材」 with the item checked: image-to-3D imports a GLB (scaled 15× by a 「模型大小控制」 wrapper), 3D animation imports an animated FBX, high-precision imports a PLY point cloud (scaled to 0.3). Returns added_objects (names + object_path), package_folders, local preview files. Then capture_preview for size and placement, save_project.',
       shape: {
         ...target,
-        task_id: z.string().min(1).describe('ai3d_*_submit 或 ai3d_tasks 返回的 task_id。'),
-        kind: z.enum(['image', 'animation', 'gs']).describe('任务类型，与提交时一致。'),
+        task_id: z.string().min(1).describe('A task_id from ai3d_*_submit / ai3d_tasks.'),
+        kind: z.enum(['image', 'animation', 'gs']).describe('The task kind, matching the submission.'),
       },
       run: plugin('ai3d_import', AI3D_IMPORT_TIMEOUT_MS),
     },
     {
       name: 'ai3d_cancel',
-      description: '取消一个还在 running 的 AI 3D 生成任务（等同面板里的「取消生成」）。',
-      shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
+      keywords: 'AI 3D 取消 ai3d cancel',
+      description: 'Cancel a still-running AI 3D generation task — the panel 「取消生成」.',
+      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
         return text(await d.callPlugin('ai3d_cancel', { task_id }, await homeWindow({ project_path, instance_id })));
@@ -2338,29 +2514,34 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ar_video_submit',
+      keywords: 'AR 视频 贴片 生成 ar video',
       description:
-        '素材库「AI 素材 › AR 视频」（AR 视频贴片）：提交一次生成，等同面板上的「立即生成」，云端（Seedance）接受任务后返回 task_id。编辑器没有单独的模式开关，由输入决定：mode=direct 只抠像、不改动作，主体须是视频，不能带 prompt 和参考素材；mode=motion 由 prompt（必填）描述新动作或样式，主体可以是图片或视频，可加参考图（如给主体加道具）和一段参考动作视频。输入先交给编辑器自己的素材检查和转换（与面板上传素材相同：只认 JPG / JPEG / PNG / MP4 / MOV，包括主体最多 9 张图、3 段视频，视频每段至少 2 秒、合计不超过编辑器开关给的上限，主体视频原长须小于 60 秒；不合规格的图片自动缩放压缩、视频自动转码裁剪，转不了时报 AR_VIDEO_INPUT_INVALID 并带编辑器原话），视频还要先过编辑器的内容审核（最长 15 分钟）。动作时长 duration_s 默认 10 秒，最短 4 秒，上限由编辑器开关决定（9.8.1 为 15 秒，9.8.3 为 30 秒，以 ar_video_tasks 返回的 limits 为准）。shadow 是「添加投影」，省略时用编辑器默认（开关 dyeh_enable_ar_video_shadow，2026-11-08 为开）；开着时结果是带投影的幕底视频。同时最多 10 个任务在跑。会占用账号的 AI 模型使用次数（按特效师等级给），编辑器里查不到剩余次数和单次扣多少，用完时报「模型使用次数达到上限」。任务在哪个工程窗口提交，就在那个窗口里下载并合成结果，之后的 ar_video_tasks / ar_video_import 用同一个窗口最快；实测一段 10 秒的图片生成动作从提交到合成完约 6 分钟。',
+        'The library 「AI 素材 › AR 视频」 (AR video planes) — submit a generation, the panel 「立即生成」, returning task_id once the cloud (Seedance) accepts it. No mode switch in the editor; the input decides: mode=direct cuts out the subject only, no motion change — subject must be a video, no prompt or reference assets; mode=motion derives new motion or style from a required prompt, subject may be image or video, with optional reference images (e.g. adding props) and a reference action video.\n\n' +
+        "Inputs first go through the editor's own asset checks and conversion (same as panel uploads: JPG / JPEG / PNG / MP4 / MOV only; ≤9 images and 3 videos including the subject, each video ≥2 s, total video length within the editor switch cap, subject video under 60 s; off-spec images auto-scaled/compressed, videos auto-transcoded and trimmed — AR_VIDEO_INPUT_INVALID with the editor message when a conversion fails), and the video then passes the editor content review (up to 15 min). duration_s defaults to 10, min 4, cap from the editor switch (9.8.1: 15 s, 9.8.3: 30 s — ar_video_tasks limits is the source of truth). shadow is 「添加投影」, the editor default when omitted (switch dyeh_enable_ar_video_shadow, on as of 2026-11-08); on, the result is a projected floor video. Up to 10 tasks at once. Consumes the account AI model usage (per designer level); the editor gives no signal on remaining quota or per-run cost — exhausted reports 「模型使用次数达到上限」.\n\n" +
+        'The task downloads and composes in the window it was submitted from — ar_video_tasks / ar_video_import are fastest on that same window. Measured: a 10 s image-driven motion took ~6 min from submit to composed result.',
       shape: {
         ...target,
-        subject: z.string().min(1).describe('主体图片或视频的绝对路径（面板文案「上传图片或视频」）。'),
-        mode: z.enum(AR_VIDEO_MODES).describe('direct：主体视频直接生成 AR 视频贴片，只抠像不改动作；motion：按 prompt 和参考素材生成新动作。'),
-        prompt: z.string().optional().describe('动作描述（最多 2000 字），mode=motion 时必填，mode=direct 时不能给。任务文档的建议：写上「生成高清视频」这类话会出高清。'),
-        reference_images: z.array(z.string().min(1)).min(1).optional().describe('参考图的绝对路径（JPG / JPEG / PNG），如给主体加道具；仅 mode=motion。'),
-        reference_video: z.string().min(1).optional().describe('参考动作视频的绝对路径（MP4 / MOV），动作迁移用；仅 mode=motion。'),
-        shadow: z.boolean().optional().describe('「添加投影」，省略时用编辑器默认；前置自拍类效果一般关掉。'),
-        duration_s: z.number().int().positive().optional().describe('输出动作时长（秒），默认 10，范围见 ar_video_tasks 返回的 limits。'),
+        subject: z.string().min(1).describe('Absolute path of the subject image or video (the panel 「上传图片或视频」).'),
+        mode: z.enum(AR_VIDEO_MODES).describe('direct: the subject video becomes the AR plane as-is, cutout only; motion: new motion from prompt and reference assets.'),
+        prompt: z.string().optional().describe('Motion description (≤2000 chars), required for mode=motion, forbidden for mode=direct. Task-doc tip: writing 「生成高清视频」 tends to produce HD.'),
+        reference_images: z.array(z.string().min(1)).min(1).optional().describe('Reference image paths (JPG / JPEG / PNG), e.g. adding props; mode=motion only.'),
+        reference_video: z.string().min(1).optional().describe('Reference action video path (MP4 / MOV) for motion transfer; mode=motion only.'),
+        shadow: z.boolean().optional().describe('「添加投影」; the editor default when omitted. Usually off for front-camera selfie effects.'),
+        duration_s: z.number().int().positive().optional().describe('Output motion duration (s), default 10; range per the ar_video_tasks limits.'),
       },
       run: plugin('ar_video_submit', AR_VIDEO_SUBMIT_TIMEOUT_MS),
     },
     {
       name: 'ar_video_tasks',
-      description: `素材库「AR 视频」的生成任务（当前账号，与面板右侧的生成记录同一份）。不传 task_id 时按 offset / count 分页列出，最新的在前，并带上当前的输入限制 limits；传 task_id 时只查这一个，再给 wait_s 就一直等到它合成完、失败或时间到（最多 ${AR_VIDEO_MAX_WAIT_S} 秒）。status：running 云端生成中、restoring 云端已完成，正在本机下载并合成、succeeded 可以导入、failed 失败（failure 里是编辑器给的原因和错误码）、unconfirmed 暂时查不到云端状态。每条带 name（工具栏后台任务里显示的名字）、mode、主体类型、参考素材类型、prompt、时长、投影；succeeded 的另有实际时长 seconds、尺寸、是否幕底 green_screen、原声 audio、本机的预览视频 preview_video_file（抠像后叠在 #1b1b1b 背景上）、要导入的视频 video_file，以及一张横排 6 帧的预览图 preview_image_file（交给 image_view 看动作，不用打开视频）。在别的窗口提交的任务，这个窗口第一次看到时要自己下载并合成，会先显示 restoring。`,
+      keywords: 'AR 视频 任务 记录 ar video tasks',
+      description: `Generation tasks of the library 「AR 视频」 (this account, the panel right-side list), newest first. Without task_id, paged by offset / count, with the current input limits limits; with task_id, only this one, waiting until it composes, fails, or the time runs out (max ${AR_VIDEO_MAX_WAIT_S} s).\n\n` +
+        'status: running (cloud generating), restoring (cloud done, downloading and composing locally), succeeded (importable), failed (failure = editor reason and error code), unconfirmed (cloud state unknown). Each carries name (the toolbar background-task name), mode, subject / reference-asset types, prompt, duration, shadow; succeeded adds actual seconds, dimensions, green_screen, original audio audio, local preview video preview_video_file (cutout over #1b1b1b), the video to import video_file, and a 6-frame horizontal preview grid preview_image_file (hand to image_view — no need to open the video). Tasks submitted from another window download and compose on first sight here, showing restoring first.',
       shape: {
         ...target,
-        task_id: z.string().min(1).optional().describe('只查这个任务（ar_video_submit 返回的 task_id）。'),
-        wait_s: z.number().int().min(0).max(AR_VIDEO_MAX_WAIT_S).optional().describe('配合 task_id：最多等多少秒，默认 0（只查一次）。'),
-        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
-        count: z.number().int().min(1).max(AR_VIDEO_HISTORY_PAGE).optional().describe(`每页数量，默认 ${AR_VIDEO_HISTORY_PAGE}。`),
+        task_id: z.string().min(1).optional().describe('Only this task (a task_id from ar_video_submit).'),
+        wait_s: z.number().int().min(0).max(AR_VIDEO_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+        count: z.number().int().min(1).max(AR_VIDEO_HISTORY_PAGE).optional().describe(`Items per page, default ${AR_VIDEO_HISTORY_PAGE}.`),
       },
       run: async (a) => {
         const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
@@ -2372,22 +2553,26 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ar_video_import',
+      keywords: 'AR 视频 导入 场景 ar video import',
       description:
-        '把一个 succeeded 的 AR 视频任务导入目标工程并放进场景，等同面板上勾选它后点「导入素材」（只导这一个，面板里其它勾选的结果不受影响）：视频「混合透明.mp4」、它的视频纹理「混合透明 MP4 播放器」（Mp4Texture，.mp4Tex）和原声「原声.mp3」导入为工程资源；场景里建渲染组「AR跟踪」，其下「AR平面跟踪」（AR 平面，MeshRenderer）上挂「AR 视频主体 N」，以及「AR摄像机」；场景原来是空的时还会建「通用」组（摄像机和灯光）。「AR 视频主体」上：Image 的 texture 是那张视频纹理（播放由它负责，loopCount=-1 无限循环）；AudioComponent 播原声；ARVideoAudioController（编辑器内置组件，参数 playOriginalAudio_target、originalVolume_target、videoTexture_target）让原声跟着视频播。脚本里控制播放：texture.getControl() 的 play() / pause() / resume() / stop()，事件用 APJS.EventManager.getObjectEmitter(texture) 监听 APJS.Mp4Event.PlayBegin / PlayEnd 等；可视化脚本用内置节点「视频纹理播放器」。返回 added_objects（新对象名和 object_path）、package_folders（这次导入新建的资源）和 plane_guid（编辑器选中的「AR平面跟踪」）。之后 capture_preview 看位置和大小，save_project。',
-      shape: { ...target, task_id: z.string().min(1).describe('ar_video_submit / ar_video_tasks 返回的 task_id（须 status=succeeded）。') },
+        'Import a succeeded AR video task into the target project — the panel 「导入素材」 with the item checked (only that one, other checked results unaffected): the video 「混合透明.mp4」, its video texture 「混合透明 MP4 播放器」 (Mp4Texture, .mp4Tex) and original audio 「原声.mp3」 are imported as project resources; the scene gets a render group 「AR跟踪」 with 「AR平面跟踪」 (AR plane, MeshRenderer) holding 「AR 视频主体 N」, plus 「AR摄像机」; an empty scene also gets a 「通用」 group (camera and lights).\n\n' +
+        '「AR 视频主体」: the Image texture is the video texture (loopCount=-1 loops forever); an AudioComponent plays the original audio; ARVideoAudioController (a built-in component, params playOriginalAudio_target, originalVolume_target, videoTexture_target) makes the original audio follow the video. Script-side control: texture.getControl() play() / pause() / resume() / stop(), events via APJS.EventManager.getObjectEmitter(texture) listening to APJS.Mp4Event.PlayBegin / PlayEnd etc.; visual-script uses the built-in node 「视频纹理播放器」. Returns added_objects (names + object_path), package_folders (resources created by this import) and plane_guid (the editor-selected 「AR平面跟踪」). Then capture_preview for placement and size, save_project.',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from ar_video_submit / ar_video_tasks (succeeded or imported).') },
       run: plugin('ar_video_import', AR_VIDEO_IMPORT_TIMEOUT_MS),
     },
     {
       name: 'ar_video_cancel',
-      description: '取消一个还在 running（或 unconfirmed）的 AR 视频生成任务，等同面板里的「取消生成」。取消确认后任务从记录里消失（cancelled=true）；取消前它已经结束时返回 cancelled=false 和结束时的 status。已经结束的任务（完成、失败、已取消）不能取消，直接报 AR_VIDEO_NOT_RUNNING。',
-      shape: { ...target, task_id: z.string().min(1).describe('要取消的 task_id。') },
+      keywords: 'AR 视频 取消 ar video cancel',
+      description: 'Cancel an AR video task still running (or unconfirmed) — the panel 「取消生成」. Confirmed: the task leaves the records (cancelled=true); already finished before the cancel: cancelled=false with the status it ended at. Finished tasks (succeeded / failed / cancelled) refuse: AR_VIDEO_NOT_RUNNING.',
+      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
       run: plugin('ar_video_cancel'),
     },
     {
       name: 'sfx_synth',
-      description: `合成音效（不开像塑，用像塑自带的 ffmpeg 出 MP3）：预设取自各特效工程用过的音效脚本，频率、包络和默认音量照原样（没有随机噪声的预设和原脚本逐采样一致）。预设：${Object.entries(SFX_PRESETS)
+      keywords: '音效 合成 预设 sfx synth',
+      description: `Synthesize sound effects (no editor needed; Xiangsu's bundled ffmpeg writes MP3): presets ported from sound-effect scripts the effect projects used — frequencies, envelopes and default volumes verbatim (presets without noise match the original scripts sample for sample). Presets: ${Object.entries(SFX_PRESETS)
         .map(([k, p]) => `${k} ${p.desc}`)
-        .join('；')}。pitch 整体升降调（${PITCH_RANGE[0]}–${PITCH_RANGE[1]} 倍），volume 是峰值（默认按预设）。.mp3 是双声道 128 kbps（工程里导入的就是这种），.wav 是单声道 16 位。mp3 拷进 Assets/ 后有时会自动导入、有时不会：用官方 list_resources 看，没有再用官方 import_resource（绝对路径）导入。官方音效库没有合适的声音时用它；要做的是循环音、旋律或预设里没有的声音，仍按工程的做法写脚本。`,
+        .join('; ')}. pitch shifts the whole thing (${PITCH_RANGE[0]}–${PITCH_RANGE[1]}×), volume is the peak (per preset by default). .mp3: stereo 128 kbps (what projects import), .wav: mono 16-bit. After copying an .mp3 into Assets/ import is sometimes automatic, sometimes not: check with official list_resources, import with official import_resource (absolute path) when missing. Use it when the official sound library has nothing fitting; loops, melodies and anything outside the presets still follow the project's own scripting.`,
       shape: {
         out_dir: outDir,
         sounds: z
@@ -2395,8 +2580,8 @@ export function createServer(deps = {}) {
             z.strictObject({
               preset: z.enum(Object.keys(SFX_PRESETS)),
               file: z.string().regex(/^[^/\\:*?"<>|]+\.(mp3|wav)$/, '文件名（不含目录）以 .mp3 或 .wav 结尾'),
-              pitch: z.number().min(PITCH_RANGE[0]).max(PITCH_RANGE[1]).optional().describe('升降调倍数，默认 1。'),
-              volume: z.number().min(0.05).max(1).optional().describe('峰值 0–1，默认按预设（0.45–0.8）。'),
+              pitch: z.number().min(PITCH_RANGE[0]).max(PITCH_RANGE[1]).optional().describe('Pitch shift multiplier, default 1.'),
+              volume: z.number().min(0.05).max(1).optional().describe('Peak 0–1, per preset by default (0.45–0.8).'),
             }),
           )
           .min(1)
@@ -2416,12 +2601,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ui_text_image',
+      keywords: '文字 渲染 PNG 描边 ui text image',
       description:
-        '把文字渲染成透明 PNG（不开像塑）：描边、上下渐变、投影都能做（Text2D 的描边设不进去，粗描边字只能做成图片放在 Image 上）。一次最多 60 张，比如一组数字 0–9、几句弹字。图片按文字加描边、投影和留白的范围裁好，返回每张的宽高（摆 ScreenTransform 用）。字体默认抖音体；字体须有授权（像塑自带字体或 SIL OFL 这类开源可商用字体）。',
+        'Render text as transparent PNGs (no editor needed): stroked, gradient, shadowed — Text2D stroke is not settable, thick stroked text only as an image on an Image. Up to 60 images, e.g. a digit set 0–9, a few lines of text. Images are trimmed by the text bounds plus padding, returning each width/height (for ScreenTransform). Default font is the Douyin body; fonts need a licence (Xiangsu built-in fonts or SIL OFL open-source commercial ones).',
       shape: {
         out_dir: outDir,
         items: z
-          .array(z.strictObject({ file: pngFile, ...textStyle, padding: z.number().min(0).max(100).optional().describe('四周留白（像素），默认 4。') }))
+          .array(z.strictObject({ file: pngFile, ...textStyle, padding: z.number().min(0).max(100).optional().describe('Padding around the text (px), default 4.') }))
           .min(1)
           .max(60),
       },
@@ -2443,8 +2629,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ui_panel',
+      keywords: '界面 底板 按钮 ui panel',
       description:
-        '画界面底板 PNG（不开像塑）：圆角矩形或胶囊（radius="pill"），纯色或上下渐变（颜色可带透明度，如 #121c2e96 半透明深色磨砂底），可加描边和投影，里面可以放几行居中的文字（每行单独设字号、颜色、描边）。不给 width / height 时按文字加 padding 自动定大小。用来做开局提示条、结算卡、按钮底。一次最多 30 张，返回每张的宽高（含投影外扩）。',
+        'Draw UI panel PNGs (no editor needed): rounded rectangle or capsule (radius="pill"), solid or vertical gradient (colors may carry alpha, e.g. #121c2e96 translucent dark frosted), optional stroke and shadow, with centered text lines inside (each its own size, color, stroke). Without width / height the size is auto-set from the text plus padding. For intro banners, result cards, button bases. Up to 30 images; returns each width/height (shadow outset included).',
       shape: {
         out_dir: outDir,
         items: z
@@ -2453,18 +2640,18 @@ export function createServer(deps = {}) {
               file: pngFile,
               width: z.number().int().min(4).max(2048).optional(),
               height: z.number().int().min(4).max(2048).optional(),
-              radius: z.union([z.number().min(0).max(1024), z.literal('pill')]).optional().describe('圆角半径（像素），或 pill 两头全圆；默认 24。'),
-              fill: hexColor.optional().describe('底色，默认 #ffffff。'),
-              gradient: z.array(hexColor).min(2).max(6).optional().describe('从上到下的渐变（替代 fill）。'),
+              radius: z.union([z.number().min(0).max(1024), z.literal('pill')]).optional().describe('Corner radius (px), or pill for fully rounded ends; default 24.'),
+              fill: hexColor.optional().describe('Fill color, default #ffffff.'),
+              gradient: z.array(hexColor).min(2).max(6).optional().describe('Vertical top-to-bottom gradient (replaces fill).'),
               stroke: strokeArg,
               shadow: shadowArg,
-              padding: z.number().min(0).max(200).optional().describe('自动定大小时文字四周的留白，默认 24。'),
-              line_gap: z.number().min(0).max(200).optional().describe('行与行之间的间距，默认 8。'),
+              padding: z.number().min(0).max(200).optional().describe('Padding around the text when auto-sizing, default 24.'),
+              line_gap: z.number().min(0).max(200).optional().describe('Gap between lines, default 8.'),
               lines: z
                 .array(z.strictObject({ ...textStyle, shadow: shadowArg }))
                 .max(6)
                 .optional()
-                .describe('底板上的文字，从上到下居中排列。'),
+                .describe('Text lines on the panel, centered top-to-bottom.'),
             }),
           )
           .min(1)
@@ -2488,40 +2675,42 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_model_add',
-      description: `把自己的模特加进像塑的预览视频清单（不开像塑）：一张照片（默认 ${PHOTO_SECONDS} 秒静止视频）、一段视频，或两张照片交替循环（alternate，用来验「做一次表情记一次」：平静照和表情照交替），按内置预览视频的规格转码（720×1280、h264、30000/1001 fps、带静音 AAC；动图 320×569、图标 56×96），写进 ~/Library/Application Support/DouyinAR/Shared/Resources/PreviewResource/PreviewResources.json（改之前的版本备份到 ~/.xiangsu-mcp-plus/preview-resources-backup/，留最近 10 份）。之后新打开的工程窗口就有这个视频（set_preview_video 的 video_name、preview_frames 的 videos 用 name）；已开着的窗口要关掉重开。replace=true 原位换掉同名模特的视频：替换某个窗口播过的视频会让那个窗口的预览卡住，先关掉那些窗口再替换。像塑更新可能覆盖清单，覆盖后重新加。`,
+      keywords: '模特 预览 加 自己的脸 preview model',
+      description: `Add your own model to Xiangsu's preview video list (no editor needed): a photo (a ${PHOTO_SECONDS} s still video by default), a video, or two photos alternating (alternate — to verify 「make an expression, count one」: calm photo and expression photo alternating), transcoded to the built-in preview spec (720×1280, h264, 30000/1001 fps, silent AAC; animated 320×569, icons 56×96) and written into ~/Library/Application Support/DouyinAR/Shared/Resources/PreviewResource/PreviewResources.json (previous version backed up to ~/.xiangsu-mcp-plus/preview-resources-backup/, last 10 kept). New project windows pick it up (its name works as set_preview_video video_name / preview_frames videos); open windows must be closed and reopened. replace=true swaps a same-named model in place: windows that played that video freeze — close them first. Xiangsu updates may overwrite the list; re-add then.`,
       shape: {
-        name: z.string().min(1).max(40).describe('清单里的名字，照现有的写法「模特W短发||女」（|| 后面是性别）。'),
-        file_name: z.string().regex(/^[a-z0-9_]+$/).describe('文件名（小写字母、数字、下划线），如 model_w、model_s_kiss。'),
-        type: z.enum(PREVIEW_TYPES).optional().describe('预览类型，默认 preview_face。'),
-        image: absPath('照片').optional().describe('照片（PNG / JPG / WEBP），铺满 720×1280 后居中裁切。'),
-        seconds: z.number().min(1).max(30).optional().describe(`照片做成的视频时长，默认 ${PHOTO_SECONDS} 秒。`),
-        video: absPath('视频').optional().describe('视频（MP4 / MOV），铺满 720×1280 后居中裁切，保留原声（没有就配静音）。'),
+        name: z.string().min(1).max(40).describe('Name in the list, following the existing style 「模特W短发||女」 (after || is the gender).'),
+        file_name: z.string().regex(/^[a-z0-9_]+$/).describe('File name (lowercase, digits, underscores), such as model_w, model_s_kiss.'),
+        type: z.enum(PREVIEW_TYPES).optional().describe('Preview type, default preview_face.'),
+        image: absPath('照片').optional().describe('Photo (PNG / JPG / WEBP), cover-filled to 720×1280 then centre-cropped.'),
+        seconds: z.number().min(1).max(30).optional().describe(`Duration of the photo video, default ${PHOTO_SECONDS} s.`),
+        video: absPath('视频').optional().describe('Video (MP4 / MOV), cover-filled to 720×1280 then centre-cropped, original audio kept (silent otherwise).'),
         alternate: z
           .strictObject({
             first: absPath('照片'),
             second: absPath('照片'),
-            first_s: z.number().min(0.2).max(10).describe('第一张停留秒数（如平静 1.4）。'),
-            second_s: z.number().min(0.2).max(10).describe('第二张停留秒数（如嘟嘴 1）。'),
-            cycles: z.number().int().min(1).max(20).describe('循环几次（如 4，共 9.6 秒）。'),
+            first_s: z.number().min(0.2).max(10).describe('How long the first photo holds (e.g. calm 1.4).'),
+            second_s: z.number().min(0.2).max(10).describe('How long the second photo holds (e.g. pout 1).'),
+            cycles: z.number().int().min(1).max(20).describe('How many cycles (e.g. 4, 9.6 s total).'),
           })
           .optional()
-          .describe('两张照片交替循环；preview_frames 的间隔别取一个循环的整数倍，否则每帧落在同一相位。'),
-        replace: z.boolean().optional().describe('替换同名模特，默认 false（同名时报 PREVIEW_MODEL_EXISTS）。'),
+          .describe('Two photos alternating; keep preview_frames intervals off whole-cycle multiples or every frame lands on the same phase.'),
+        replace: z.boolean().optional().describe('Replace a same-named model, default false (same name: PREVIEW_MODEL_EXISTS).'),
       },
       run: async (a) => text(await d.addPreviewModel(a)),
     },
     {
       name: 'scene_set_layer',
-      description:
-        '改已保存工程的 Assets/main.scene 里对象的渲染图层（layer）和摄像机能看见哪些图层（layerVisibleMask），官方 DSL 改不了这两项（报 Invalid property name layer）。用于把一些对象只给某个摄像机画（如擦痕遮罩只画进渲染纹理）。只改对象各自那一行，其余内容原样；改完重新解析核对，对不上就不写（报 SCENE_EDIT_NOT_APPLIED）。改之前的文件备份到 ~/.xiangsu-mcp-plus/scene-backups/（每个工程留最近 10 份）。工程窗口开着时拒绝（报 PROJECT_OPEN：编辑器保存时会覆盖文件）：先 save_project、project_close，改完再 project_open。对象写法同 scene_tree 的 project_dir 模式（#序号、名称或层级路径）。',
+      keywords: '图层 渲染层 摄像机 layer',
+      description: 'Set render layers (layer) of objects and camera visibility masks (layerVisibleMask) in a saved project Assets/main.scene — the official DSL cannot write these (Invalid property name layer). For drawing some objects only into one camera (e.g. a scratch mask rendered only into a render texture).\n\n' +
+        'Only the touched rows change; the file is re-parsed and cross-checked, mismatch refuses the write (SCENE_EDIT_NOT_APPLIED). Backups per project in ~/.xiangsu-mcp-plus/scene-backups/ (last 10). Refuses while the project window is open (PROJECT_OPEN — the editor would overwrite the file on save): save_project, project_close, edit, project_open. Objects like scene_tree project_dir mode (#index, name, or path).',
       shape: {
-        project_dir: absPath('工程目录').describe('工程目录的绝对路径（含 Assets/main.scene）。'),
+        project_dir: absPath('工程目录').describe('Absolute path of the project directory (contains Assets/main.scene).'),
         objects: z
-          .array(z.strictObject({ object: z.string().min(1), layer: z.number().int().min(0).max(63).describe('图层 0–63，默认的对象都在 0。') }))
+          .array(z.strictObject({ object: z.string().min(1), layer: z.number().int().min(0).max(63).describe('Layer 0–63; default objects sit at 0.') }))
           .max(200)
           .optional(),
         cameras: z
-          .array(z.strictObject({ object: z.string().min(1).describe('带 Camera 组件的对象。'), visible_layers: z.array(z.number().int().min(0).max(63)).min(1).describe('这个摄像机画哪些图层。') }))
+          .array(z.strictObject({ object: z.string().min(1).describe('Object with a Camera component.'), visible_layers: z.array(z.number().int().min(0).max(63)).min(1).describe('Which layers this camera draws.') }))
           .max(20)
           .optional(),
       },
@@ -2539,8 +2728,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_audio_test',
-      description:
-        '给预览喂模拟声音，验声音玩法（编辑器里没有真人声音，音量读数一直是 0、关键词不会命中）：先开启编辑器内置 Agent 的「试玩」会话（预览会重载一次，重载时注入把模拟输入转成 AudioDetection 结果的运行时），按 steps 依次喂音量 volume（检测器原始值 0–1，人声参考：轻 0.05、中 0.10、响 0.15）、音高 pitch_hz（45–650）、关键词命中 keywords 或未命中 keyword_miss，每步持续 duration_ms，期间按 frames 均匀截预览图；结束后清掉输入、关闭会话（预览再重载一次，回到没有注入的状态）。2026-11-14 实测：脚本里 VolumeDetector.getResult() 在喂 0.12 的 2.5 秒里读到 0.12，前后都是 0。脚本收到的值用官方 get_script_logs 看。会话期间预览从头重载，特效状态会重置；lead_ms 是重载后先等多久再喂第一步（默认 1000）。',
+      keywords: '声音 音量 关键词 预览 audio test',
+      description: 'Feed simulated sound into the preview to test audio gameplay (the editor has no real voice: volume reads stay 0 and keywords never hit).\n\n' +
+        "Opens the editor's built-in Agent 「试玩」 session (the preview reloads once; a runtime converting the simulated input into AudioDetection results is injected), then feeds the steps in order — volume volume (detector raw 0–1; voice reference: soft 0.05, mid 0.10, loud 0.15), pitch_hz (45–650), keyword hits keywords or a miss keyword_miss — each for duration_ms, shooting frames evenly along the way; then inputs clear and the session closes (one more reload, back to the uninjected state). Measured 2026-11-14: VolumeDetector.getResult() read 0.12 while 0.12 was fed for 2.5 s, 0 before and after. What the script received: official get_script_logs. The preview reloads from the start, resetting effect state; lead_ms waits that long after the reload before the first step (default 1000).",
       shape: {
         ...target,
         steps: z
@@ -2548,10 +2738,10 @@ export function createServer(deps = {}) {
             z.strictObject({
               volume: z.number().min(0).max(1).optional(),
               pitch_hz: z.number().min(45).max(650).optional(),
-              keywords: z.array(z.string().min(1)).min(1).optional().describe('模拟检测器命中这些关键词（和脚本注册的关键词一致）。'),
-              keyword_miss: z.literal(true).optional().describe('模拟一次关键词未命中。'),
-              duration_ms: z.number().int().min(100).max(30000).describe('这一步持续多久。'),
-              frames: z.number().int().min(0).max(6).optional().describe('这一步里均匀截几张预览图，默认 2。'),
+              keywords: z.array(z.string().min(1)).min(1).optional().describe('Simulate the detector hitting these keywords (matching the script registered ones).'),
+              keyword_miss: z.literal(true).optional().describe('Simulate one keyword miss.'),
+              duration_ms: z.number().int().min(100).max(30000).describe('How long this step lasts.'),
+              frames: z.number().int().min(0).max(6).optional().describe('Preview frames shot evenly within the step, default 2.'),
             }),
           )
           .min(1)
@@ -2602,8 +2792,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_actions',
-      description:
-        '官方 interact_by_dsl 不收的几条预览命令（它报 unsupported command，2026-11-14 实测），走编辑器内置 Agent 自己的预览命令：touch_move（按住时移动到 x, y，0–1，配合官方 touch_down / touch_up 做拖动轨迹）、seek_to_time（把预览视频跳到 time_ms 并继续播放，用来在固定时刻截图）、switch_gesture_video（换成编辑器给某个手势配好的预览视频并暂停，hand_action 取 Victory、OK、ThumbUp、HeartA、Fist、HandOpen、Namaste、Pistol、DoubleHand 等，以 PreviewResources.json 里配了 handAction 的条目为准，返回 captureTimesMs 是这个手势最清楚的时刻）。按顺序执行，遇到失败停下，每条返回 status。',
+      keywords: '预览 交互 拖动 手势 preview actions',
+      description: 'Preview commands the official interact_by_dsl refuses (unsupported command, measured 2026-11-14), via the editor built-in Agent: touch_move (move while held to x, y in 0–1 — pair with official touch_down / touch_up for drag paths), seek_to_time (jump the preview video to time_ms and keep playing — shoot at fixed moments), switch_gesture_video (switch to the editor video configured for a hand gesture and pause; hand_action among Victory, OK, ThumbUp, HeartA, Fist, HandOpen, Namaste, Pistol, DoubleHand — whichever PreviewResources.json configures with handAction; captureTimesMs is when the gesture is clearest). Runs in order, stops at the first failure, one status each.',
       shape: {
         ...target,
         commands: z
@@ -2621,14 +2811,17 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai_vfx_submit',
+      keywords: 'AI 生成 画面 特效 ai vfx',
       description:
-        '素材库「AI 生成 › 画面特效」（9.8.3 新增）：按描述 prompt 和参考素材（最多 10 张图片、1 段视频，视频最长 60 秒，超过编辑器会截取）在云端生成 1–10 秒的全屏画面特效，返回 task_id；任务走面板自己的 AIVisualEffectManager，面板里同样能看到。prompt 和参考素材至少给一样。参考视频要先过编辑器的上传审核（最长约 15 分钟），审核不过报 AI_VFX_REFERENCE_REJECTED。同时最多 10 个任务在跑。之后用 ai_vfx_tasks（task_id + wait_s）等它完成，看预览视频和 6 帧预览图，满意再 ai_vfx_import。会占用账号的 AI 模型使用次数，编辑器里查不到剩余次数。',
+        'Generate a full-screen visual effect (new in 9.8.3, the 「AI 生成 › 画面特效」 library panel): from prompt and reference assets (≤10 images, 1 video, video ≤60 s — the editor truncates longer) in the cloud, returning task_id; the task runs in the panel own AIVisualEffectManager, equally visible there. prompt and reference assets: at least one.\n\n' +
+        'The reference video first goes through the editor upload review (up to ~15 min); a failure reports AI_VFX_REFERENCE_REJECTED. Up to 10 tasks running at once. Consumes the account AI model usage; the editor gives no signal on remaining quota.\n\n' +
+        'Next: ai_vfx_tasks (task_id + wait_s) to wait, preview the video and 6-frame grid, then ai_vfx_import when happy.',
       shape: {
         ...target,
-        prompt: z.string().optional().describe('特效描述，如「从画面中心扩散出金色粒子光环，带一点胶片颗粒」。'),
-        reference_images: z.array(absPath('参考图')).max(10).optional().describe('参考图（PNG / JPG / JPEG）。'),
-        reference_video: absPath('参考视频').optional().describe('参考视频（MP4 / MOV）。'),
-        duration_s: z.number().int().min(1).max(10).optional().describe('时长（秒），默认 5。'),
+        prompt: z.string().optional().describe('Effect description, such as 「从画面中心扩散出金色粒子光环，带一点胶片颗粒」.'),
+        reference_images: z.array(absPath('参考图')).max(10).optional().describe('Reference images (PNG / JPG / JPEG).'),
+        reference_video: absPath('参考视频').optional().describe('Reference video (MP4 / MOV).'),
+        duration_s: z.number().int().min(1).max(10).optional().describe('Duration (s), default 5.'),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -2637,13 +2830,15 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai_vfx_tasks',
-      description: `素材库「画面特效」的生成任务（当前账号，与面板的生成记录同一份），最新的在前。不传 task_id 时按 offset / count 分页列出，带当前限制 limits；传 task_id 时只查这一个，再给 wait_s 就等到它不再生成中（最多 ${AI_VFX_MAX_WAIT_S} 秒）。status：running、succeeded（可导入）、imported、failed / audit_failed（failure 是编辑器给的原因）、canceled。完成的带本机的预览视频 preview_video_file（特效叠在编辑器的样例模特上）和一张横排 6 帧的预览图 preview_image_file（交给 image_view 看）。`,
+      keywords: '画面 特效 任务 ai vfx tasks',
+      description: `Generation tasks of the 「画面特效」 library panel (this account, the same as the panel task list), newest first. Without task_id, paged by offset / count, with the current limits limits; with task_id, only this one, waiting up to wait_s for it to finish (max ${AI_VFX_MAX_WAIT_S} s).\n\n` +
+        'status: running, succeeded (importable), imported, failed / audit_failed (failure = the editor reason), canceled. Succeeded tasks carry the local preview video preview_video_file (the effect laid on the editor sample model) and a 6-frame horizontal preview grid preview_image_file (hand to image_view).',
       shape: {
         ...target,
-        task_id: z.string().min(1).optional(),
-        wait_s: z.number().int().min(0).max(AI_VFX_MAX_WAIT_S).optional(),
-        offset: z.number().int().min(0).optional(),
-        count: z.number().int().min(1).max(20).optional(),
+        task_id: z.string().min(1).optional().describe('A task_id from ai_vfx_submit / ai_vfx_tasks.'),
+        wait_s: z.number().int().min(0).max(AI_VFX_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
+        count: z.number().int().min(1).max(20).optional().describe('Items per page, default 20.'),
       },
       run: async (a) => {
         const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
@@ -2655,14 +2850,16 @@ export function createServer(deps = {}) {
     },
     {
       name: 'ai_vfx_import',
-      description: '把一个 succeeded 的画面特效任务导入目标工程，等同面板里选中它后点「导入」：下载生成的特效包（ae2sg_export），按编辑器的方式转成表面图（Surface Graph）和材质导入工程，预览随即重载。返回 added_objects、package_folders。之后用 preview_frames 验收，save_project。',
-      shape: { ...target, task_id: z.string().min(1).describe('ai_vfx_submit / ai_vfx_tasks 返回的 task_id（须 succeeded 或 imported）。') },
+      keywords: '画面 特效 导入 ai vfx import',
+      description: 'Import a succeeded visual effect task into the target project — selecting it in the library panel and clicking 「导入」: the generated effect package (ae2sg_export) is converted to a Surface Graph and materials, imported, and the preview reloads. Returns added_objects, package_folders. Then preview_frames to verify, save_project.',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from ai_vfx_submit / ai_vfx_tasks (succeeded or imported).') },
       run: plugin('ai_vfx_import', 300000),
     },
     {
       name: 'ai_vfx_cancel',
-      description: '取消一个还在生成的画面特效任务，等同面板里的「取消」。取消没得到确认时编辑器会继续查询它的状态，返回 cancelled=false 和当前状态。',
-      shape: { ...target, task_id: z.string().min(1) },
+      keywords: '画面 特效 取消 ai vfx cancel',
+      description: 'Cancel a visual effect task still generating — the library panel 「取消」. When the cancel is not confirmed, the editor keeps polling and returns cancelled=false with the current status.',
+      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
         return text(await d.callPlugin('ai_vfx_cancel', { task_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
@@ -2670,17 +2867,21 @@ export function createServer(deps = {}) {
     },
     {
       name: 'custom_gan_styles',
+      keywords: '实时变脸 风格 次数 custom gan',
       description:
-        '素材库「AI 生成 › 实时变脸」（自己训练 AI 实时变脸）的风格和今天剩余的训练次数 quota：全身换装（一张全身服装参考图）、真人搞怪（脸部参考图，要从候选效果图里挑满 30 张再训练，flow=select_30）、表情迁移、真人美化（脸部参考图，预览满意直接训练，flow=direct），每种带参考图建议和预计训练时长（3–12 小时）。流程：custom_gan_submit 生成预览（不消耗训练次数）→ custom_gan_tasks 看男女两张预览图 → custom_gan_train 训练（消耗 1 次）→ 训练完 custom_gan_import 导入工程。',
+        "The 「AI 生成 › 实时变脸」 library panel (train your own AI live face): styles and today's remaining training quota quota. 全身换装 (one full-body outfit reference image), 真人搞怪 (face reference; pick 30 of the candidate images before training, flow=select_30), 表情迁移, 真人美化 (face reference; train straight from the preview, flow=direct) — each with reference-image advice and estimated training time (3–12 h).\n\n" +
+        'Flow: custom_gan_submit generates the preview (no quota) → custom_gan_tasks watches the male/female previews → custom_gan_train trains (1 quota) → custom_gan_import imports into the project.',
       shape: { ...target },
       run: async ({ project_path, instance_id }) => text(await d.callPlugin('custom_gan_styles', {}, await homeWindow({ project_path, instance_id }))),
     },
     {
       name: 'custom_gan_submit',
-      description: '「实时变脸」第一步「生成」：上传一张参考图（PNG / JPG / JPEG，不超过 10 MB，主体清晰无遮挡），按风格在云端生成编辑器样例男女脸上的预览，返回 task_id；不消耗训练次数。面板同时只允许一个预览在生成，有在跑的报 CUSTOM_GAN_RUNNING。之后 custom_gan_tasks（task_id + wait_s）等预览完成。',
+      keywords: '实时变脸 生成 预览 custom gan submit',
+      description: "「实时变脸」 step 1 「生成」: one reference image (PNG / JPG / JPEG, ≤10 MB, subject clear and unobstructed), the cloud generates editor sample previews on male and female faces by style, returning task_id; no training quota spent.\n\n" +
+        'The panel allows one preview at a time; a running one reports CUSTOM_GAN_RUNNING. Next: custom_gan_tasks (task_id + wait_s).',
       shape: {
         ...target,
-        style: z.string().min(1).describe('风格名或 preset，取 custom_gan_styles 的 style / preset（如「表情迁移」或 emotions）。'),
+        style: z.string().min(1).describe('Style name or preset, from custom_gan_styles style / preset (e.g. 「表情迁移」 or emotions).'),
         image_path: absPath('参考图'),
       },
       run: async (a) => {
@@ -2690,6 +2891,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'custom_gan_tasks',
+      keywords: '实时变脸 任务 记录 custom gan tasks',
       refs: true,
       description: `「实时变脸」的任务（当前账号，与面板的记录同一份），最新的在前。每条有 stage：preview（预览，完成后带男女预览图 female_image_ref / male_image_ref）、select（真人搞怪的候选效果图：candidates 每张的 index、image_ref、是否已选）、train（训练中或训练完，完成的带男女预览视频 video_female_ref / video_male_ref、模型是否已下载到本机）；status 是 running / finished / failed / discarded。传 task_id 时只查这一个，再给 wait_s 就等到它不再 running（最多 ${CUSTOM_GAN_MAX_WAIT_S} 秒；训练要几个小时，隔一段时间再查）。`,
       shape: {
@@ -2709,11 +2911,12 @@ export function createServer(deps = {}) {
     },
     {
       name: 'custom_gan_train',
-      description: `「实时变脸」训练，等同面板的「去训练」（会消耗 1 次当天的训练次数，次数用完报 CUSTOM_GAN_NO_QUOTA；调用前先和用户确认预览图满意）。表情迁移、真人美化、全身换装：预览完成后直接训练。真人搞怪（preset fun）分两步，和面板一样：先不带 selected 调用，生成候选效果图（不消耗次数）；等 custom_gan_tasks 里 stage=select 完成后，挑满 ${CUSTOM_GAN_SELECT_COUNT} 张，把 index 传给 selected 再调用一次，正式训练。训练要 3–12 小时，用 custom_gan_tasks 隔段时间看。`,
+      keywords: '实时变脸 训练 custom gan train',
+      description: "「实时变脸」 training — the panel 「去训练」 (consumes 1 of the day's training quota, exhausted reports CUSTOM_GAN_NO_QUOTA; confirm the preview with the user before training). 表情迁移, 真人美化, 全身换装: train straight after the preview. 真人搞怪 (preset fun): two steps, like the panel — first call without selected, generate candidate images (no quota); once custom_gan_tasks reports stage=select done, pick 30, pass the indices to selected, and train for real. Training takes 3–12 h, check back over time.",
       shape: {
         ...target,
         task_id: z.string().min(1),
-        selected: z.array(z.number().int().min(0)).length(CUSTOM_GAN_SELECT_COUNT).optional().describe(`真人搞怪：挑中的 ${CUSTOM_GAN_SELECT_COUNT} 张候选图的 index。`),
+        selected: z.array(z.number().int().min(0)).length(CUSTOM_GAN_SELECT_COUNT).optional().describe(`真人搞怪: indexes of the ${CUSTOM_GAN_SELECT_COUNT} candidate images picked.`),
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
@@ -2722,20 +2925,24 @@ export function createServer(deps = {}) {
     },
     {
       name: 'custom_gan_import',
-      description: '把训练完成的「实时变脸」模型导入目标工程，等同面板勾选它后点「导入」：先下载模型文件和男女预览视频（与面板训练完成卡片一样），再按 AI 实时变脸素材导入并放进场景（可撤销）。返回 added_objects、package_folders 和预览视频路径。帧率提醒：AI 实时变脸是特效检测里固定的大头开销。',
-      shape: { ...target, task_id: z.string().min(1) },
+      keywords: '实时变脸 导入 模型 custom gan import',
+      description: 'Import a trained 「实时变脸」 model into the target project — selecting it in the library panel and clicking 「导入」: downloads the model files and male/female preview videos (like the panel training-completed card), then imports them as AI live face assets into the scene (undoable). Returns added_objects, package_folders, preview video paths.\n\n' +
+        'Frame-rate note: AI live face is the fixed large cost of effect detection.',
+      shape: { ...target, task_id: z.string().min(1).describe('A task_id from custom_gan_train / custom_gan_tasks (succeeded or imported).') },
       run: plugin('custom_gan_import', CUSTOM_GAN_IMPORT_TIMEOUT_MS),
     },
     {
       name: 'image_upscale',
-      description: '图片超清，和编辑器图片编辑器的「超清」按钮同一个云端请求（不打开窗口）：返回放大后的 PNG（存到 out_dir 或临时目录）和一张缩小的预览。用来把小图、截帧放大做图标或贴图。是否扣额度以编辑器为准，编辑器里没有相关提示。',
-      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG。'), out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。') },
+      keywords: '图片 超清 放大 image upscale',
+      description: 'Image upscale — the same cloud request as the editor image editor 「超清」 button (no editor window): returns the upscaled PNG (saved to out_dir or temp dir) and a downsized preview. For upscaling small images and frame grabs into icons or stickers. Whether it spends quota is up to the editor; the editor gives no signal.',
+      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG.'), out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).') },
       run: async (a) => imageAi(a, 'image_upscale', {}, 'upscaled'),
     },
     {
       name: 'image_repaint',
-      description:
-        '图片局部消除 / 重绘，和编辑器图片编辑器的「消除笔」「局部重绘」同一个云端请求（不打开窗口）：用 mask（一张图，亮且不透明的地方是要改的区域，自动拉伸到原图大小）或 boxes（按原图比例的矩形）标出区域，本工具按编辑器的方式把区域涂成绿色棋盘格再提交。不给 prompt 是「消除」（把区域里的东西去掉、补背景），给 prompt 是「重绘」（按描述画区域里的内容）。返回结果 PNG、标记后的提交图 marked_file 和预览。',
+      keywords: '图片 消除 重绘 inpaint repaint',
+      description: 'Image inpaint / repaint — the same cloud request as the editor image editor 「消除笔」 / 「局部重绘」 buttons (no editor window): mark the area with mask (an image; bright and opaque where to change, auto-stretched to the original size) or boxes (rectangles as fractions of the original); the area is painted green checkerboard and submitted, the editor way.\n\n' +
+        'No prompt = 「消除」 (remove what is there, fill the background); with prompt = 「重绘」 (paint the area by the description). Returns the result PNG, the marked submission image marked_file, and a preview.',
       shape: {
         ...target,
         image_path: absPath('图片'),
@@ -2744,8 +2951,8 @@ export function createServer(deps = {}) {
           .array(z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
           .max(20)
           .optional(),
-        prompt: z.string().optional().describe('重绘的描述；省略时为消除。'),
-        out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。'),
+        prompt: z.string().optional().describe('Repaint description; omitted = 「消除」.'),
+        out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).'),
       },
       run: async (a) => {
         if (!a.mask && !a.boxes?.length) throw Error('INVALID_ARGUMENTS: mark the area with mask or boxes');
@@ -2760,8 +2967,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'image_matting',
-      description: `AI 抠图，和编辑器图片编辑器的「抠图」同一个云端请求（不打开窗口）：返回透明底的主体 subject，以及按部位分开的 ${IMAGE_MATTING_PARTS.filter((p) => p !== 'subject').join('、')}（照片里有才返回），PNG 存到 out_dir 或临时目录，附主体的预览。用来做贴纸、图标素材。`,
-      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG。'), out_dir: outDir.optional().describe('输出目录；省略时放临时目录（24 小时后删除）。') },
+      keywords: 'AI 抠图 贴纸 抠图 matting',
+      description: `AI matting — the same cloud request as the editor image editor 「抠图」 button (no editor window): returns the transparent-background subject subject, plus per-part PNGs of ${IMAGE_MATTING_PARTS.filter((p) => p !== 'subject').join('、')} (only when the photo has them), saved to out_dir or temp dir, with a preview of the subject. For stickers and icon assets.`,
+      shape: { ...target, image_path: absPath('图片'), out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).') },
       run: async (a) => {
         const { previewJpeg } = await graphics();
         const { project_path, instance_id, image_path, out_dir } = a;
@@ -2779,37 +2987,40 @@ export function createServer(deps = {}) {
     },
     {
       name: 'face_warp_list',
-      description: '列出场景里所有「塑型画笔」组件（FaceWarpX，含猫脸/狗脸），返回 object_path、是否启用、每项画笔的序号与强度。官方 edit_by_dsl 的 set_component 命令改不了画笔强度，用 face_warp_set_intensity。',
+      keywords: '塑型画笔 列表 face warp',
+      description: 'Lists every 「塑型画笔」 component (FaceWarpX, cat / dog faces included) with object_path, enabled state, and per-item brush index and intensity. The official edit_by_dsl set_component cannot write brush intensity — use face_warp_set_intensity.',
       shape: { ...target },
       run: plugin('face_warp_list'),
     },
     {
       name: 'face_warp_set_intensity',
-      description:
-        '修改「塑型画笔」强度（等同检查器强度滑块，0–100），只改强度、保留笔刷数据，可撤销。object_path 取 face_warp_list 的路径，或能唯一定位的末尾几段。省略 item_index 时改全部画笔项。',
+      keywords: '塑型画笔 强度 face warp intensity',
+      description: 'Sets 「塑型画笔」 intensity — the inspector intensity slider, 0–100 — keeping brush data, undoable. object_path from face_warp_list, or uniquely-identifying trailing segments. Omitted item_index changes every brush item.',
       shape: {
         ...target,
-        object_path: z.string().min(1).describe('face_warp_list 返回的 object_path，或能唯一定位的末尾几段。'),
-        intensity: z.number().min(0).max(100).describe('强度，0–100。'),
-        item_index: z.number().int().min(0).optional().describe('只改某一项画笔；省略时改全部。'),
+        object_path: z.string().min(1).describe('object_path from face_warp_list, or uniquely-identifying trailing segments.'),
+        intensity: z.number().min(0).max(100).describe('Intensity, 0–100.'),
+        item_index: z.number().int().min(0).optional().describe('Change only this brush item; omitted, all.'),
       },
       run: plugin('face_warp_set_intensity'),
     },
     {
       name: 'object_remove',
-      description:
-        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 edit_by_dsl 的 delete_render_group 命令）。只删对象、不关心资源时官方 edit_by_dsl 也能删；要知道删完哪些资源没人用了，用本工具。',
+      keywords: '删除 对象 资源 object remove',
+      description: 'Delete a scene object (children included, undoable) and find the resources only it used: scene references are diffed before and after; anything referenced before and not after is an orphan (unused_paths, folded into package folders, disk paths only). editor_only_paths are folders the editor created per object name when the asset was placed (e.g. 「复古清冷_滤镜」) — editor-only, not yet on disk, gone at the next save; nothing to delete. delete_unused_resources=true also deletes unused_paths (resource deletion is not undoable); default reports only, delete later with resource_delete_unused.\n\n' +
+        'object_path: full hierarchical path or uniquely-identifying trailing segments. Render groups themselves: the official edit_by_dsl delete_render_group command. Just deleting, no resource accounting: official edit_by_dsl works too — use this tool when you need to know what becomes orphaned.',
       shape: {
         ...target,
-        object_path: z.string().min(1).describe('对象的层级路径，如「面部拉伸/小屁桃_美型」，或能唯一定位的末尾几段。'),
-        delete_unused_resources: z.boolean().optional().describe('同时删除孤儿资源，默认 false（只报告）。'),
+        object_path: z.string().min(1).describe('Hierarchical path of the object, such as 「面部拉伸/小屁桃_美型」, or uniquely-identifying trailing segments.'),
+        delete_unused_resources: z.boolean().optional().describe('Also delete the orphan resources, default false (report only).'),
       },
       run: plugin('object_remove'),
     },
     {
       name: 'resource_delete_unused',
-      description: '删除 object_remove 报告的 unused_paths（工程内相对路径的资源或素材包文件夹）。删除前再次核对：当前场景仍在引用的一律拒绝。资源删除不可撤销。',
-      shape: { ...target, paths: z.array(z.string().min(1)).min(1).describe('object_remove 返回的 unused_paths。') },
+      keywords: '删除 资源 孤儿 resource unused',
+      description: 'Delete the unused_paths reported by object_remove (project-relative resource or package-folder paths). Re-checked before deleting: anything still referenced by the scene is refused. Resource deletion is not undoable.',
+      shape: { ...target, paths: z.array(z.string().min(1)).min(1).describe('unused_paths from object_remove.') },
       run: plugin('resource_delete_unused'),
     },
   ];
@@ -2937,15 +3148,16 @@ export function createServer(deps = {}) {
     const note = status.connected ? '' : '；官方 MCP 当前未连接，查官方工具请先启动像塑';
     return failure(`UNKNOWN_TOOL(${name}): 用 tool_search 查可用工具${note}`);
   };
-  const toolName = z.string().trim().min(1).describe('原工具名，可从 tool_search 取得。');
+  const toolName = z.string().trim().min(1).describe('Original tool name, as found by tool_search.');
   const catalog = new Map((flatTools ? [] : [
     {
       name: 'tool_search',
-      description: '按中文或英文关键词查找像塑官方和扩展工具。结果只有名字和摘要，每页 12 项。用 tool_describe 查完整说明和参数，再用 tool_call 调用。',
+      keywords: '查找 工具 搜索 tool search',
+      description: 'Find Xiangsu official and extension tools by keyword (Chinese or English). Results are names and one-line summaries, 12 per page. Get full parameters with tool_describe, then call via tool_call.',
       annotations: { readOnlyHint: true, openWorldHint: false },
       schema: z.strictObject({
-        query: z.string().trim().min(1).optional().describe('工具名或用途关键词，如「素材库」「工作流」「library apply」。省略时分页浏览。'),
-        offset: z.number().int().min(0).optional().describe('翻页时传上一次的 next_offset，首次省略。'),
+        query: z.string().trim().min(1).optional().describe('Keyword by tool name or purpose, such as 「素材库」, 「工作流」, or "library apply". Omit to page through everything.'),
+        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset, first call omitted.'),
       }),
       run: async ({ query, offset }) => {
         const official = await listOfficial();
@@ -2956,7 +3168,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'tool_describe',
-      description: '按原工具名取完整用法和参数 JSON Schema。把参数对象交给 tool_call 的 arguments。',
+      keywords: '工具 参数 说明 tool describe',
+      description: 'Full usage and parameter JSON Schema for one tool, by original name. Put the parameter object into tool_call arguments.',
       annotations: { readOnlyHint: true, openWorldHint: false },
       schema: z.strictObject({ name: toolName }),
       run: async ({ name }) => {
@@ -2968,10 +3181,11 @@ export function createServer(deps = {}) {
     },
     {
       name: 'tool_call',
-      description: '按原工具名调用像塑工具，返回原工具结果。通过 tool_describe 查参数，将参数对象放在 arguments 中。',
+      keywords: '调用 工具 tool call',
+      description: 'Call a Xiangsu tool by its original name and get its original result. Look parameters up with tool_describe and pass them as arguments.',
       schema: z.strictObject({
         name: toolName,
-        arguments: z.record(z.string(), z.unknown()).optional().describe('原工具的参数对象。'),
+        arguments: z.record(z.string(), z.unknown()).optional().describe('The original tool parameter object.'),
       }),
       run: async ({ name, arguments: args = {} }) => {
         if (!own.has(name) && !await findOfficial(name)) return unknownTool(name);

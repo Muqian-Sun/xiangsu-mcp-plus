@@ -43,22 +43,31 @@ function expandQuery(query) {
   return normalize(q);
 }
 
+function searchableOf(tool) {
+  // The keywords again with all whitespace stripped, so compound queries typed without spaces
+  // (「抖音热榜」, "AI妆容") still hit spaced keywords (「抖音 热榜」, "AI 妆容").
+  const kw = tool.keywords ?? '';
+  return normalize([tool.name, tool.title, tool.description, kw, kw.replace(/\s+/gu, '')].join(' '));
+}
+
 function rank(tool, query, words) {
   const name = normalize(tool.name);
   if (!query || name === query) return 0;
   if (name.startsWith(query)) return 1;
   if (words.every((word) => name.includes(word))) return 2;
-  const searchable = normalize([tool.name, tool.title, tool.description].join(' '));
+  const searchable = searchableOf(tool);
   return words.every((word) => searchable.includes(word)) ? 3 : null;
 }
 
 function tokenHits(tool, words) {
-  const searchable = normalize([tool.name, tool.title, tool.description].join(' '));
+  const searchable = searchableOf(tool);
   return words.reduce((n, word) => n + (searchable.includes(word) ? 1 : 0), 0);
 }
 
+// Sentences end at CJK marks, ASCII marks, or a dot followed by whitespace/end (so "9.8.3" and
+// "xiangsu.muqian.chat" stay whole; descriptions avoid "e.g." so a split never lands mid-word).
 function summarize(tool) {
-  const firstLine = (tool.description?.trim() || tool.title || '').split(/[。！？\n\r]/u, 1)[0];
+  const firstLine = (tool.description?.trim() || tool.title || '').split(/[。！？!?]|\.(?=\s|$)|\n\r|\n/u, 1)[0];
   const chars = Array.from(firstLine);
   return chars.length > SUMMARY_CHARS ? `${chars.slice(0, SUMMARY_CHARS).join('').trimEnd()}…` : firstLine;
 }
@@ -95,5 +104,5 @@ export function withHiddenToolHints(description, { self, knownNames }) {
     .filter((name) => new RegExp(`(?<![A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`).test(description))
     .sort();
   if (!mentioned.length) return description;
-  return `${description}（注：文中提到的 ${mentioned.join('、')} 不在默认直调清单内，调用前先用 tool_describe 查参数，再经 tool_call 调用）`;
+  return `${description} (Note: ${mentioned.join(', ')} are not in the default direct-call set; look up their parameters with tool_describe, then call them via tool_call)`;
 }
