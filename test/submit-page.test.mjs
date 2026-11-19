@@ -55,6 +55,9 @@ function fakePage(options = {}) {
     answer: true,
     extraBasic: '',
     extraSettings: '',
+    // Measured 2026-11-19 on Douyin AR 9.8.3 DYEHEffectSubmissionWindow: 'none' | 'available' | 'checked' | 'disabled' | 'stuck'
+    pickNomination: 'none',
+    pickRemaining: 1,
     ...options,
   };
   const steps = o.settingsStep ? ['特效基础信息', '特效发布设置', '提交审核'] : ['特效基础信息', '提交审核'];
@@ -62,6 +65,10 @@ function fakePage(options = {}) {
   const input = (cls, t, placeholder) => `<div class="${cls}">${title(t)}<div class="input-wrapper"><input placeholder="${placeholder}" value=""><div class="item-counter">0/10</div><div class="text-err"></div></div></div>`;
   const selector = (id, t, text, search) =>
     `<div class="bind-wrapper" id="${id}">${title(t)}<div class="selector-container" tabindex="-1"><div class="selector-input"><div class="text">${text}</div></div><div class="selector-list hidden"><div class="dropdown-container">${search ? '<div class="search-container"><input class="search-input" type="text" value=""></div>' : ''}<div class="favor-list"></div></div></div></div></div>`;
+  const pickHtml =
+    o.pickNomination === 'none'
+      ? ''
+      : `<div class="innovation-wrapper"><div class="innovation-header"><div class="innovation-title">精选提报</div><div class="innovation-check"><div class="innovation-check-box-wrapper"><div class="custom-checkbox${o.pickNomination === 'checked' ? ' checked' : ''}${o.pickNomination === 'disabled' ? ' disabled' : ''}"></div></div></div></div><div class="innovation-main"><span class="innovation-content">每日有${o.pickRemaining}次提报精选的机会，被评为精选可获得 </span><span class="innovation-highlight">50元现金、15%加权激励 </span><span class="innovation-content">等。</span><span class="innovation-detail">查看审核标准</span></div></div>`;
   const html = `<!doctype html><html><body><div id="root"><div class="submit-wrap">
 <header class="nav-wrap">${steps.map((s, i) => `<div class="nav-item${i === 0 ? ' active' : ''}"><div class="nav-item-text">${s}</div></div>`).join('')}</header>
 <main><div class="content show"><div class="content-left">
@@ -70,7 +77,7 @@ function fakePage(options = {}) {
 <div class="default-camera-wrapper">${title('默认摄像头方向')}<div class="radio-wrapper"><label class="semi-radio semi-radio-checked"><span>前置</span></label><label class="semi-radio"><span>后置</span></label></div></div>
 ${input('name-wrapper', '特效名称', '示例：纯色海报')}${input('trigger-wrapper', '特效触发提示', '非必填项')}${o.extraBasic}
 </div>
-${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp', '灵感绑定', '选择收藏的灵感或热点', true)}${selector('task', '任务绑定', '选择任务', false)}${o.extraSettings}</div>` : ''}
+${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp', '灵感绑定', '选择收藏的灵感或热点', true)}${selector('task', '任务绑定', '选择任务', false)}${pickHtml}${o.extraSettings}</div>` : ''}
 </div></div>
 <div class="publish-wrap" style="display: none;"><div class="submit-title"><h1>特效审核中</h1></div><div class="effect-content"></div><div class="effect-test-container"></div></div>
 </main>
@@ -87,6 +94,13 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   window.performance.getEntriesByType = (type) => (type === 'resource' ? requests.slice() : []);
   let trickle = o.trickle ? window.setInterval(() => requests.push({ name: 'https://log' }), 15) : null;
   const name = $('.name-wrapper input');
+  const pickBox = $('.innovation-wrapper .custom-checkbox');
+  if (pickBox) {
+    pickBox.addEventListener('click', () => {
+      if (o.pickNomination === 'disabled' || o.pickNomination === 'stuck') return;
+      pickBox.classList.toggle('checked');
+    });
+  }
   window.setTimeout(() => {
     requests.push({ name: o.configUrl });
     window.clearInterval(trickle);
@@ -558,4 +572,45 @@ test('submit_confirm needs exactly one open submit window, and refuses one alrea
   assert.match(out.close_error, /WINDOW_NOT_CLOSED/);
   await assert.rejects(stuck.lib.submitConfirm({ name: fill.name }), /SUBMIT_ALREADY_DONE/);
   assert.equal(stuck.page.stats.presses, 1);
+});
+
+test('submit_prepare supports pick_nomination: tick, untick, omit, unavailable, exhausted, and not applied', async () => {
+  // 1. LV3+ available & pick_nomination: true
+  const avail = editor(fakePage({ pickNomination: 'available', pickRemaining: 1 }));
+  const ticked = await avail.lib.submitPrepare({ name: '精选测试', pick_nomination: true });
+  assert.deepEqual(ticked.pick_nomination, {
+    available: true,
+    checked: true,
+    remaining: 1,
+    disabled: false,
+    text: '每日有1次提报精选的机会，被评为精选可获得 50元现金、15%加权激励 等。查看审核标准',
+  });
+  await avail.lib.submitClose();
+
+  // 2. Already checked & pick_nomination: false unticks it
+  const checked = editor(fakePage({ pickNomination: 'checked' }));
+  const unticked = await checked.lib.submitPrepare({ name: '精选测试', pick_nomination: false });
+  assert.equal(unticked.pick_nomination.checked, false);
+  await checked.lib.submitClose();
+
+  // 3. Omitted pick_nomination leaves checked state untouched
+  const keep = editor(fakePage({ pickNomination: 'checked' }));
+  const kept = await keep.lib.submitPrepare({ name: '精选测试' });
+  assert.equal(kept.pick_nomination.checked, true);
+  await keep.lib.submitClose();
+
+  // 4. Non-LV3+ (no section) + pick_nomination: true -> UNAVAILABLE
+  const nonLv3 = editor(fakePage({ pickNomination: 'none' }));
+  await assert.rejects(nonLv3.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+  await nonLv3.lib.submitClose();
+
+  // 5. Disabled / quota exhausted + pick_nomination: true -> EXHAUSTED
+  const exhausted = editor(fakePage({ pickNomination: 'disabled', pickRemaining: 1 }));
+  await assert.rejects(exhausted.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_EXHAUSTED/);
+  await exhausted.lib.submitClose();
+
+  // 6. Click ignored / reset by page -> NOT_APPLIED
+  const stuck = editor(fakePage({ pickNomination: 'stuck' }));
+  await assert.rejects(stuck.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_NOT_APPLIED/);
+  await stuck.lib.submitClose();
 });

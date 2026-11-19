@@ -40,6 +40,8 @@ const INTENT_SYNONYMS = [
   [/手势|手部|追踪|全身|AR|平面|扫图/gu, 'HandTrackerDYEH Hand3dAvatarDriveJSLeft BodyTracking FullBodyAvatar PlaneAR TargetTrackingJS ARTracking'],
   [/后处理|滤镜|闪光|发光|模糊|暗角|胶片|转场/gu, 'FilterV2 hierarchy_posteffect BlingV2 Bloom ChromaticAberraion Distort Grain Vignette BokehBlur MotionBlur LensFlare Transition'],
   [/3d|模型|高斯|点云|动作迁移|骨骼/gu, 'ThreeDModel HeadMesh FaceShapeV2 GSplatEntity ai3d'],
+  [/对话|聊天|识图|点评|配文|LLM|万物识别|识物/gu, 'AIChat AIImageCaption AIObjectLens AIDraw AIVideo Audio_AIMusic'],
+  [/花字|歌词|时间轴|关键帧|卡点/gu, 'text_template timeline TimelinePlayer Lyrics'],
 ];
 
 // Built-in baseline taxonomy (mirrors Xiangsu 9.8.3 add-object menu + AI pipelines) used only when
@@ -134,6 +136,12 @@ const BASELINE_MENU = [
   { menu_id: 'old', name: '变老', path: 'AIEffectMenu/年龄性别', kind: 'package' },
   { menu_id: 'child', name: '变小孩', path: 'AIEffectMenu/年龄性别', kind: 'package' },
   { menu_id: 'fatten', name: '发胖', path: 'AIEffectMenu/面部生成', kind: 'package' },
+  { menu_id: 'AIChat', name: 'AI对话', path: 'AIEffectMenu', kind: 'builtin' },
+  { menu_id: 'AIImageCaption', name: 'AI识图配文', path: 'AIEffectMenu', kind: 'builtin' },
+  { menu_id: 'AIObjectLens', name: 'AI万物识别', path: 'AIEffectMenu', kind: 'builtin' },
+  { menu_id: 'AIDraw', name: 'AI绘画', path: 'AIEffectMenu', kind: 'builtin' },
+  { menu_id: 'AIVideo', name: 'AI视频', path: 'AIEffectMenu', kind: 'builtin' },
+  { menu_id: 'Audio_AIMusic', name: 'AI音乐', path: 'AIEffectMenu', kind: 'builtin' },
   // Social / Interactive
   { menu_id: 'TwoDFingerDrawingEntity', name: '2D手指涂鸦', path: 'Social', kind: 'builtin' },
   { menu_id: 'GameRankingListJS', name: '游戏排行榜', path: 'Social', kind: 'builtin' },
@@ -195,6 +203,8 @@ const FUNCTION_MAPPINGS = [
   { match: /AR平面|平面跟踪|3D/i, menu_ids: ['PlaneAR', 'TargetTrackingJS', 'HeadMesh', 'GSplatEntity'], tool: 'menu_add / ai3d', note: 'AR 平面/图像跟踪，3D 模型可用 library_search 或 ai3d' },
   { match: /2D|贴纸|图片|前景|文字/i, menu_ids: ['ScreenImageEntity', 'ScreenTextJS', 'Mask'], tool: 'menu_add / library_search / ui_text_image', note: '2D 前景贴图、文字和遮罩' },
   { match: /排行|打卡|倒计时|天气|POI/i, menu_ids: ['GameRankingListJS', 'CheckinRankingListJS', 'CountDown', 'WeatherCardEntity', 'POIEntityCity'], tool: 'menu_add', note: '内置社交/互动组件' },
+  { match: /对话|聊天|识图|配文|识物|万物识别|LLM/i, menu_ids: ['AIChat', 'AIImageCaption', 'AIObjectLens', 'AIDraw', 'AIVideo', 'Audio_AIMusic'], tool: 'menu_add', note: '原生云端 AI 互动组件（运行时联网计费）' },
+  { match: /花字|歌词|时间轴|卡点/i, menu_ids: ['TimelinePlayer'], tool: 'text_template / timeline', note: '内置动态文字/歌词模板与时间轴关键帧卡点' },
 ];
 
 export function readEditorVersion(appRoot = process.env.XIANGSU_APP ?? '/Applications/Douyin AR.app') {

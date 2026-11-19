@@ -43,6 +43,12 @@ const methods = {
     const { ai, info, categoryId } = squareParts(raw);
     if (categoryId === AIAssetCategory.AIPicture || info.subType === PublishType.AiImage) return (ai.resPictureUri || []).length ? 'ai_image' : null;
     if (categoryId === AIAssetCategory.AIMakeup || info.subType === PublishType.AiMakeup) return (ai.resMakeup || []).length ? 'ai_makeup' : null;
+    if ((AIAssetCategory.AIVideo !== undefined && categoryId === AIAssetCategory.AIVideo) || (PublishType.AiVideo !== undefined && info.subType === PublishType.AiVideo)) {
+      return info.resourceExt === resourceType.Ehpackage ? 'package' : 'ai_video';
+    }
+    if ((AIAssetCategory.AI3DModel !== undefined && categoryId === AIAssetCategory.AI3DModel) || (PublishType.Ai3dModel !== undefined && info.subType === PublishType.Ai3dModel)) {
+      return info.resourceExt === resourceType.Ehpackage ? 'package' : 'ai_3d';
+    }
     if (categoryId === AIAssetCategory.UGCGAN) return 'custom_gan';
     // Collected cards come without a category, and the card then goes by whichever square category the
     // user last opened; their AI results still say what they are.
@@ -65,6 +71,32 @@ const methods = {
     return raw.panelKey === SQUARE_PANEL ? this.squareKind(raw) : 'package';
   },
 
+  squareUnsupportedReason(raw) {
+    const { AIAssetCategory } = this.mod(M.aiConst);
+    const { PublishType } = this.mod(M.publish);
+    const { resourceType } = this.mod(M.resourceTypes);
+    const { ai, info, categoryId } = squareParts(raw);
+    if (categoryId === AIAssetCategory.AIPicture || info.subType === PublishType.AiImage) return 'empty_ai_image';
+    if (categoryId === AIAssetCategory.AIMakeup || info.subType === PublishType.AiMakeup) return 'empty_ai_makeup';
+    if (info.subType !== PublishType.NormalAsset) return info.subType !== undefined ? `subType:${info.subType}` : 'missing_subType';
+    const picture = info.resourceExt === resourceType.Picture;
+    if (info.resourceExt !== resourceType.Ehpackage && !picture && info.resourceExt !== resourceType.Gif) {
+      return `unsupported_resourceExt:${info.resourceExt || 'unknown'}`;
+    }
+    return `unsupported_assetType:${info.resourceExt}:${info.assetType || 'unknown'}`;
+  },
+
+  unsupportedReasons(items) {
+    const counts = {};
+    for (const it of items) {
+      if (!it || !it.templateId) continue;
+      if (this.assetKind(it) !== null) continue;
+      const reason = this.squareUnsupportedReason(it);
+      counts[reason] = (counts[reason] || 0) + 1;
+    }
+    return counts;
+  },
+
   async squareList({ category_id, cursor = 0, count = 20 }) {
     this.ensureCompatible('square');
     const catBody = await this.mod(M.aiCategory).getAIAssetCategory({ cursor: 0, count: 50, panelKey: SQUARE_PANEL });
@@ -78,7 +110,16 @@ const methods = {
     const info = ((res.data || [])[0] || {}).dataInfos || {};
     // List records carry no category; the card's apply route depends on it, so it is filled in here.
     const raw = (info.template || []).map((t) => ({ ...t, panelKey: t.panelKey || SQUARE_PANEL, category: t.category || { categoryId: Number(catId) } }));
-    return { panel_key: SQUARE_PANEL, categories, category_id: catId, ...this.page(raw), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
+    const unsupported_reasons = this.unsupportedReasons(raw);
+    return {
+      panel_key: SQUARE_PANEL,
+      categories,
+      category_id: catId,
+      ...this.page(raw),
+      ...(Object.keys(unsupported_reasons).length ? { unsupported_reasons } : {}),
+      next_cursor: info.cursor ?? null,
+      has_more: !!info.hasNext,
+    };
   },
 
   async collectionList({ category_id, cursor }) {
@@ -98,7 +139,16 @@ const methods = {
     if (!b || b.code !== 0) throw Error(`GET_COLLECTIONS_FAILED: code=${b && b.code} message=${(b && b.message) || ''}`);
     const data = b.data || {};
     const raw = (data.categorizedCollections || []).map((c) => ({ ...(c.templateData || {}), panelKey: c.panelKey }));
-    return { panel_key: COLLECTION_PANEL, categories, category_id: dir.name, ...this.page(raw), next_cursor: data.cursor || null, has_more: !!data.hasMore };
+    const unsupported_reasons = this.unsupportedReasons(raw);
+    return {
+      panel_key: COLLECTION_PANEL,
+      categories,
+      category_id: dir.name,
+      ...this.page(raw),
+      ...(Object.keys(unsupported_reasons).length ? { unsupported_reasons } : {}),
+      next_cursor: data.cursor || null,
+      has_more: !!data.hasMore,
+    };
   },
 
   // Result images of an AI image card, as viewable URLs (the card's group picture preview).
@@ -129,8 +179,9 @@ const methods = {
     if (kind === 'ai_image' && !(Number.isInteger(index) && index >= 0 && index < uris.length)) {
       throw Error(`INVALID_IMAGE_INDEX: ${index}; this card has ${uris.length} images (0-${uris.length - 1})`);
     }
+    const { resourceType } = this.mod(M.resourceTypes);
     const ext = (asset.customized && asset.customized.realExt) || '.jpg';
-    const gif = asset.customized && asset.customized.resourceExt === this.mod(M.resourceTypes).resourceType.Gif;
+    const gif = asset.customized && asset.customized.resourceExt === resourceType.Gif;
     const before = sceneObjectSet(sceneEditor);
     const beforePaths = new Set(projectResources(project).map((r) => r.assetPath));
     if (kind === 'package') await square.applyNormalAsset(asset, !!auto_instantiate);
@@ -139,6 +190,20 @@ const methods = {
     else if (kind === 'filter') await square.applyFilterAsset(asset, ext);
     else if (kind === 'ai_image') await lib.AIAssets.AIAssetPictureCtx.onApplyAIAsset({ ...card, uriInfos: [{ uri: uris[index] }] }, asset);
     else if (kind === 'ai_makeup') await lib.AIAssets.AIAssetMakeupCtx.onApplyAIAsset({ ...card, uriInfos: asset.aiParam.resMakeup }, asset);
+    else if (kind === 'ai_video' || kind === 'ai_3d') {
+      const ctx = kind === 'ai_video'
+        ? (lib.AIAssets.AIAssetVideoCtx || lib.AIAssets.aiVideo)
+        : (lib.AIAssets.AIAsset3dCtx || lib.AIAssets.AIAsset3DCtx || lib.AIAssets.ai3d);
+      if (ctx && typeof ctx.onApplyAIAsset === 'function') {
+        await ctx.onApplyAIAsset({ ...card, uriInfos: [{ uri: '' }] }, asset);
+      } else if (typeof ctx === 'function') {
+        await ctx(asset, !!auto_instantiate);
+      } else if (asset.customized && asset.customized.resourceExt === resourceType.Ehpackage && square && typeof square.applyNormalAsset === 'function') {
+        await square.applyNormalAsset(asset, !!auto_instantiate);
+      } else {
+        throw Error(`SQUARE_APPLY_UNSUPPORTED: ${kind} template ${raw.templateId} has no apply handler`);
+      }
+    }
     else await lib.UGanManager.onApplyAIAsset({ ...card, uriInfos: [{ uri: '' }] }, asset);
     const added = kind === 'package' && !auto_instantiate ? [] : await this.waitForAdded(before, sceneEditor, raw.templateId);
     const packageFolders = packageRootsAdded(project, beforePaths);

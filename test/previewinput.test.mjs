@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 process.env.XIANGSU_MCP_PLUS_STATE = tmpdir('xs-state-');
-const { Library, M } = require('../editor-plugin/library.cjs');
+const { Library, METHODS, M } = require('../editor-plugin/library.cjs');
 
 // The editor's agent command layer as far as these tools use it: the preview, its commands, the audio
 // input service and the playthrough runtime session flag (activate / deactivate reload the preview).
@@ -32,6 +32,54 @@ function setup(opts = {}) {
       return hand === 'Victory' ? { success: true, handAction: hand, captureTimesMs: [967], paused: true } : { success: false, error: { code: 'INVALID_HAND_ACTION', message: `Unknown canonical HandAction: ${hand}` } };
     }
   }
+  const EHCommandManager = {
+    async previewDrag(x1, y1, x2, y2, steps, durationMs) {
+      calls.push(['drag', x1, y1, x2, y2, steps, durationMs]);
+      return { dragged: true };
+    },
+    async pausePreview() {
+      calls.push(['pause']);
+      return { paused: true };
+    },
+    async resumePreview() {
+      calls.push(['resumePreview']);
+      return { paused: false };
+    },
+    async transportPreviewProperty(guid, componentType, property, value) {
+      calls.push(['setProperty', guid, componentType, property, value]);
+      return { applied: true };
+    },
+    async beginHumanActionSession(sessionId) {
+      calls.push(['beginHuman', sessionId]);
+      return { sessionId };
+    },
+    async switchHumanAction(sessionId, actionId, filePath, inputType) {
+      calls.push(['switchHuman', sessionId, actionId, filePath, inputType]);
+      return { switched: true };
+    },
+    async restoreHumanActionSession(sessionId) {
+      calls.push(['restoreHuman', sessionId]);
+      return { restored: true };
+    },
+    async recordPreviewVideo(outPath, durationS) {
+      calls.push(['recordVideo', outPath, durationS]);
+      if (opts.recordFails) throw Error('RECORD_FAILED');
+      return { outPath, durationS };
+    },
+    async beginPreviewRecording(outPath, projectPath) {
+      calls.push(['beginRecording', outPath, projectPath]);
+      if (opts.startRecordFails) throw Error('START_RECORD_FAILED');
+      return { outPath, projectPath };
+    },
+    async endPreviewRecording() {
+      calls.push(['endRecording']);
+      return { stopped: true };
+    },
+    async abortPreviewRecording() {
+      calls.push(['abortRecording']);
+      return { aborted: true };
+    },
+  };
   class AgentPlayAudioInputService {
     setPlayAudioInput(id, input, ms) {
       calls.push(['audio', input, ms]);
@@ -43,8 +91,10 @@ function setup(opts = {}) {
     }
   }
   const modules = {
+    [M.ef]: { ProjectManager: { getInstance: () => ({ getActiveProject: () => ({ path: opts.projectPath ?? '/tmp/mock-project' }) }) } },
     [M.preview]: { PreviewManager: { getInstance: () => preview }, PreviewStreamState: { Playing: 0, Paused: 2 } },
     [M.ehPreview]: { EHPreviewCommand },
+    [M.ehCommandManager]: { EHCommandManager },
     [M.playAudio]: { AgentPlayAudioInputService },
     [M.playthroughRuntime]: {
       activateAgentPlaythroughRuntimeSession: async (id, reload) => {
@@ -111,4 +161,114 @@ test('preview actions run in order and stop at the first failure', async () => {
   assert.deepEqual(bad, { success: false, results: [{ command_type: 'switch_gesture_video', status: 'error', error: 'INVALID_HAND_ACTION: Unknown canonical HandAction: Nope' }] });
   assert.equal(calls.length, 4, 'nothing ran after the failure');
   await assert.rejects(lib.previewActions({ commands: [{ command_type: 'screenshot' }] }), /UNSUPPORTED_COMMAND: screenshot/);
+});
+
+test('previewActions supports drag, pause, resume, and set_preview_property with validation', async () => {
+  const { lib, calls } = setup();
+  const ok = await lib.previewActions({
+    commands: [
+      { command_type: 'drag', params: { x1: 0.1, y1: 0.2, x2: 0.8, y2: 0.9 } },
+      { command_type: 'drag', params: { x1: 0, y1: 1, x2: 0.5, y2: 0.5, steps: 20, duration_ms: 600 } },
+      { command_type: 'pause' },
+      { command_type: 'resume' },
+      {
+        command_type: 'set_preview_property',
+        params: { scene_object_guid: 'guid-1', component_type: 'Transform', property: 'position', value: [1, 2, 3] },
+      },
+    ],
+  });
+  assert.equal(ok.success, true);
+  assert.deepEqual(calls, [
+    ['drag', 0.1, 0.2, 0.8, 0.9, 10, 300],
+    ['drag', 0, 1, 0.5, 0.5, 20, 600],
+    ['pause'],
+    ['resumePreview'],
+    ['setProperty', 'guid-1', 'Transform', 'position', [1, 2, 3]],
+  ]);
+
+  const badCoord = await lib.previewActions({
+    commands: [{ command_type: 'drag', params: { x1: -0.1, y1: 0.2, x2: 0.8, y2: 0.9 } }],
+  });
+  assert.equal(badCoord.success, false);
+  assert.match(badCoord.results[0].error, /INVALID_ARGUMENTS.*x1/);
+
+  const badCoordHigh = await lib.previewActions({
+    commands: [{ command_type: 'drag', params: { x1: 0.1, y1: 0.2, x2: 1.5, y2: 0.9 } }],
+  });
+  assert.equal(badCoordHigh.success, false);
+  assert.match(badCoordHigh.results[0].error, /INVALID_ARGUMENTS.*x2/);
+
+  const badProp = await lib.previewActions({
+    commands: [{ command_type: 'set_preview_property', params: { scene_object_guid: 'guid-1', component_type: 'Transform' } }],
+  });
+  assert.equal(badProp.success, false);
+  assert.match(badProp.results[0].error, /INVALID_ARGUMENTS/);
+});
+
+test('previewActions manages human_action sessions and restore_human_action', async () => {
+  const { lib, calls } = setup();
+  const res = await lib.previewActions({
+    commands: [
+      { command_type: 'human_action', params: { action_id: 'wave', input_type: 'preview_hand' } },
+      { command_type: 'human_action', params: { file_path: '/tmp/dance.mp4', input_type: 'preview_fullbody' } },
+      { command_type: 'restore_human_action' },
+      { command_type: 'human_action', params: { action_id: 'smile', file_path: '/tmp/face.mp4', input_type: 'preview_face' } },
+    ],
+  });
+  assert.equal(res.success, true);
+  assert.deepEqual(calls, [
+    ['beginHuman', 'xiangsu-mcp-plus-human'],
+    ['switchHuman', 'xiangsu-mcp-plus-human', 'wave', undefined, 'preview_hand'],
+    ['switchHuman', 'xiangsu-mcp-plus-human', '/tmp/dance.mp4', '/tmp/dance.mp4', 'preview_fullbody'],
+    ['restoreHuman', 'xiangsu-mcp-plus-human'],
+    ['beginHuman', 'xiangsu-mcp-plus-human'],
+    ['switchHuman', 'xiangsu-mcp-plus-human', 'smile', '/tmp/face.mp4', 'preview_face'],
+  ]);
+
+  const badType = await lib.previewActions({
+    commands: [{ command_type: 'human_action', params: { action_id: 'wave', input_type: 'invalid_type' } }],
+  });
+  assert.equal(badType.success, false);
+  assert.match(badType.results[0].error, /INVALID_INPUT_TYPE: invalid_type/);
+});
+
+test('previewRecord supports record, start/stop, abort, and cleans up on error', async () => {
+  assert.equal(METHODS.preview_record, 'previewRecord');
+
+  const { lib, calls } = setup({ projectPath: '/tmp/proj-a' });
+  const recDefault = await lib.previewRecord({ action: 'record' });
+  assert.equal(recDefault.action, 'record');
+  assert.equal(recDefault.duration_s, 5);
+  assert.match(recDefault.path, /xiangsu-preview-\d+\.mp4$/);
+  assert.deepEqual(calls.at(-1), ['recordVideo', recDefault.path, 5]);
+
+  const recCustom = await lib.previewRecord({ action: 'record', duration_s: 12, save_to: '/tmp/custom.mp4' });
+  assert.equal(recCustom.path, '/tmp/custom.mp4');
+  assert.deepEqual(calls.at(-1), ['recordVideo', '/tmp/custom.mp4', 12]);
+
+  const started = await lib.previewRecord({ action: 'start', save_to: '/tmp/session.mp4' });
+  assert.equal(started.action, 'start');
+  assert.equal(started.path, '/tmp/session.mp4');
+  assert.equal(started.projectPath, '/tmp/proj-a');
+  assert.deepEqual(calls.at(-1), ['beginRecording', '/tmp/session.mp4', '/tmp/proj-a']);
+
+  const stopped = await lib.previewRecord({ action: 'stop' });
+  assert.equal(stopped.action, 'stop');
+  assert.deepEqual(calls.at(-1), ['endRecording']);
+
+  const aborted = await lib.previewRecord({ action: 'abort' });
+  assert.equal(aborted.action, 'abort');
+  assert.deepEqual(calls.at(-1), ['abortRecording']);
+
+  await assert.rejects(lib.previewRecord({ action: 'invalid' }), /INVALID_ACTION/);
+  await assert.rejects(lib.previewRecord({ action: 'record', duration_s: 0 }), /INVALID_DURATION/);
+  await assert.rejects(lib.previewRecord({ action: 'record', duration_s: 61 }), /INVALID_DURATION/);
+
+  const recErr = setup({ recordFails: true });
+  await assert.rejects(recErr.lib.previewRecord({ action: 'record', save_to: '/tmp/fail.mp4' }), /RECORD_FAILED/);
+  assert.deepEqual(recErr.calls.at(-1), ['abortRecording']);
+
+  const startErr = setup({ startRecordFails: true });
+  await assert.rejects(startErr.lib.previewRecord({ action: 'start', save_to: '/tmp/fail-start.mp4' }), /START_RECORD_FAILED/);
+  assert.deepEqual(startErr.calls.at(-1), ['abortRecording']);
 });

@@ -2,7 +2,7 @@
 // and reports when the official tool list changes so the proxy can notify its own clients.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { longFetch } from './longfetch.mjs';
 
 export const OFFICIAL_URL = process.env.XIANGSU_MCP_URL ?? 'http://127.0.0.1:17320/mcp';
@@ -14,6 +14,27 @@ export class OfficialUnreachable extends Error {}
 
 const refused = (e) => e?.cause?.code === 'ECONNREFUSED';
 const describe = (e) => `${e?.message ?? e}${e?.cause?.code ? ` (${e.cause.code})` : ''}`;
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? 'null' : stableStringify(item))).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .filter((k) => value[k] !== undefined)
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`)
+    .join(',')}}`;
+}
+
+function fingerprint(tools) {
+  return stableStringify(
+    (tools ?? []).map(({ name, description, inputSchema, annotations }) => ({
+      name,
+      description,
+      inputSchema,
+      annotations,
+    })),
+  );
+}
 
 async function defaultConnect(url) {
   const client = new Client({ name: 'xiangsu-mcp-plus', version: '0.3.0' });
@@ -38,8 +59,13 @@ export class OfficialMcp {
       this.connecting = (async () => {
         try {
           const client = await this.connectFn(this.url);
+          if (typeof client.setNotificationHandler === 'function') {
+            client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+              this.refreshTools().catch(() => {});
+            });
+          }
           const { tools } = await client.listTools();
-          const changed = JSON.stringify(tools.map((t) => t.name)) !== JSON.stringify(this.tools.map((t) => t.name));
+          const changed = fingerprint(tools) !== fingerprint(this.tools);
           this.client = client;
           this.tools = tools;
           this.lastError = null;
@@ -64,6 +90,15 @@ export class OfficialMcp {
 
   status() {
     return { url: this.url, connected: !!this.client, tools: this.tools.length, last_error: this.lastError };
+  }
+
+  async refreshTools() {
+    if (!this.client) return this.tools;
+    const { tools } = await this.client.listTools();
+    const changed = fingerprint(tools) !== fingerprint(this.tools);
+    this.tools = tools;
+    if (changed && this.onToolsChanged) this.onToolsChanged();
+    return this.tools;
   }
 
   // Cached official tools; an unreachable editor yields the last known list (empty before first contact).

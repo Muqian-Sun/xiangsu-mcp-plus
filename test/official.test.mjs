@@ -2,7 +2,7 @@ import test from 'node:test';
 import './tmp.mjs';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { OfficialMcp, OfficialUnreachable } from '../src/official.mjs';
 
 function fakeConnector(script) {
@@ -123,4 +123,67 @@ test('callJson parses text results and surfaces tool errors', async () => {
   const o = new OfficialMcp({ connect });
   assert.deepEqual(await o.callJson('good', {}), { a: 1 });
   await assert.rejects(o.callJson('bad', {}), /OFFICIAL_TOOL_ERROR\(bad\): nope/);
+});
+
+test('refreshes tools on ToolListChanged notification without disconnecting', async () => {
+  let tools = [{ name: 'get_scene', inputSchema: { type: 'object' } }];
+  let handler = null;
+  let changes = 0;
+  const o = new OfficialMcp({
+    connect: async () => ({
+      setNotificationHandler: (schema, fn) => {
+        if (schema === ToolListChangedNotificationSchema) handler = fn;
+      },
+      listTools: async () => ({ tools }),
+      callTool: async () => ({}),
+      close: async () => {},
+    }),
+    onToolsChanged: () => {
+      changes += 1;
+    },
+  });
+  assert.deepEqual((await o.listTools()).map((t) => t.name), ['get_scene']);
+  assert.equal(changes, 1);
+  assert.equal(typeof handler, 'function');
+
+  tools = [
+    { name: 'get_scene', inputSchema: { type: 'object' } },
+    { name: 'new_hot_tool', inputSchema: { type: 'object' } },
+  ];
+  handler();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual((await o.listTools()).map((t) => t.name), ['get_scene', 'new_hot_tool']);
+  assert.equal(changes, 2);
+});
+
+test('triggers onToolsChanged when tool names match but inputSchema changes, and ignores key order', async () => {
+  let step = 0;
+  let changes = 0;
+  const schemas = [
+    [{ name: 'get_scene', description: 'scene', inputSchema: { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' } } } }],
+    [{ name: 'get_scene', description: 'scene', inputSchema: { properties: { b: { type: 'number' }, a: { type: 'string' } }, type: 'object' } }],
+    [{ name: 'get_scene', description: 'scene', inputSchema: { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' }, c: { type: 'boolean' } } } }],
+  ];
+  const o = new OfficialMcp({
+    connect: async () => ({
+      listTools: async () => ({ tools: schemas[step] }),
+      callTool: async () => ({}),
+      close: async () => {},
+    }),
+    onToolsChanged: () => {
+      changes += 1;
+    },
+  });
+  await o.listTools();
+  assert.equal(changes, 1);
+
+  step = 1;
+  o.reset();
+  await o.listTools();
+  assert.equal(changes, 1, 'reordered schema keys should not trigger onToolsChanged');
+
+  step = 2;
+  o.reset();
+  await o.listTools();
+  assert.equal(changes, 2, 'added schema property should trigger onToolsChanged');
 });

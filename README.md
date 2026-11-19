@@ -141,7 +141,14 @@
 | `image_ai_edit` | 图片编辑器 AI 工具（不开窗口）：`action=upscale`（超清）、`repaint`（消除 / 局部重绘，需 `mask` 或 `boxes`）、`matting`（AI 抠图出主体和部位 PNG） |
 | `face_warp` | 「塑型画笔」（FaceWarpX，含猫狗脸）：`action=list` 列出组件与笔刷强度，`action=set_intensity` 改 0–100 强度（可撤销） |
 | `preview_audio_test` | 给预览喂模拟声音验声音玩法：开启编辑器内置 Agent 的试玩会话（预览重载一次，注入把模拟输入转成 AudioDetection 结果的运行时），按步骤喂音量 / 音高 / 关键词命中或未命中并截图，最后关会话（再重载一次）。脚本读到的值用官方 `get_script_logs` 看 |
-| `preview_actions` | 官方 `interact_by_dsl` 不收的预览命令：`touch_move`、`seek_to_time`、`switch_gesture_video`（换成编辑器给某个手势配好的预览视频） |
+| `preview_actions` | 官方 `interact_by_dsl` 不收的预览命令：`touch_move`、`drag`、`seek_to_time`、`switch_gesture_video`、`pause`、`resume`、`set_preview_property`（预览临时调参）、`human_action` / `restore_human_action` |
+| `preview_record` | 录制实时预览为 `.mp4` 并自动返回 3×2 网格预览图：`action=record`（定时录 N 秒）或 `start` / `stop` / `abort` 配合交互命令录制整段过程 |
+| `asset_properties` | 在线列出、读取、修改资源导入属性（如贴图 `compressMaxResolution` / 滤波 / Wrap 模式），无需关窗口手改 `.extra`，写入后回读校验 |
+| `project_snapshot` | 工程快照与回滚：`action=create|list|restore|delete`，按工程隔离索引，防止跨工程误恢复 |
+| `asset_package` | 资产包与预制体操作：`import_package`（导入 `.ehpackage`）、`create_prefab`、`instantiate_prefab`、`export_package`（导出场景对象为 `.ehpackage`） |
+| `text_template` | 列出或应用内置动态花字与歌词模板（`list` / `apply`），支持设置文案、字号与颜色 |
+| `timeline` | 检查或编辑 `.timeline` 与 `TimelinePlayer`：`inspect`、`set_tracks`、`import_beats`（将 `audio_probe` 卡点写入 `beatsPoint` / 关键帧） |
+| `graph_params` | 检查或安全修改 `.surfacegraph` / `.audiograph` / `.vfxgraph` 暴露参数（`inspect` / `set`，写入后回读校验） |
 | `sfx_synth` | 按预设合成音效（ding、tick、pop、boing、puff、win、chime、whoosh、wahwah、lose、reveal、sparkle、heartbeat、shutter、miss、hit、stamp、shiver 共 18 种，频率、包络、音量照各工程的音效脚本，没有随机噪声的和原脚本逐采样一致），可升降调、调音量，出双声道 128 kbps MP3 或 WAV。不用开像塑 |
 | `ui_text_image` / `ui_panel` | 描边 / 渐变 / 投影文字 PNG（Text2D 设不了描边），圆角或胶囊底板 PNG（可带几行文字），一次一批，返回每张的宽高。不用开像塑 |
 | `preview_model_add` | 把模特照片（或视频、或两张照片交替循环）按内置预览视频的规格转码，加进像塑的预览清单 `PreviewResources.json`（先备份）；新开的工程窗口就能在 `set_preview_video` / `preview_frames` 里用 |
