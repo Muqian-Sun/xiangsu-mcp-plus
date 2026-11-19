@@ -1231,6 +1231,7 @@ export function createServer(deps = {}) {
           .describe('Inspiration or hotspot to pick in 「灵感绑定」, by its display name among this account collected ones (an inspiration name is the inspiration_collected title). 「暂不绑定」 unbinds; omitted keeps what the page carried in.'),
         task: z.string().min(1).optional().describe('Task title to pick in 「任务绑定」 (a received task, the tasks_list title). 「暂不参与」 unbinds; omitted keeps what the page carried in.'),
         task_track: z.string().min(1).optional().describe('Track name under the task; required when the task has tracks, else SUBMIT_TASK_NEEDS_TRACK with the tracks listed.'),
+        pick_nomination: z.boolean().optional().describe('Optional: tick (true) or untick (false) 「精选提报」 (LV3+ daily quota). Omit to leave unchanged.'),
       },
       run: async (a) => {
         const { project_path, instance_id, icon_image, ...fill } = a;
@@ -2743,22 +2744,85 @@ export function createServer(deps = {}) {
     },
     {
       name: 'preview_actions',
-      keywords: '预览 交互 拖动 手势 preview actions',
-      description: 'Preview commands the official interact_by_dsl refuses (unsupported command, measured 2026-11-14), via the editor built-in Agent: touch_move (move while held to x, y in 0–1 — pair with official touch_down / touch_up for drag paths), seek_to_time (jump the preview video to time_ms and keep playing — shoot at fixed moments), switch_gesture_video (switch to the editor video configured for a hand gesture and pause; hand_action among Victory, OK, ThumbUp, HeartA, Fist, HandOpen, Namaste, Pistol, DoubleHand — whichever PreviewResources.json configures with handAction; captureTimesMs is when the gesture is clearest). Runs in order, stops at the first failure, one status each.',
+      keywords: '预览 交互 拖动 拖拽 手势 动作 暂停 恢复 临时属性 preview actions drag pause resume human_action set_preview_property',
+      description: 'Preview commands via editor Agent: touch_move (x,y in 0..1), drag (x1,y1,x2,y2,steps,duration_ms), seek_to_time (time_ms), switch_gesture_video (hand_action), pause, resume, set_preview_property (scene_object_guid,component_type,property,value), human_action (input_type,file_path,action_id), restore_human_action. Runs in order.',
       shape: {
         ...target,
         commands: z
           .array(
             z.discriminatedUnion('command_type', [
               z.strictObject({ command_type: z.literal('touch_move'), params: z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }) }),
+              z.strictObject({
+                command_type: z.literal('drag'),
+                params: z.strictObject({
+                  x1: z.number().min(0).max(1),
+                  y1: z.number().min(0).max(1),
+                  x2: z.number().min(0).max(1),
+                  y2: z.number().min(0).max(1),
+                  steps: z.number().int().min(1).optional(),
+                  duration_ms: z.number().min(0).optional(),
+                }),
+              }),
               z.strictObject({ command_type: z.literal('seek_to_time'), params: z.strictObject({ time_ms: z.number().min(0) }) }),
               z.strictObject({ command_type: z.literal('switch_gesture_video'), params: z.strictObject({ hand_action: z.string().min(1) }) }),
+              z.strictObject({ command_type: z.literal('pause'), params: z.strictObject({}).optional() }),
+              z.strictObject({ command_type: z.literal('resume'), params: z.strictObject({}).optional() }),
+              z.strictObject({
+                command_type: z.literal('set_preview_property'),
+                params: z.strictObject({
+                  scene_object_guid: z.string().min(1),
+                  component_type: z.string().min(1),
+                  property: z.string().min(1),
+                  value: z.unknown(),
+                }),
+              }),
+              z.strictObject({
+                command_type: z.literal('human_action'),
+                params: z.strictObject({
+                  input_type: z.enum(['preview_face', 'preview_hand', 'preview_fullbody', 'preview_twoperson']),
+                  file_path: z.string().min(1),
+                  action_id: z.string().min(1).optional(),
+                }),
+              }),
+              z.strictObject({ command_type: z.literal('restore_human_action'), params: z.strictObject({}).optional() }),
             ]),
           )
           .min(1)
           .max(20),
       },
       run: plugin('preview_actions', 30000),
+    },
+    {
+      name: 'preview_record',
+      keywords: '预览 录屏 录制 视频 preview record mp4 video',
+      description: 'Record the live preview to an .mp4 file and return a 3x2 contact sheet preview: action=record (timed duration_s, default 5s), or start / stop / abort around preview_actions. Holds full frame rate while recording.',
+      shape: {
+        ...target,
+        action: z.enum(['record', 'start', 'stop', 'abort']).describe('record (timed), start, stop, or abort.'),
+        duration_s: z.number().gt(0).max(60).optional().describe('record: duration in seconds (0 < duration_s <= 60, default 5).'),
+        save_to: z.string().min(1).optional().describe('record/start: output .mp4/.mov path (defaults to temp file).'),
+      },
+      run: async ({ project_path, instance_id, action, duration_s, save_to }) => {
+        const projectPath = await resolveProjectPath({ project_path, instance_id });
+        const holdMs = action === 'record' ? Math.ceil((duration_s ?? 5) * 1000) + HOLD_SLACK_MS : 60000 + HOLD_SLACK_MS;
+        const needHold = action === 'record' || action === 'start';
+        if (needHold) await holdFullRate(projectPath, holdMs);
+        let res;
+        try {
+          res = await d.callPlugin('preview_record', { action, duration_s, save_to }, { projectPath, timeoutMs: 120000 });
+        } finally {
+          if (action !== 'start') await releaseFullRate(projectPath);
+        }
+        const content = [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+        if ((action === 'record' || action === 'stop') && res?.path && fs.existsSync(res.path)) {
+          try {
+            const { meta, png } = await videoContactSheet(res.path);
+            content[0].text = JSON.stringify({ ...res, video_meta: meta }, null, 2);
+            content.push({ type: 'image', data: png.toString('base64'), mimeType: 'image/png' });
+          } catch (_) {}
+        }
+        return { content };
+      },
     },
     {
       name: 'ai_vfx',
@@ -2925,6 +2989,93 @@ export function createServer(deps = {}) {
       description: 'Delete the unused_paths reported by object_remove (project-relative resource or package-folder paths). Re-checked before deleting: anything still referenced by the scene is refused. Resource deletion is not undoable.',
       shape: { ...target, paths: z.array(z.string().min(1)).min(1).describe('unused_paths from object_remove.') },
       run: plugin('resource_delete_unused'),
+    },
+    {
+      name: 'asset_properties',
+      keywords: '资源 属性 贴图 分辨率 压缩 过滤 extra asset properties list get set',
+      description: 'List, read, or edit asset import properties online (e.g. texture compressMaxResolution, filterMin, wrapModeS) without closing the editor: action=list|get|set. Validates editable keys and reads back to confirm.',
+      shape: {
+        ...target,
+        action: z.enum(['list', 'get', 'set']).describe('list, get, or set.'),
+        guid: z.string().min(1).optional().describe('Asset GUID (for get/set).'),
+        path: z.string().min(1).optional().describe('Project-relative asset path (alternative to guid).'),
+        type: z.string().min(1).optional().describe('list: filter by asset type (e.g. Texture2D).'),
+        path_contains: z.string().min(1).optional().describe('list: filter by substring in filePath.'),
+        properties: z.record(z.string(), z.unknown()).optional().describe('set: map of editable property keys to new values.'),
+      },
+      run: plugin('asset_properties', 30000),
+    },
+    {
+      name: 'project_snapshot',
+      keywords: '工程 快照 备份 回滚 恢复 project snapshot create restore delete list',
+      description: 'Create, list, restore, or delete project snapshots via editor snapshot host: action=create|list|restore|delete. Enforces project matching on restore.',
+      shape: {
+        ...target,
+        action: z.enum(['create', 'list', 'restore', 'delete']).describe('create, list, restore, or delete.'),
+        label: z.string().optional().describe('create: optional human-readable label.'),
+        snapshot_id: z.string().min(1).optional().describe('restore/delete: snapshot_id returned by create or list.'),
+      },
+      run: plugin('project_snapshot', 60000),
+    },
+    {
+      name: 'asset_package',
+      keywords: '资产包 预制体 导入 导出 实例化 ehpackage prefab import export instantiate',
+      description: 'Import/export .ehpackage bundles and create/instantiate prefabs: action=import_package|create_prefab|instantiate_prefab|export_package.',
+      shape: {
+        ...target,
+        action: z.enum(['import_package', 'create_prefab', 'instantiate_prefab', 'export_package']).describe('Operation.'),
+        path: z.string().min(1).optional().describe('import_package: .ehpackage file path.'),
+        guid: z.string().min(1).optional().describe('create_prefab/instantiate_prefab: target GUID.'),
+        guids: z.array(z.string().min(1)).min(1).optional().describe('export_package: scene object GUIDs to export.'),
+        name: z.string().min(1).optional().describe('export_package: package name.'),
+        out_dir: z.string().min(1).optional().describe('export_package: output directory.'),
+      },
+      run: plugin('asset_package', 60000),
+    },
+    {
+      name: 'text_template',
+      keywords: '花字 动态文字 歌词 模板 text template lyrics list apply',
+      description: 'List or apply built-in dynamic text templates and lyrics templates: action=list|apply. Can set text, font_size, and color.',
+      shape: {
+        ...target,
+        action: z.enum(['list', 'apply']).describe('list or apply.'),
+        id: z.string().min(1).optional().describe('apply: template id from list.'),
+        kind: z.enum(['text_template', 'lyrics_template']).optional().describe('apply: optional template kind.'),
+        text: z.string().optional().describe('apply: initial text content.'),
+        font_size: z.number().positive().optional().describe('apply: font size.'),
+        color: z.string().optional().describe('apply: text color.'),
+        parent_guid: z.string().min(1).optional().describe('apply: optional parent scene object GUID.'),
+      },
+      run: plugin('text_template', 30000),
+    },
+    {
+      name: 'timeline',
+      keywords: '时间轴 关键帧 卡点 节拍 timeline inspect set_tracks import_beats',
+      description: 'Inspect or edit .timeline assets and TimelinePlayer components: action=inspect|set_tracks|import_beats (writes audio_probe beats into beatsPoint/keyframes).',
+      shape: {
+        ...target,
+        action: z.enum(['inspect', 'set_tracks', 'import_beats']).describe('inspect, set_tracks, or import_beats.'),
+        timeline_path: z.string().min(1).optional().describe('set_tracks/import_beats: .timeline path inside project.'),
+        tracks: z.array(z.record(z.string(), z.unknown())).optional().describe('set_tracks: track definitions.'),
+        beats: z.array(z.number().min(0)).optional().describe('import_beats: beat timestamps in seconds.'),
+        fps: z.number().positive().optional().describe('Frame rate (default 30).'),
+        target_guid: z.string().min(1).optional().describe('import_beats: optional target object GUID.'),
+        property: z.string().min(1).optional().describe('import_beats: optional target property.'),
+      },
+      run: plugin('timeline', 30000),
+    },
+    {
+      name: 'graph_params',
+      keywords: '节点图 材质图 粒子图 音频图 参数 graph params surface audiograph vfxgraph inspect set',
+      description: 'Inspect or safely update exposed parameters in .surfacegraph, .audiograph, or .vfxgraph assets: action=inspect|set. Reads back to verify.',
+      shape: {
+        ...target,
+        action: z.enum(['inspect', 'set']).describe('inspect or set.'),
+        graph_path: z.string().min(1).optional().describe('Graph file path inside project (required for set).'),
+        param_name: z.string().min(1).optional().describe('set: exposed parameter name.'),
+        value: z.unknown().optional().describe('set: new parameter value.'),
+      },
+      run: plugin('graph_params', 30000),
     },
   ];
   const own = new Map(tools.map((t) => [t.name, { ...t, schema: z.strictObject(t.shape) }]));

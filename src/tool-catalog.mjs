@@ -70,6 +70,13 @@ const SYNONYMS = [
   [/热榜|热点/gu, 'douyin_hot_list hot_topics rank_hotspots'],
   [/截图|截帧|预览/gu, 'preview_frames capture_preview preview_videos'],
   [/触摸|点击|滑动|交互/gu, 'interact_by_dsl preview_actions'],
+  [/录屏|录制/gu, 'preview_record'],
+  [/快照|回滚|备份/gu, 'project_snapshot'],
+  [/资源属性|贴图属性|extra/gu, 'asset_properties'],
+  [/资产包|预制体|ehpackage/gu, 'asset_package'],
+  [/花字|动态文字|歌词/gu, 'text_template'],
+  [/时间轴|关键帧|卡点/gu, 'timeline'],
+  [/节点图|材质图|粒子图/gu, 'graph_params'],
   [/检测|性能|帧率/gu, 'effect_check run_otsc_check'],
   [/音效|声音|音乐/gu, 'sfx_synth music_search music_apply preview_audio_test'],
 ];

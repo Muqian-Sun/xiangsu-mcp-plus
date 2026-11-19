@@ -46,6 +46,12 @@ const CARDS = {
   collectedImage: card('911', '海边猫', { ai: { resPictureUri: ['c0'] } }),
   collectedMakeup: card('912', '白皙淡妆', { ai: { resMakeup: [{ type: 'rest', uri: 'm0' }] } }),
   collectedGan: card('913', '粉色公主纱裙'),
+  aiVideoByCat: card('914', 'AI 视频卡', { category: 45012 }),
+  aiVideoBySubType: card('915', 'AI 视频子类型', { info: { subType: 3 } }),
+  aiVideoPkg: card('916', 'AI 视频包', { category: 45012, info: { subType: 3, resourceExt: 'Ehpackage' } }),
+  ai3dByCat: card('917', 'AI 3D 卡', { category: 45013 }),
+  ai3dBySubType: card('918', 'AI 3D 子类型', { info: { subType: 4 } }),
+  ai3dPkg: card('919', 'AI 3D 包', { category: 45013, info: { subType: 4, resourceExt: 'Ehpackage' } }),
 };
 
 function setup({ busy = false, addsNothing = false } = {}) {
@@ -135,8 +141,8 @@ function setup({ busy = false, addsNothing = false } = {}) {
         return { statusCode: 0, data: [{ dataInfos: { template: byCat[p.categoryIds] || [], cursor: p.cursor + 2, hasNext: true } }] };
       },
     },
-    [M.aiConst]: { AIAssetCategory: { AIMakeup: 45003, AIPicture: 45004, UGCGAN: 45014 } },
-    [M.publish]: { PublishType: { AiMakeup: 1, AiImage: 2, NormalAsset: 6 } },
+    [M.aiConst]: { AIAssetCategory: { AIMakeup: 45003, AIPicture: 45004, AIVideo: 45012, AI3DModel: 45013, UGCGAN: 45014 } },
+    [M.publish]: { PublishType: { AiMakeup: 1, AiImage: 2, AiVideo: 3, Ai3dModel: 4, NormalAsset: 6 } },
     [M.resourceTypes]: { resourceType: { Picture: 'Picture', Gif: 'Gif', Ehpackage: 'Ehpackage' } },
     [M.importTypes]: { ImportAssetType: { Filter: 'Filter', Foreground: 'Foreground', FaceMask: 'FaceMask' } },
     [M.assetsLibrary]: { AssetsLibrary: { getInstance: () => assetsLibrary } },
@@ -171,7 +177,7 @@ function setup({ busy = false, addsNothing = false } = {}) {
     }
   };
   lib.squareTiming = { applyTimeoutMs: 400, settleMs: 60, pollMs: 5 };
-  return { lib, calls, modules, sceneObjects, projectDir };
+  return { lib, calls, modules, sceneObjects, projectDir, resources };
 }
 
 test('nav exposes 素材广场 and 收藏 next to plain panels, and still hides AI generation panels', () => {
@@ -199,6 +205,12 @@ test('square cards get the apply route the asset library card would take', () =>
     collectedImage: 'ai_image',
     collectedMakeup: 'ai_makeup',
     collectedGan: null,
+    aiVideoByCat: 'ai_video',
+    aiVideoBySubType: 'ai_video',
+    aiVideoPkg: 'package',
+    ai3dByCat: 'ai_3d',
+    ai3dBySubType: 'ai_3d',
+    ai3dPkg: 'package',
   });
 });
 
@@ -211,11 +223,13 @@ test('square list asks its category with the card ranker, fills in the category 
   assert.deepEqual(out.items.map((i) => [i.template_id, i.kind, i.cover_url]), [['901', 'ai_image', 'https://c/901.png']]);
   assert.equal(out.items[0].file_size, null);
   assert.equal(out.unsupported, 1);
+  assert.deepEqual(out.unsupported_reasons, { empty_ai_image: 1 });
   assert.deepEqual(out.raw[0].category, { categoryId: 45004 });
   assert.deepEqual({ next: out.next_cursor, more: out.has_more }, { next: 2, more: true });
   const makeup = await lib.list({ panel_key: 'aigc_material', category_id: '45003', cursor: 2, count: 10 });
   assert.deepEqual(calls.list[1], { panelKey: 'aigc_material', count: 10, cursor: 2, categoryIds: '["45003"]', ranker: 5 });
   assert.deepEqual(makeup.items.map((i) => i.kind), ['ai_makeup']);
+  assert.equal(makeup.unsupported_reasons, undefined);
   await assert.rejects(lib.list({ panel_key: 'aigc_material', category_id: '1' }), /INVALID_CATEGORY_ID: 1; valid: 45004\(图片\), 45003\(妆容\)/);
   await assert.rejects(lib.list({ panel_key: 'aigc_material', cursor: 'tok' }), /INVALID_CURSOR/);
 });
@@ -280,6 +294,73 @@ test('square apply records what it added so object_remove can clean up after it'
   await lib.apply({ item: CARDS.gan });
   const rec = Object.values(readImports(projectDir));
   assert.deepEqual(rec, [{ name: '粉色公主纱裙', package_folders: ['Assets/粉色公主纱裙'] }]);
+});
+
+test('square apply handles ai_video and ai_3d with dedicated contexts, Ehpackage, or fails closed', async () => {
+  const { lib, calls, modules, projectDir } = setup();
+  const assetsLib = modules[M.assetsLibrary].AssetsLibrary.getInstance();
+  // Without dedicated context on AIAssets, non-Ehpackage ai_video / ai_3d fail closed with SQUARE_APPLY_UNSUPPORTED.
+  await assert.rejects(lib.apply({ item: CARDS.aiVideoBySubType }), /SQUARE_APPLY_UNSUPPORTED: ai_video template 915/);
+  await assert.rejects(lib.apply({ item: CARDS.ai3dBySubType }), /SQUARE_APPLY_UNSUPPORTED: ai_3d template 918/);
+
+  // Ehpackage ai_video / ai_3d route through applyNormalAsset and recordImport.
+  const vidPkg = await lib.apply({ item: CARDS.aiVideoPkg });
+  assert.equal(vidPkg.kind, 'package');
+  assert.deepEqual(calls.applied.at(-1), ['applyNormalAsset', '916', true]);
+
+  // With dedicated AIAssetVideoCtx / AIAsset3dCtx handlers, ai_video / ai_3d apply and recordImport.
+  const ctxSetup = setup();
+  const ctxLib = ctxSetup.lib;
+  const ctxAssets = ctxSetup.modules[M.assetsLibrary].AssetsLibrary.getInstance().AIAssets;
+  ctxAssets.AIAssetVideoCtx = {
+    onApplyAIAsset: async (cardInfo, asset) => {
+      ctxSetup.calls.applied.push(['video', cardInfo.templateId, asset.templateId]);
+      setTimeout(() => {
+        ctxSetup.sceneObjects.push({ name: asset.title, parent: ctxSetup.sceneObjects[0], guid: asset.templateId });
+        ctxSetup.resources.push({ assetPath: path.join(ctxSetup.projectDir, 'Assets', asset.title), builtin: false });
+      }, 15);
+    },
+  };
+  ctxAssets.AIAsset3dCtx = {
+    onApplyAIAsset: async (cardInfo, asset) => {
+      ctxSetup.calls.applied.push(['3d', cardInfo.templateId, asset.templateId]);
+      setTimeout(() => {
+        ctxSetup.sceneObjects.push({ name: asset.title, parent: ctxSetup.sceneObjects[0], guid: asset.templateId });
+        ctxSetup.resources.push({ assetPath: path.join(ctxSetup.projectDir, 'Assets', asset.title), builtin: false });
+      }, 15);
+    },
+  };
+  const vid = await ctxLib.apply({ item: CARDS.aiVideoByCat });
+  assert.equal(vid.kind, 'ai_video');
+  assert.deepEqual(vid.added_objects, [{ name: 'AI 视频卡', object_path: '素材/AI 视频卡' }]);
+  const d3 = await ctxLib.apply({ item: CARDS.ai3dByCat });
+  assert.equal(d3.kind, 'ai_3d');
+  assert.deepEqual(d3.added_objects, [{ name: 'AI 3D 卡', object_path: '素材/AI 3D 卡' }]);
+  const imports = Object.values(readImports(ctxSetup.projectDir));
+  assert.ok(imports.some((r) => r.name === 'AI 视频卡'));
+  assert.ok(imports.some((r) => r.name === 'AI 3D 卡'));
+  assert.ok(Object.values(readImports(projectDir)).some((r) => r.name === 'AI 视频包'));
+});
+
+test('collectionList includes unsupported_reasons when unsupported square cards are present', async () => {
+  const { lib, modules } = setup();
+  modules[M.collect].getCollections = async () => ({
+    body: {
+      code: 0,
+      data: {
+        categorizedCollections: [
+          { panelKey: 'aigc_material', templateData: { ...CARDS.fg, panelKey: undefined } },
+          { panelKey: 'aigc_material', templateData: { ...CARDS.legacy, panelKey: undefined } },
+          { panelKey: 'aigc_material', templateData: { ...CARDS.gifFilter, panelKey: undefined } },
+        ],
+        cursor: '',
+        hasMore: false,
+      },
+    },
+  });
+  const out = await lib.list({ panel_key: 'collection' });
+  assert.equal(out.unsupported, 2);
+  assert.deepEqual(out.unsupported_reasons, { missing_subType: 1, 'unsupported_assetType:Gif:Filter': 1 });
 });
 
 test('square apply refuses what the card cannot do and fails when nothing arrives', async () => {

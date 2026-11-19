@@ -4,10 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { M, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
 
-// Cloud AI generation / chat entries: they consume account quota or need user uploads, so they are not exposed.
+// Cloud AI generation / chat entries: they run on cloud AI runtime and may consume account quota or need user uploads.
 // AICombine alone adds an AI 组合效果 with an empty workflow; the ai_combine feature builds a working one.
-const MENU_DENY = new Set(['AIDraw', 'AIVideo', 'AIImageCaption', 'Audio_AIMusic', 'AICombine', 'AIChat', 'AIObjectLens']);
+const MENU_DENY = new Set(['AICombine']);
 const MENU_DENY_HINT = { AICombine: 'use ai_combine_new and ai_combine_apply' };
+const CLOUD_AI_MENU_IDS = new Set(['AIDraw', 'AIVideo', 'AIImageCaption', 'Audio_AIMusic', 'AIChat', 'AIObjectLens']);
 const MAX_MENU_PREVIEW = 8;
 
 const methods = {
@@ -41,6 +42,7 @@ const methods = {
         path: trail.join('/'),
         kind: cfg.hasPrefab ? 'package' : 'builtin',
         components: (cfg.components || []).map((c) => c.extraType || c.rttiType).filter(Boolean),
+        ...(CLOUD_AI_MENU_IDS.has(node.id) ? { runtime_note: 'cloud_ai_runtime' } : {}),
       });
     };
     const tree = dyn.updateOrderEntityMenuConfigs();
@@ -126,4 +128,4 @@ const methods = {
 
 const METHODS = { menu_list: 'menuList', menu_add: 'menuAdd' };
 
-module.exports = { methods, METHODS, MENU_DENY, MAX_MENU_PREVIEW };
+module.exports = { methods, METHODS, MENU_DENY, CLOUD_AI_MENU_IDS, MAX_MENU_PREVIEW };

@@ -22,7 +22,7 @@ const CAMERA = { front: '前置', back: '后置' };
 // Steps of the submit page, by their header labels.
 const STEP = { basic: '特效基础信息', settings: '特效发布设置', review: '提交审核' };
 // Sections each step fills; others on the page are reported as left as the page shows them.
-const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称', '特效触发提示', '灵感绑定', '任务绑定'];
+const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称', '特效触发提示', '灵感绑定', '任务绑定', '精选提报'];
 // The page loaded within 4 s in the live runs of 2026-11-07; the other values are picked. Its aiName config
 // request (done 2.4 s in, after the form appeared) remounts the name field and wipes what was typed (seen
 // live), so filling waits for that request, or, should the page stop making it, until no request has
@@ -121,7 +121,7 @@ async function nextStep(run) {
 
 // Fills the submit page and stops on its 提交审核 step. Fields left undefined keep what the page shows
 // (the editor passes the project's bound inspiration and task, and the trigger hint of AI assets).
-async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, task, task_track }) {
+async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, task, task_track, pick_nomination }) {
   await waitForForm(run);
   const basic = await run({ action: 'basic', name, trigger_hint, camera, settle_ms: PAGE_TIMING.settleMs });
   if (basic.errors.length) throw Error(`SUBMIT_FIELD_REJECTED${quote(basic.errors)}`);
@@ -134,7 +134,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
   let step = await nextStep(run);
   let bindings = null;
   if (step === STEP.settings) {
-    bindings = await run({ action: 'bind', inspiration, task, task_track, settle_ms: PAGE_TIMING.settleMs, wait_ms: PAGE_TIMING.stepMs });
+    bindings = await run({ action: 'bind', inspiration, task, task_track, pick_nomination, settle_ms: PAGE_TIMING.settleMs, wait_ms: PAGE_TIMING.stepMs });
     if (inspiration !== undefined && bindings.inspiration !== inspiration) {
       throw Error(`SUBMIT_BINDING_NOT_APPLIED: 灵感绑定 shows 「${bindings.inspiration}」, not 「${inspiration}」 (an inspiration that belongs to a task is dropped when another task is picked)`);
     }
@@ -144,6 +144,8 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     step = await nextStep(run);
   } else if (inspiration !== undefined || task !== undefined) {
     throw Error(`SUBMIT_NO_SETTINGS_STEP: this effect's submit page has no 「${STEP.settings}」 step, so inspiration and task cannot be set`);
+  } else if (pick_nomination === true) {
+    throw Error(`SUBMIT_PICK_NOMINATION_UNAVAILABLE: this effect's submit page has no 「${STEP.settings}」 step`);
   }
   if (step !== STEP.review) throw Error(`SUBMIT_PAGE_CHANGED: expected the 「${STEP.review}」 step, the page moved to 「${step}」`);
   const first = await run({ action: 'review' });
@@ -163,6 +165,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     step,
     filled: { icons: basic.icons, name: basic.name, trigger_hint: basic.trigger_hint, camera: basic.camera },
     bindings: bindings && { inspiration: bindings.inspiration, task: bindings.task },
+    pick_nomination: bindings?.pick_nomination ?? { available: false, checked: null, remaining: null, disabled: false, text: null },
     other_sections: otherSections,
     review,
     next,
@@ -349,11 +352,12 @@ const methods = {
     return this.withQuietWindows(() => this.runSubmitPrepare(args));
   },
 
-  async runSubmitPrepare({ name, trigger_hint, camera, inspiration, task, task_track } = {}) {
+  async runSubmitPrepare({ name, trigger_hint, camera, inspiration, task, task_track, pick_nomination } = {}) {
     this.ensureCompatible('submit');
     if (typeof name !== 'string' || !name) throw Error('INVALID_NAME: pass the effect name');
     if (camera !== undefined && !Object.prototype.hasOwnProperty.call(CAMERA, camera)) throw Error(`INVALID_CAMERA: ${camera}; valid: ${Object.keys(CAMERA).join(', ')}`);
     if (task_track !== undefined && task === undefined) throw Error('INVALID_TASK: task_track needs task');
+    if (pick_nomination !== undefined && typeof pick_nomination !== 'boolean') throw Error('INVALID_PICK_NOMINATION: pass true or false');
     const check = await this.submitChecks();
     if (!check.ok) return { opened: false, check };
     const closed_previous = await closeWindows(openWindows(SUBMIT_WINDOW));
@@ -361,7 +365,7 @@ const methods = {
     if (!win) return { opened: false, check, closed_previous, note: 'the submit window did not open; the editor shows the reason (e.g. login, size limit) in a toast or dialog' };
     const run = submitPageBridge(win);
     try {
-      return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track })) };
+      return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track, pick_nomination })) };
     } catch (e) {
       throw Error(`${e.message} (the submit window is left open)`);
     }

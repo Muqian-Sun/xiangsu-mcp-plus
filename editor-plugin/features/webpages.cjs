@@ -60,6 +60,17 @@ async function submitPage(arg) {
   const binder = (title) => [...document.querySelectorAll('.bind-wrapper')].filter(shown).find((w) => titleOf(w) === title);
   const shownText = (w) => (w ? text(w.querySelector('.selector-input .text')) : null);
   const optionName = (o) => text(o.querySelector('.option-name'));
+  const pickNominationWrapper = () => [...document.querySelectorAll('.innovation-wrapper')].filter(shown).find((w) => /精选提报/.test(text(w.querySelector('.innovation-title'))));
+  const readPickNomination = () => {
+    const w = pickNominationWrapper();
+    if (!w) return { available: false, checked: null, remaining: null, disabled: false, text: null };
+    const box = w.querySelector('.custom-checkbox');
+    const contentText = text(w.querySelector('.innovation-main')) || text(w);
+    const m = /(?:每日有|剩余|还可提报)\s*(\d+)\s*次/.exec(contentText);
+    const disabled = !box || box.classList.contains('disabled') || box.hasAttribute('disabled') || box.getAttribute('aria-disabled') === 'true';
+    const checked = !!box && (box.classList.contains('checked') || box.classList.contains('active') || box.getAttribute('aria-checked') === 'true' || !!box.querySelector('input:checked'));
+    return { available: true, checked, remaining: m ? Number(m[1]) : null, disabled, text: contentText || null };
+  };
 
   switch (arg.action) {
     case 'state': {
@@ -158,7 +169,20 @@ async function submitPage(arg) {
         }
         await sleep(arg.settle_ms);
       }
-      return { inspiration: shownText(binder('灵感绑定')), task: shownText(binder('任务绑定')), sections: sections(), errors: errors() };
+      if (arg.pick_nomination !== undefined) {
+        const cur = readPickNomination();
+        if (!cur.available) {
+          if (arg.pick_nomination === true) throw Error('SUBMIT_PICK_NOMINATION_UNAVAILABLE: 精选提报 section is not present on this page');
+        } else if (cur.checked !== arg.pick_nomination) {
+          if (cur.disabled) throw Error(`SUBMIT_PICK_NOMINATION_EXHAUSTED: 精选提报 is disabled (${cur.text || 'no detail'})`);
+          const box = pickNominationWrapper().querySelector('.custom-checkbox');
+          press(box);
+          await sleep(arg.settle_ms);
+          const after = readPickNomination();
+          if (after.checked !== arg.pick_nomination) throw Error(`SUBMIT_PICK_NOMINATION_NOT_APPLIED: 精选提报 stayed ${after.checked}, expected ${arg.pick_nomination}`);
+        }
+      }
+      return { inspiration: shownText(binder('灵感绑定')), task: shownText(binder('任务绑定')), pick_nomination: readPickNomination(), sections: sections(), errors: errors() };
     }
 
     case 'review': {
@@ -175,6 +199,7 @@ async function submitPage(arg) {
         title: text(document.querySelector('.publish-wrap .submit-title h1')),
         name: field('特效名称：'),
         trigger_hint: field('特效触发提示：'),
+        pick_nomination: field('精选提报：'),
         checks: [...document.querySelectorAll('.publish-wrap .effect-test-item-top-text')].map(text),
         agreed: agreement ? !!agreement.querySelector('.agreed') : null,
         submit_enabled: !submit.classList.contains('disable'),

@@ -129,12 +129,18 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     FaceWarpX: { id: 'FaceWarpX', displayKey: 'obj_faceReshape', components: [{ rttiType: 'FaceWarpXComponent' }] },
     SausageLips: { id: 'SausageLips', displayKey: '香肠嘴', hasPrefab: true },
     AIDraw: { id: 'AIDraw', displayKey: 'AI 绘画' },
+    AIVideo: { id: 'AIVideo', displayKey: 'AI 视频' },
+    AIImageCaption: { id: 'AIImageCaption', displayKey: 'AI 识图' },
+    Audio_AIMusic: { id: 'Audio_AIMusic', displayKey: 'AI 音乐' },
+    AIChat: { id: 'AIChat', displayKey: 'AI 对话' },
+    AIObjectLens: { id: 'AIObjectLens', displayKey: 'AI 物体识别' },
+    AICombine: { id: 'AICombine', displayKey: 'AI 组合效果' },
     Broken: { id: 'Broken', displayKey: '坏项' },
   };
   const i18n = { asset_aieffect: 'AI 玩法', obj_gan_category_facegen: '面部生成', asset_faceeffect: '人脸效果', obj_faceReshape: '塑型画笔', obj_faceReshape_desc: '用画笔塑型' };
   const tree = [
     { id: 'Face', displayKey: 'asset_faceeffect', children: [{ id: 'FaceWarpX' }] },
-    { id: 'AIEffectMenu', displayKey: 'asset_aieffect', children: [{ id: 'AIDraw' }, { id: 'Broken' }, { id: 'facegen', displayKey: 'obj_gan_category_facegen', children: [{ id: 'smokey' }, { id: 'SausageLips' }] }] },
+    { id: 'AIEffectMenu', displayKey: 'asset_aieffect', children: [{ id: 'AIDraw' }, { id: 'AIVideo' }, { id: 'AIImageCaption' }, { id: 'Audio_AIMusic' }, { id: 'AIChat' }, { id: 'AIObjectLens' }, { id: 'AICombine' }, { id: 'Broken' }, { id: 'facegen', displayKey: 'obj_gan_category_facegen', children: [{ id: 'smokey' }, { id: 'SausageLips' }] }] },
   ];
   const tips = {
     smokey: { Enable: true, Description: '一键烟熏妆', Images: ['https://cdn/smokey.png'] },
@@ -203,17 +209,24 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
   return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, launch, res };
 }
 
-test('menu_list flattens the editor menu with translated names and hides cloud AI entries', () => {
+test('menu_list flattens the editor menu with translated names, marks cloud AI entries, and hides AICombine', () => {
   const { lib } = setup();
   const { total, items } = lib.menuList();
-  assert.equal(total, 4);
+  assert.equal(total, 10);
   assert.deepEqual(items, [
     { menu_id: 'FaceWarpX', name: '塑型画笔', path: '人脸效果', kind: 'builtin', components: ['FaceWarpXComponent'] },
+    { menu_id: 'AIDraw', name: 'AI 绘画', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
+    { menu_id: 'AIVideo', name: 'AI 视频', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
+    { menu_id: 'AIImageCaption', name: 'AI 识图', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
+    { menu_id: 'Audio_AIMusic', name: 'AI 音乐', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
+    { menu_id: 'AIChat', name: 'AI 对话', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
+    { menu_id: 'AIObjectLens', name: 'AI 物体识别', path: 'AI 玩法', kind: 'builtin', components: [], runtime_note: 'cloud_ai_runtime' },
     { menu_id: 'Broken', name: '坏项', path: 'AI 玩法', kind: 'builtin', components: [] },
     { menu_id: 'smokey', name: '烟熏妆', path: 'AI 玩法/面部生成', kind: 'builtin', components: ['GanComponent'] },
     { menu_id: 'SausageLips', name: '香肠嘴', path: 'AI 玩法/面部生成', kind: 'package', components: [] },
   ]);
   assert.deepEqual(lib.menuList({ query: '面部生成' }).items.map((i) => i.menu_id), ['smokey', 'SausageLips']);
+  assert.equal(lib.menuList({ query: 'AI 视频', details: true }).items[0].runtime_note, 'cloud_ai_runtime');
 });
 
 test('menu calls refuse to run when menu internals are missing', () => {
@@ -233,9 +246,10 @@ test('menu_add reports the new top-level objects for builtin and package entries
   assert.deepEqual(b.package_folders, ['Assets/香肠嘴0']);
 });
 
-test('menu_add refuses denied, unknown and no-op entries', async () => {
+test('menu_add refuses AICombine, unknown and no-op entries, and allows previously denied cloud AI entries', async () => {
   const { lib, calls, dyn } = setup();
-  await assert.rejects(lib.menuAdd({ menu_id: 'AIDraw' }), /MENU_ITEM_NOT_ALLOWED: AIDraw is a cloud AI generation entry$/);
+  const ai = await lib.menuAdd({ menu_id: 'AIDraw' });
+  assert.equal(ai.menu_id, 'AIDraw');
   await assert.rejects(lib.menuAdd({ menu_id: 'AICombine' }), /MENU_ITEM_NOT_ALLOWED: AICombine .*; use ai_combine_new and ai_combine_apply/);
   await assert.rejects(lib.menuAdd({ menu_id: 'nope' }), /UNKNOWN_MENU_ID: nope/);
   await assert.rejects(lib.menuAdd({ menu_id: 'Broken' }), /MENU_ADD_NO_EFFECT: Broken/);
@@ -258,20 +272,20 @@ test('menu_preview returns description plus a CDN url or an existing bundled fil
     { menu_id: 'Broken', name: '坏项', description: '', image_url: null, image_file: null },
   ]);
   assert.throws(() => lib.menuPreview({ menu_ids: [] }), /INVALID_MENU_IDS/);
-  assert.throws(() => lib.menuPreview({ menu_ids: ['AIDraw'] }), /MENU_ITEM_NOT_ALLOWED/);
+  assert.throws(() => lib.menuPreview({ menu_ids: ['AICombine'] }), /MENU_ITEM_NOT_ALLOWED: AICombine .*; use ai_combine_new and ai_combine_apply/);
 });
 
 test('menu_list details adds description and picture to each match, and only for a narrow query', () => {
   const { lib } = setup();
   assert.deepEqual(lib.menuList({ query: '面部生成', details: true }), {
     total: 2,
-    menu_total: 4,
+    menu_total: 10,
     items: [
       { menu_id: 'smokey', name: '烟熏妆', path: 'AI 玩法/面部生成', kind: 'builtin', components: ['GanComponent'], description: '一键烟熏妆', image_url: 'https://cdn/smokey.png', image_file: null },
       { menu_id: 'SausageLips', name: '香肠嘴', path: 'AI 玩法/面部生成', kind: 'package', components: [], description: '香肠嘴说明', image_url: null, image_file: null },
     ],
   });
-  assert.deepEqual(lib.menuList({ query: '没有这项', details: true }), { total: 0, menu_total: 4, items: [] });
+  assert.deepEqual(lib.menuList({ query: '没有这项', details: true }), { total: 0, menu_total: 10, items: [] });
   assert.equal(lib.menuList({ query: '面部生成' }).items[0].description, undefined);
   const many = setup();
   const entries = Array.from({ length: MAX_MENU_PREVIEW + 1 }, (_, i) => ({ menu_id: `m${i}`, name: `项${i}`, path: 'p', kind: 'builtin', components: [] }));
