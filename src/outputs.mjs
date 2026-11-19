@@ -63,18 +63,43 @@ export function withRefs(value, refs) {
   return out;
 }
 
-// Derived: task_detail answered 48K characters (measured), most of it media addresses and page
-// markup, and agents read such answers in pieces or not at all; picked a round number below it.
-export const SPILL_CHARS = 30000;
+// Derived: measured context bloat came from 19.7-46 KB responses (brief_today, account_status,
+// pick_samples, rank_subjects_search, get_scene, get_script_logs, inspirations_find) slipping past
+// the old 30 KB cap, while a full 25-layer makeup_layers analysis is ~13-15 KB. 16 KB catches all
+// observed bloaters while keeping full scene/makeup analyses inline.
+export const SPILL_CHARS = 16000;
 // Picked: long enough to read the file within the session that asked for it.
 const SPILL_TTL_MS = 24 * 60 * 60 * 1000;
 // Picked: enough of a text answer (scene trees) to see what it is.
 const TEXT_HEAD = 2000;
+// Picked: enough summary rows so agents can often inspect spilled lists without opening the file.
+const OUTLINE_SAMPLE_ITEMS = 5;
+const SUMMARY_KEYS = ['id', 'app_effect_id', 'effect_id', 'template_id', 'task_id', 'inspiration_id', 'menu_id', 'name', 'title', 'track', 'kind', 'status', 'stage', 'label', 'heat', 'publishes', 'score', 'reason', 'why'];
+
+function summarizeItem(obj) {
+  const out = {};
+  for (const k of SUMMARY_KEYS) {
+    const v = obj[k];
+    if (v === undefined || v === null || typeof v === 'object') continue;
+    out[k] = typeof v === 'string' && v.length > 80 ? `${v.slice(0, 80)}…` : v;
+    if (Object.keys(out).length >= 5) break;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 function outline(value) {
   if (Array.isArray(value)) {
     const first = value.find((v) => v && typeof v === 'object' && !Array.isArray(v));
-    return first ? { items: value.length, item_keys: Object.keys(first) } : { items: value.length };
+    if (!first) return { items: value.length };
+    const sample = value
+      .slice(0, OUTLINE_SAMPLE_ITEMS)
+      .map((v) => (v && typeof v === 'object' && !Array.isArray(v) ? summarizeItem(v) : null))
+      .filter(Boolean);
+    return {
+      items: value.length,
+      item_keys: Object.keys(first),
+      ...(sample.length ? { sample } : {}),
+    };
   }
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, outline(v)]));
   if (typeof value === 'string' && value.length > 200) return `${value.slice(0, 200)}…（共 ${value.length} 字）`;
@@ -105,10 +130,12 @@ export class Spill {
     return file;
   }
 
-  // A text-only answer over the limit goes to a file; errors and answers with images pass unchanged.
+  // A text-only answer whose primary block exceeds the limit goes to a file; trailing text notes
+  // (e.g. save_to path) are preserved unchanged and do not corrupt JSON parsing of the primary block.
   apply(tool, result) {
-    if (!result || result.isError || !result.content.every((c) => c.type === 'text')) return result;
-    const body = result.content.map((c) => c.text).join('\n');
+    if (!result || result.isError || !result.content?.length || !result.content.every((c) => c.type === 'text')) return result;
+    const [first, ...rest] = result.content;
+    const body = first.text;
     if (body.length <= this.limit) return result;
     let parsed;
     try {
@@ -123,6 +150,6 @@ export class Spill {
       note: `回答有 ${body.length} 字，超过 ${this.limit} 字，全文写进了 spilled_to（24 小时后删除）：用读文件的工具按需读取，或用分页参数分几次取`,
       ...(parsed === undefined ? { head: body.slice(0, TEXT_HEAD) } : { outline: outline(parsed) }),
     };
-    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...rest] };
   }
 }

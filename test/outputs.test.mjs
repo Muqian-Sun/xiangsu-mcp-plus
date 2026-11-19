@@ -3,7 +3,7 @@ import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { MediaRefs, Spill, withRefs } from '../src/outputs.mjs';
+import { MediaRefs, SPILL_CHARS, Spill, withRefs } from '../src/outputs.mjs';
 
 test('refs are short, one per address and kind, and the least recently handed out are forgotten past the cap', () => {
   const refs = new MediaRefs({ max: 2 });
@@ -63,7 +63,23 @@ test('an answer over the limit goes to a file with an outline; short ones, error
   assert.match(summary.spilled_to, new RegExp(`^${dir}/outputs/rank_list-2026-11-08T10-00-00-000Z-[0-9a-f]{6}\\.json$`));
   assert.equal(fs.readFileSync(summary.spilled_to, 'utf8'), JSON.stringify(big));
   assert.equal(summary.chars, JSON.stringify(big).length);
-  assert.deepEqual(summary.outline, { total: 30, next_cursor: 5, items: { items: 30, item_keys: ['id', 'title'] }, note: `${'n'.repeat(200)}…（共 300 字）` });
+  assert.equal(SPILL_CHARS, 16000);
+  assert.deepEqual(summary.outline, {
+    total: 30,
+    next_cursor: 5,
+    items: {
+      items: 30,
+      item_keys: ['id', 'title'],
+      sample: [
+        { id: 0, title: '第0个' },
+        { id: 1, title: '第1个' },
+        { id: 2, title: '第2个' },
+        { id: 3, title: '第3个' },
+        { id: 4, title: '第4个' },
+      ],
+    },
+    note: `${'n'.repeat(200)}…（共 300 字）`,
+  });
   assert.match(summary.note, /超过 100 字/);
   const tree = spill.apply('scene_tree', answer('行\n'.repeat(100)));
   const head = JSON.parse(tree.content[0].text);
@@ -83,4 +99,21 @@ test('spilling sweeps out files older than a day', () => {
   spill.apply('b', answer('y'.repeat(20)));
   assert.equal(fs.existsSync(first), false);
   assert.equal(fs.existsSync(fresh), true);
+});
+
+test('spilling preserves trailing text notes and keeps the primary block as JSON', () => {
+  const dir = tmpdir('spill-notes');
+  const spill = new Spill({ stateDir: dir, limit: 50, now: () => Date.parse('2026-11-08T10:00:00Z') });
+  const big = { items: Array.from({ length: 10 }, (_, i) => ({ id: i, title: `项${i}` })) };
+  const res = spill.apply('makeup_layers', {
+    content: [
+      { type: 'text', text: JSON.stringify(big) },
+      { type: 'text', text: '已保存：/tmp/makeup_layers.json' },
+    ],
+  });
+  assert.equal(res.content.length, 2);
+  const summary = JSON.parse(res.content[0].text);
+  assert.ok(summary.spilled_to.endsWith('.json'));
+  assert.equal(summary.outline.items.items, 10);
+  assert.equal(res.content[1].text, '已保存：/tmp/makeup_layers.json');
 });

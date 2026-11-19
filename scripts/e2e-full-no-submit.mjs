@@ -24,7 +24,7 @@ async function connect(flat = true) {
     new StdioClientTransport({
       command: process.execPath,
       args: [server],
-      env: { ...process.env, ...(flat ? { XIANGSU_MCP_FLAT_TOOLS: '1' } : {}) },
+      env: { ...process.env, ...(flat ? { XIANGSU_MCP_FLAT_TOOLS: '1' } : { XIANGSU_MCP_COMPACT_TOOLS: '1' }) },
     }),
   );
   return client;

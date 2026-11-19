@@ -148,18 +148,18 @@ test('the 9.8.3 panel and agent tools route to the right window with their timeo
   const { json, call, seen } = await connect({
     plugin: async (method) => (method === 'custom_gan_tasks' ? { items: [{ task_id: 't1', female_image_url: 'https://out/f.png', video_female_url: 'https://v/f.mp4' }] } : { ok: method }),
   });
-  await json('ai_vfx_submit', { prompt: '金色光环', duration_s: 6 });
+  await json('ai_vfx', { action: 'submit', prompt: '金色光环', duration_s: 6 });
   assert.deepEqual(seen.at(-1), { method: 'ai_vfx_submit', params: { prompt: '金色光环', duration_s: 6 }, opts: { pid: 7, timeoutMs: 1100000 } });
-  await json('ai_vfx_tasks', { task_id: 'wf1', wait_s: 30 });
+  await json('ai_vfx', { action: 'tasks', task_id: 'wf1', wait_s: 30 });
   assert.deepEqual(seen.at(-1), { method: 'ai_vfx_task', params: { task_id: 'wf1', wait_s: 30 }, opts: { pid: 7, timeoutMs: 150000 } });
-  assert.match((await call('ai_vfx_tasks', { wait_s: 3 })).content[0].text, /wait_s only applies together with task_id/);
-  await json('ai_vfx_import', { project_path: '/proj/B', task_id: 'wf1' });
+  assert.match((await call('ai_vfx', { action: 'tasks', wait_s: 3 })).content[0].text, /wait_s only applies together with task_id/);
+  await json('ai_vfx', { action: 'import', project_path: '/proj/B', task_id: 'wf1' });
   assert.deepEqual(seen.at(-1), { method: 'ai_vfx_import', params: { task_id: 'wf1' }, opts: { projectPath: '/proj/B', timeoutMs: 300000 } });
-  const tasks = await json('custom_gan_tasks', {});
+  const tasks = await json('custom_gan', { action: 'tasks' });
   assert.match(tasks.items[0].female_image_ref, /^img:\d+$/);
   assert.match(tasks.items[0].video_female_ref, /^video:\d+$/);
-  assert.match((await call('custom_gan_train', { task_id: 't1', selected: [1, 2] })).content[0].text, /INVALID_ARGUMENTS\(custom_gan_train\): selected/);
-  await json('custom_gan_import', { project_path: '/proj/B', task_id: 't1' });
+  assert.match((await call('custom_gan', { action: 'train', task_id: 't1', selected: [1, 2] })).content[0].text, /INVALID_ARGUMENTS\(custom_gan\): selected/);
+  await json('custom_gan', { action: 'import', project_path: '/proj/B', task_id: 't1' });
   assert.deepEqual(seen.at(-1).opts, { projectPath: '/proj/B', timeoutMs: 600000 });
   await json('preview_actions', { project_path: '/proj/B', commands: [{ command_type: 'seek_to_time', params: { time_ms: 800 } }] });
   assert.deepEqual(seen.at(-1), { method: 'preview_actions', params: { commands: [{ command_type: 'seek_to_time', params: { time_ms: 800 } }] }, opts: { projectPath: '/proj/B', timeoutMs: 30000 } });
@@ -178,19 +178,19 @@ test('image tools copy the editor result out of its cache; repaint sends the mar
     plugin: async (method) => (method === 'image_matting' ? { parts, folder: cache } : method === 'image_repaint' ? { output: result, mode: 'remove' } : { output: result }),
   });
   const out = path.join(dir, 'out');
-  const up = await call('image_upscale', { image_path: frame, out_dir: out });
+  const up = await call('image_ai_edit', { action: 'upscale', image_path: frame, out_dir: out });
   assert.equal(JSON.parse(up.content[0].text).file, path.join(out, 'frame_upscaled.png'));
   assert.equal(up.content[1].type, 'image');
   assert.deepEqual(seen.at(-1).opts, { pid: 7, timeoutMs: 180000 });
 
-  const rep = await call('image_repaint', { image_path: frame, boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }], out_dir: out });
+  const rep = await call('image_ai_edit', { action: 'repaint', image_path: frame, boxes: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }], out_dir: out });
   const r = JSON.parse(rep.content[0].text);
   assert.equal(seen.at(-1).params.image_path, path.join(out, 'frame_marked.png'), 'the plugin gets the marked copy');
   assert.equal(r.file, path.join(out, 'frame_removed.png'));
   assert.equal(r.marked_ratio, 0.02);
-  assert.match((await call('image_repaint', { image_path: frame })).content[0].text, /mark the area with mask or boxes/);
+  assert.match((await call('image_ai_edit', { action: 'repaint', image_path: frame })).content[0].text, /mark the area with mask or boxes/);
 
-  const mat = await call('image_matting', { image_path: frame, out_dir: out });
+  const mat = await call('image_ai_edit', { action: 'matting', image_path: frame, out_dir: out });
   assert.deepEqual(JSON.parse(mat.content[0].text).files, { subject: path.join(out, 'frame_subject.png'), hair: path.join(out, 'frame_hair.png') });
   assert.ok(fs.existsSync(path.join(out, 'frame_hair.png')));
 });

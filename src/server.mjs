@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, McpError, ReadResourceRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import QRCode from 'qrcode';
 import { PNG } from 'pngjs';
 import { loadImage as loadCanvasImage } from '@napi-rs/canvas';
@@ -34,7 +34,9 @@ import { DEFAULT_FONT } from './editorres.mjs';
 import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
 import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
 import { setSceneLayers } from './scenelayers.mjs';
-import { DIRECT_TOOLS, searchTools, withHiddenToolHints } from './tool-catalog.mjs';
+import { DIRECT_TOOLS, isNativeDeferredClient, searchTools, withHiddenToolHints } from './tool-catalog.mjs';
+import { CAPABILITIES_RESOURCE_URI, CAPABILITY_INSTRUCTIONS, COMPACT_MODE_NOTE, CapabilityAtlas } from './capabilities.mjs';
+import { compactEditByDslResult, normalizeIntention, normalizeOfficialArgs, precheckEditByDsl } from './contract-adapter.mjs';
 import { buildImageSheet } from './imagesheet.mjs';
 import { cropBuffer, exportAudio, imageMetaFromPng, isVideoPath, probeAudio, videoContactSheet } from './mediainfo.mjs';
 import { buildH5Bundle, subsetH5Font } from './h5.mjs';
@@ -44,15 +46,15 @@ const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEA
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
 const LIBRARY_PANELS_TEXT =
-  'general: the regular panels (3d_distortion=脸部变形/3D 变形, distortion=美型, gaoguai_gan/makeup_gan=AI 实时变脸, 3d_makeup=美妆, 3d_filter=滤镜, sticker=跟脸贴纸); square: aigc_material=素材广场, other creators shares (ready-made AI images / AI makeup / custom live faces — applying downloads the result, no regeneration, no quota); collection: collection=收藏, this account favorites. On-the-fly AI panels live elsewhere: 「AI 妆容」 → ai_makeup_*, 「AI 3D」 → ai3d_*, 「AR 视频」 → ar_video_*, 「画面特效」 → ai_vfx_*, 「实时变脸」 → custom_gan_*; 「图片」/「视频」 generation is not integrated.';
+  'general: regular panels (3d_distortion=脸部变形, distortion=美型, gaoguai_gan/makeup_gan=AI 实时变脸, 3d_makeup=美妆, 3d_filter=滤镜, sticker=跟脸贴纸); square: aigc_material=素材广场 (ready-made creator shares, no quota); collection: collection=收藏. Cloud AI generation panels use ai_makeup, ai3d, ar_video, ai_vfx, custom_gan.';
 const RANK_TYPE_TEXT = Object.entries(RANK_TYPES).map(([k, name]) => `${k} ${name}`).join('、');
 const SCRIPT_TAG_TEXT = Object.entries(SCRIPT_TAGS).map(([k, name]) => `${k} ${name}`).join('、');
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const target = {
-  project_path: z.string().optional().describe('Absolute path of the target project. Pass either this or instance_id; both may be omitted while exactly one project window is open.'),
-  instance_id: z.string().optional().describe('instance_id from the official list_instances; pass either this or project_path.'),
+  project_path: z.string().optional().describe('Target project path (omit when only one window is open).'),
+  instance_id: z.string().optional().describe('Official instance_id (alternative to project_path).'),
 };
 
 const saveTo = z.string().min(1).optional().describe('Directory (absolute path, created if missing) to save the output into for long-term keeping.');
@@ -273,7 +275,7 @@ class Seen {
 }
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
-const REF_NOTE = '\n\nMedia in results comes as short references (*_ref / *_refs fields, e.g. img:12, video:3). View them through image_view images array (the parameter is literally named images, e.g. images: ["img:12", "video:3"]): images render inline with dimensions (PNGs add the non-transparent bounding box alpha_bbox), videos give a 3×2 frame-grid preview. Audio: probe and trim with audio_probe. References live for this run of the MCP server.';
+const REF_NOTE = ' Media fields (*_ref/*_refs) are viewed via image_view(images=["img:N","video:N"]); audio via audio_probe.';
 const KIND_TEXT = { video: '视频', audio: '音频' };
 const cropBox = z.strictObject({
   x: z.number().min(0).max(1),
@@ -297,7 +299,19 @@ const TOPIC_POLL_MS = 3000;
 const TOPIC_WAIT_MS = 60000;
 
 export function createServer(deps = {}) {
-  const flatTools = deps.flatTools ?? (process.env.XIANGSU_MCP_FLAT_TOOLS === '1');
+  // Exposure mode negotiation across multiple MCP clients (Claude Code, Codex, Cursor, Grok, ZCode, Antigravity):
+  // - Explicit override via deps.flatTools or XIANGSU_MCP_FLAT_TOOLS=1|0 / XIANGSU_MCP_COMPACT_TOOLS=1 always wins.
+  // - Otherwise auto-detects after MCP initialize using clientInfo.name: clients with verified native
+  //   deferred tool loading (Claude Code) get flat typed tools; all other clients get compact mode
+  //   (29 high-frequency direct tools + tool_search/tool_describe/tool_call) to stay within tool/context budgets.
+  const explicitFlat =
+    deps.flatTools !== undefined
+      ? Boolean(deps.flatTools)
+      : process.env.XIANGSU_MCP_COMPACT_TOOLS === '1' || process.env.XIANGSU_MCP_FLAT_TOOLS === '0'
+        ? false
+        : process.env.XIANGSU_MCP_FLAT_TOOLS === '1'
+          ? true
+          : null;
   const d = {
     callPlugin,
     listInstances,
@@ -334,10 +348,11 @@ export function createServer(deps = {}) {
   const server = new Server(
     { name: 'xiangsu-mcp-plus', version: VERSION },
     {
-      capabilities: { tools: { listChanged: true } },
-      instructions: flatTools ? undefined : 'Call the common Xiangsu tools directly. For other official and extension tools: find names with tool_search, look up full parameters with tool_describe, then call with tool_call passing the original tool name and arguments. If the original tool name is already known, start at tool_describe.',
+      capabilities: { tools: { listChanged: true }, resources: {} },
+      instructions: CAPABILITY_INSTRUCTIONS,
     },
   );
+  const isFlat = () => (explicitFlat !== null ? explicitFlat : isNativeDeferredClient(server.getClientVersion()));
   d.official = d.official ?? new OfficialMcp();
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
@@ -350,8 +365,12 @@ export function createServer(deps = {}) {
   d.downloads = d.downloads ?? new Downloads();
   d.qrCodes = d.qrCodes ?? new QrCodes();
   d.callLog = d.callLog ?? new CallLog();
+  server.oninitialized = () => {
+    d.callLog.write({ event: 'client_initialized', client: server.getClientVersion() ?? null, mode: isFlat() ? 'flat' : 'compact' });
+  };
   d.refs = d.refs ?? new MediaRefs();
   d.spill = d.spill ?? new Spill();
+  d.atlas = d.atlas ?? new CapabilityAtlas();
   d.qrCodes.prune();
   // Library assets and homepage works seen in this session, kept here rather than in a window:
   // windows open and close while an agent works, and a later apply or download may be served by a
@@ -903,9 +922,7 @@ export function createServer(deps = {}) {
       name: 'library_list',
       refs: true,
       keywords: '素材库 素材 面板 浏览 library panel browse',
-      description: `Browse the official asset library by panel. Without panel_key: the applicable panels (panel_key) and kinds — ${LIBRARY_PANELS_TEXT} With panel_key: pages of that panel assets (template_id, title, kind, cover cover_ref, cursor).\n\n` +
-        '广场 sub-categories: 妆容, 图片, 实时变脸, 跟脸贴纸, 前景贴纸, 画面特效, 3D 模型, 3D 饰品; 收藏 sub-categories: folders like 全部, 美妆, 滤镜. Square cards without applicable content are only counted in unsupported.\n\n' +
-        'Pick by looks: hand cover_ref to image_view. Know the term: library_search. Have a template_id: apply with library_apply; the full image set of an AI image card (kind=ai_image): library_images.',
+      description: `Browse official asset library panels. Omit panel_key for panel index (${LIBRARY_PANELS_TEXT}); pass panel_key for paged assets (template_id, title, kind, cover_ref). Apply via library_apply; AI image card full set via library_images.`,
       shape: {
         ...target,
         panel_key: z.string().optional().describe('A panel: take panel_key from the panels of a call without panel_key; omitted, only the panel list is returned.'),
@@ -916,18 +933,18 @@ export function createServer(deps = {}) {
       run: async (a) => {
         if (a.panel_key !== undefined) return library('library_list')(a);
         const { project_path, instance_id } = a;
-        return text(await d.callPlugin('library_nav', {}, await homeWindow({ project_path, instance_id })));
+        const nav = await d.callPlugin('library_nav', {}, await homeWindow({ project_path, instance_id }));
+        if (Array.isArray(nav?.panels)) {
+          try { d.atlas.recordLibraryPanels(nav.panels); } catch (_) {}
+        }
+        return text(nav);
       },
     },
     {
       name: 'library_search',
       refs: true,
       keywords: '素材库 搜索 美妆 滤镜 贴纸 音效 library search',
-      description: 'Keyword search over the official asset library (makeup, filters, face distortion, AI live faces, stickers, visual effects, sound effects, 素材广场, ...).\n\n' +
-        'A term equal to a panel or sub-category name also pulls in that section assets — 「滤镜」 → the filter panel, 「腮红」 → 美妆/腮红 + 跟脸贴纸/腮红 (their titles rarely carry the word), 「复古滤镜」 → 滤镜/复古; ≤300 per section.\n\n' +
-        'Ranking: exact title > prefix > contains > category match > rest; each item matched says how (title / category:面板/分类 / panel:面板). queries merges up to 8 near-synonyms.\n\n' +
-        'Paged by offset / count (10-minute cache, paging does not re-request). Items carry template_id, title, panel_key, kind, cover_ref; totals: total, by_panel (narrow with panel_key), matched_categories, related_categories (name contains the term, not expanded — list via library_list). kind: package 素材包, ai_image AI 图片, ai_makeup AI 妆容, custom_gan 自定义实时变脸, foreground_sticker 前景贴纸, face_sticker 跟脸贴纸, filter 滤镜.\n\n' +
-        'First page (no panel_key / offset) also adds 「添加对象」 menu matches to menu_items (「脸蛋天才」, 「磨皮」, 「发光」 — not library assets; add with menu_add) with menu_note.',
+      description: 'Search the official asset library (makeup, filters, distortion, live face, stickers, VFX, sound, square) by query or queries (≤8 synonyms). Exact panel/category names expand that section; first page also lists matching add-object menu items in menu_items (add via menu_add). Paged 10-min cache; apply via library_apply.',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('Search term, such as 「芒果脸」, 「腮红」 or 「复古滤镜」. Either this or queries.'),
@@ -1016,14 +1033,7 @@ export function createServer(deps = {}) {
       name: 'works_by_effect',
       refs: true,
       keywords: '特效 ID 查工程 做同款 works by effect',
-      description: "Given effect IDs from elsewhere (rank_list / rank_subject_detail / rank_innovation / effect_search), find whether the homepage has a project — the homepage 「特效ID」 search endpoint. ≤20 effects (one rank page); 1–4 requests each.\n\n" +
-        'Per effect, status:\n' +
-        '- found: homepage project exists\n' +
-        '- same_style: no project, but mobile 「做同款」 points at a homepage project (its effect effect_id + name — often a different effect: 「顶美精致淡妆感」 → 「可可裸妆」)\n' +
-        '- same_name: only same-named works (different effect_id — possibly someone else; not this effect)\n' +
-        '- not_on_homepage: nothing obtainable\n\n' +
-        'same_style still reports when its project is off-homepage; the status then follows the same-name lookup. Matching works land in items (fields as works_list); template_id works directly with works_download / works_open.\n\n' +
-        'The default search runs in 「推荐」, which by ID also reaches category-unique works — searching by ID inside another category misses them; leave category_id unset.',
+      description: 'Check up to 20 effect IDs (from rank_list / effect_search) for downloadable homepage projects: returns per-effect status (found, same_style via mobile 做同款, same_name, not_on_homepage) and matching items ready for works_download / works_open. Leave category_id unset (defaults to 「推荐」).',
       shape: {
         ...target,
         effects: z
@@ -1207,11 +1217,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_prepare',
       keywords: '提交 填表 提审 prepare',
-      description:
-        'Fill the Douyin submit window through to its final 「提交审核」 page and stop there — nothing is sent.\n\n' +
-        'Flow: local precheck (package size, template reused as-is, login, icon) → close any submit window left open by an earlier call (closed_previous; WINDOW_NOT_CLOSED if it will not close) → open a fresh one via the toolbar 「提交特效」 entry (minimized to the Dock, no focus) → fill pages in order: name / trigger hint / camera on 「特效基础信息」, inspiration and task on 「特效发布设置」 (the icon comes from the project — set it first with icon_image) → turn to 「提交审核」 and wait for the on-page checks (size, performance, similarity; usually within a minute).\n\n' +
-        'Returns the page summary, per-check results, agreement state, whether 「提交审核」 is clickable, and next (what is still missing). Every entry is read back from the page to verify: truncation, a page error, a failed pick, or a blocked page turn fails the whole call (SUBMIT_*, page message verbatim) and leaves the window open. Settings not filled here (campaign, innovation declaration) are listed in other_sections as the page shows them; a failed precheck returns issues and opens no window.\n\n' +
-        'The agreement is never ticked and 「提交审核」 is never clicked. Next: submit_confirm, or let the user open the window from the Dock and click it themselves.',
+      description: 'Open a minimized submit window, fill name/trigger_hint/camera/inspiration/task (and optional icon_image), wait for on-page checks on 「提交审核」, and read back every field to verify. Never ticks the agreement or clicks submit. Next: submit_confirm after user approval.',
       shape: {
         ...target,
         name: z.string().min(1).describe('Effect name: ≤10 chars, two English letters or digits count as one, no emoji or special symbols. Page truncation or an error fails the call.'),
@@ -1236,12 +1242,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_confirm',
       keywords: '送审 提交 审核 submit confirm',
-      description:
-        'Click 「提交审核」 in the window submit_prepare filled — the effect really goes to platform review. This consumes one of the account submissions; submitted info cannot change during or after review, so confirm the submit_prepare summary with the user before calling.\n\n' +
-        'Takes over only the single open submit window of this project window (none: SUBMIT_WINDOW_NOT_OPEN, several: SUBMIT_WINDOW_AMBIGUOUS) and never refills it. name must match the summary effect name (filled.name), else SUBMIT_NAME_MISMATCH — a window filled for another effect must not go out. Ticks 《创作者协议》 first unless the page already shows 「已阅读并同意」 (agreement_ticked says whether it ticked this time).\n\n' +
-        'Guard rails before the click: page checks still running are waited for up to 3 minutes, then SUBMIT_CHECKS_RUNNING (unfinished) or SUBMIT_CHECKS_FAILED stops it; the account 10 newest works are also checked for a same-named work already reviewing or reviewed (failed reviews do not count) — that reports SUBMIT_ALREADY_SUBMITTED, and an unreadable works list reports SUBMIT_LOOKUP_FAILED; in all these cases nothing is clicked.\n\n' +
-        'After the click the page uploads the package and project before submitting (waited up to 5 minutes); the result is whatever the page reported to the editor (success with effect_id, failure with reason). On success the submit window closes; returns effect_id, name, trigger hint, agreement_ticked, success_text, needs_real_name, and listed — the work found among the newest works with its review state (null with listed_note when absent).\n\n' +
-        'When the page did not confirm success (it reported a failure, stopped without a result, or stayed silent past 5 minutes) the work may still have gone through: a same-named work found in the works list is treated as success, with the page situation in page_problem; not found, the error comes — SUBMIT_FAILED when the page gave a reason, else SUBMIT_RESULT_UNKNOWN — and the window stays open. After either error the work may still appear later, so never resubmit right away: pipeline_refresh, then pipeline_works to check for the effect; only discuss resubmission with the user once it is truly absent. This tool never retries on its own.',
+      description: 'Submit the effect for review in the window filled by submit_prepare (irreversible, consumes account submission quota; confirm with user first). Verifies name matches filled.name, checks pass, and no duplicate among newest 10 works; ticks 《创作者协议》 if needed and waits up to 5 min for effect_id. On SUBMIT_FAILED / SUBMIT_RESULT_UNKNOWN, never auto-retry: check pipeline_refresh + pipeline_works first.',
       shape: { ...target, name: z.string().min(1).describe('The effect name to submit; must equal filled.name from the submit_prepare summary.') },
       run: async (a) => {
         const { project_path, instance_id, name } = a;
@@ -1585,13 +1586,7 @@ export function createServer(deps = {}) {
     {
       name: 'pipeline_works',
       keywords: '作品 进度 精选 看板 pipeline works',
-      description: 'Where each of our works stands on its way to being picked (ops platform /api/agent/works; it re-fetches works and inbox mail every 10 min, data cards hourly; not connected to the editor).\n\n' +
-        'Three lines per work, each with stage, label, since, at_kind (platform = the platform gave the time, detected = we noticed, derived = computed by rule):\n' +
-        '- online: reviewing / testing / online / rejected or test_failed (reason = the rejection text) / gone (off-line or deleted)\n' +
-        '- pick: waiting (online < 3 days or bindings still rating — pick review may still happen) / missed (online ≥ 3 days, bindings rated, not picked) / round1 (first review) / round2 (failed round 1, in the second) / picked / pick_rejected (reason = platform wording, several joined by 「；」) / template (templates get no pick-review message) / none (never online)\n' +
-        '- reward: pending / locked (unlock by shooting a promo video) / unlocked\n\n' +
-        'group: act (user must act) / wait / done; action = what the user must do. eta: ours (our history — n, median, slowest; null under 3 samples), ours_range (from median + slowest), ours_passed (slowest sample already waited out), official / official_by. bindings: per-bound task/inspiration rating labels; metrics: cumulative exposure / publishes / earnings + latest-day deltas; successor_id: resubmitted after rejection.\n\n' +
-        'Plus summary (group and pick-stage counts), stats (stage-duration history), restricted / restriction + submit_pace (no submit window before next_allowed_at; null when restricted), health per data block (ok=false blocks name the cause and last success; auth = Xiangsu login), data_at (last works fetch), refreshing.',
+      description: 'Ops platform (/api/agent/works): status of all our works across online (reviewing/testing/online/rejected), pick (waiting/missed/round1/round2/picked/pick_rejected), and reward lines; grouped by act/wait/done with rejection reasons, ETAs, bindings, metrics, account restrictions, and submit_pace.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/works')),
     },
@@ -1644,20 +1639,21 @@ export function createServer(deps = {}) {
     {
       name: 'brief_today',
       keywords: '开工 简报 主攻 方向 brief today',
-      description: 'The morning brief (ops platform /api/agent/brief) — read once per session before ideation, conclusions first.\n\n' +
-        '- account: can we submit (restricted, until, today, next_allowed_at)\n' +
-        '- changes since last told to the user: needs_you (user must act), latest (last 10), up_to (ack via changes_ack)\n' +
-        '- focus: the AI-written track suggestion for today (inference=true marks inference): summary one-liner; each direction with from_hits (the hits it generalizes from), interest (why people play — one of four kinds), hotspot + angle (how the hook rides it), why (reason for the track), evidence (numbers), learn_from (picked works to learn from), avoid (pitfalls), bind — candidates: tasks (titles) and inspirations (titles) with check (requirements to verify one by one before binding; titles come from the brief input — still verify via tasks_open / task_requirements / inspirations_new); avoid lists tracks not to do; model, created_at; missing explains why nothing was produced\n' +
-        '- tracks: top 12 — platform picks_30d / picks_7d / picks_prev_7d, ours, entered, picked, pick_rejected, missed, entry_rate (null under 2 samples); plus total platform picks over 30 days\n' +
-        '- insights: rules computed from our own results; lessons: first 10 failure lessons (label, reason = platform wording or track, count, works, latest date)\n' +
-        '- hits: AI reverse-engineered from hit tops (inference=true): shared patterns, and the top 10 with per-work why + hook kind; ai_at\n' +
-        '- douyin: top 6 of the Douyin hot list relevant to effects (only 「站内玩法」 categories): name, categories, heat, trend\n' +
-        '- hotspots: top 6 Xiangsu hotspots — title, heat, heat_delta (vs about a day ago), is_new, same_topic_on_site, label (扎堆 / 还早 / 有人做 / 没查), inspiration count\n' +
-        '- fresh: newly appeared inspirations (count + first 8) since first seen, current 【创新】 count, tasks published within 7 days\n' +
-        '- tasks: tasks we bound (deadlines, same-type clauses, per-work track and rating); health per data block\n\n' +
-        'more names the drill-down order when ideating: douyin_hot_list → hit_reasons → hot_topics, topic_crowd → track_board, pick_samples, failure_lessons → tasks_open, task_requirements, inspirations_new.',
-      shape: {},
-      run: async () => text(await d.platformRequest('/api/agent/brief')),
+      description: 'Ops platform morning brief (/api/agent/brief) — read once per session before ideation. Sections: account, changes (ack via changes_ack), focus, tracks, insights, lessons, hits, douyin, hotspots, fresh, tasks. Pass sections to fetch only specific blocks and save context.',
+      shape: {
+        sections: z.array(z.string().min(1)).min(1).optional().describe('Optional subset of top-level keys to return (e.g. ["account", "changes", "focus", "hotspots"]).'),
+      },
+      run: async ({ sections } = {}) => {
+        const data = await d.platformRequest('/api/agent/brief');
+        if (!sections?.length || !data || typeof data !== 'object') return text(data);
+        const picked = {};
+        const missing = [];
+        for (const k of sections) {
+          if (Object.hasOwn(data, k)) picked[k] = data[k];
+          else missing.push(k);
+        }
+        return text({ ...picked, ...(missing.length ? { missing_sections: missing, available_sections: Object.keys(data) } : {}) });
+      },
     },
     {
       name: 'track_board',
@@ -1737,16 +1733,14 @@ export function createServer(deps = {}) {
     {
       name: 'inspirations_new',
       keywords: '灵感 新增 创新 inspirations new',
-      description: 'Inspirations (ops platform /api/agent/inspirations, the 「全部」 tab fully paged every 6 h; continuous paging gets rate-limited and truncated, so current and innovation cover the last 24 h seen): new = inspirations that appeared after the baseline (baseline_at; re-set when the paged count grows by 20%+) within the last 14 days (【创新】 tagged innovation); innovation = all currently tagged 【创新】.\n\n' +
-        'Per item: inspiration_id, title, tags, AI-or-not, linked hotspot, collect count, cover, first_seen_at (the list gives no publish date), and detail to check before binding: play description; incentive parsed from the 【激励说明】 section — deadline, expired, tasks to co-bind (title + still open open), reward range, null when the notes carry no incentive; platform effect_types (only 手速比拼, 脸部/五官变形, 基础脸/头饰 — 测一测 also tags 手速比拼; not a requirement); bonus_text, award_text, hotspot, first 3 reference images images + total, fetched-at at (refreshed every 3 days; null before first fetch). Never bind for the incentive when its co-bind task is closed (open=false) or the incentive expired. Reference images: image_view. Works and videos under an inspiration: inspiration_detail.',
+      description: 'Ops platform (/api/agent/inspirations): newly appeared inspirations (last 14 d) and all active 【创新】 inspirations, with parsed incentive deadlines, co-bind tasks (check open=true and !expired before binding), rewards, and reference images. Full inspiration details: inspiration_detail.',
       shape: {},
       run: async () => text(await d.platformRequest('/api/agent/inspirations')),
     },
     {
       name: 'inspirations_find',
       keywords: '灵感 找 题材 inspirations find',
-      description: 'Find inspirations across everything currently listed, by topic words (ops platform /api/agent/inspirations/find, no editor needed; "listed" = seen within 24 h of the 6-hourly full pass — 【创新】, hotspot-linked and plain alike).\n\n' +
-        'q: space-separated words, all of which must appear in title, tags, hotspot or play description (details missing: title/tags/hotspot only); without q, list by kind. Order: 【创新】 first, unexpired incentives above expired, then hotspot-linked, then plain; ≤40 per call; matched = total found. Per item: inspiration_id, title, tags, kind, hotspot, cover, first_seen_at, detail (play description, incentive: deadline / expired / co-bind tasks with open / reward range; first 3 reference images). current = total listed, with_detail = of which details fetched. Older, delisted inspirations: inspiration_search.',
+      description: 'Ops platform (/api/agent/inspirations/find, no editor needed): search all active inspirations (【创新】/hotspot/plain) by space-separated topic words q (≤40 items, prioritized by 【创新】 and active incentives) with play description, incentive deadline, and co-bind tasks. Delisted inspirations: inspiration_search.',
       shape: {
         q: z.string().trim().max(30).optional().describe('Topic words, space-separated, such as 「前任 撤回」 or 「火锅」.'),
         kind: z.enum(['innovation', 'hotspot', 'plain']).optional().describe('Only one kind: innovation 【创新】, hotspot (attached to a hotspot), plain.'),
@@ -1955,10 +1949,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       keywords: '查看 参数 组件 批量 inspect',
-      description: 'Component parameters of several objects in one call (official inspect per object; one object raw and full: inspect directly). Values unwrapped ({type, data} → the value), over-long arrays reduced to length + first items, bound resources as {resource, type, file}, referenced objects as {object, name}.\n\n' +
-        'Filters: component_types keeps those component types; fields keeps properties whose name contains any fragment (case-insensitive, e.g. ["intensity", "position"] — nested matches keep the whole block, e.g. the bloom block of post-processing for pBloomThreshold). Makeup layers (FaceMask / FaceMaskDY) get blend-mode names beside the numbers (blendMode_name / surfaceBlendMode_name, e.g. 「正片叠底」).\n\n' +
-        'preset="key" keeps the parameters that usually decide the effect: position/scale/rotation, visibility & enable, intensity/opacity/Transparency/weight/color-like, the AI-face Channel (Texture skin path / Distortion distortion path), blocks containing intensity-like parameters (glow, grading), text content (str) and 2D sizes (sizeDelta), bound resources, and all script-component parameters from the scene file. Empty texture slots and fully transparent blacks are dropped (a picked list built from makeup, distortion, sticker and text work — extend with fields; fields keeps named properties even when empty).\n\n' +
-        'guids: guid, object name, or hierarchical path (like scene_tree subtree; ambiguous entries report AMBIGUOUS_OBJECT with candidates). Non-object guids (components, resources) pass through to official inspect. project_dir reads the scene file directly, no window (editor-panel values included, e.g. makeup textures and strengths), guids are the scene_tree #index; built-in resources surface as {builtin: id}, runtime-generated ones as {path}. Per-object failures note their own reason. save_to saves inspect_many.json.',
+      description: 'Inspect multiple objects in one call (by guid, name, or path; or #index with project_dir offline). Unwraps values, resolves bound resources/objects, and names makeup blend modes. Filter with component_types, fields (substring match), or preset="key" (transform/visibility/intensity/color/text/resources/script params).',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('Read this project directory directly, no window; ignores project_path / instance_id.'),
@@ -2008,9 +1999,7 @@ export function createServer(deps = {}) {
     {
       name: 'makeup_layers',
       keywords: '美妆 妆容 层 拆解 makeup layers',
-      description: 'All makeup layers of a project (FaceMask, legacy FaceMaskDY, and EyeColorV2 contacts) with per-layer part, color, female/male strengths, and whether it is active (hidden object or ancestor, disabled component, or both strengths 0 = inactive).\n\n' +
-        'Region (全脸 / 眼部 / 睫毛 / 唇部 / 牙齿) comes from the layer type; part from layer-name keywords first (眉, 眼线, 腮红, 口红, ...), else from texture pixels (part_from says which); color is the alpha-weighted mean over the painted area (color, hsl); a tint multiplies into tinted_color / tinted_hsl (computed, not verified on device). An opaque full-cover texture (white/black base working by shade) is measured by distance from the blend-mode neutral colour, noted in texture_note; layers that are almost entirely neutral report as no colour. texture_source: AI 妆容 (extracted via the library panel, with task_id + part — the ai_makeup_import kind), 素材广场 (applied AI-makeup card, card id), 官方素材包 (package template_id; whole sets unpacked per-package folder give package_folder, e.g. 「清冷_美妆」), author-imported (file), or unknown; copy=true marks a duplicate (often an author edit over an official texture).\n\n' +
-        'FaceMask intensity is the panel 「不透明度」: a standalone layer paints at opacity = intensity × female/male × external strength; sub-layers under a full AI-makeup set (GAN) ignore intensity. FaceMaskDY has one intensity; female/male are its runtime opacities (what actually renders); lip finish surfaces as surface (blend mode + strength). groups sums active layers by 眉 / 眼妆 / 美瞳 / 颊 / 轮廓 / 唇 / 点缀; absent lists missing parts of a set — use it to find gaps in our makeup or to break down another work (a works_download project). Reads the project scene file: save_project an open project first.',
+      description: 'Inspect all makeup layers in a saved project scene file (FaceMask, FaceMaskDY, EyeColorV2): region, part, color/HSL, female/male/opacity strengths, texture_source (AI 妆容 / 素材广场 / 官方素材包 / local), active state, groups, and absent parts. Call save_project first for an open project.',
       shape: {
         project_dir: z.string().min(1).describe('Absolute path of the project directory (contains Assets/main.scene), e.g. a works_download project_path or your own project.'),
         save_to: saveTo,
@@ -2024,12 +2013,7 @@ export function createServer(deps = {}) {
     {
       name: 'makeup_compare',
       keywords: '妆容 对比 调强度 makeup compare',
-      description: `Compare makeup states on one face: reset the preview, play at_ms, shoot the baseline (current state), then apply each variant temporarily, wait for the preview to repaint, shoot, and revert; a final baseline follows. Use a still-photo preview video (e.g. the 「模特D清秀||女」 model videos — every frame is the same photo); with a moving video the two baselines drift apart beyond ${DRIFT_MEAN} mean luma and the reply warns. A paused preview stops repainting, so pausing cannot freeze the frame.\n\n` +
-        'Two kinds of change, both live (no reload) and reverted after the run:\n' +
-        '- makeup strengths: female / male and intensity (the panel 「不透明度」; standalone layers paint at intensity × female/male; full-makeup-set sub-layers are GAN-driven and ignore it), contact and filter intensity\n' +
-        '- any numeric component property: object_path + component (a type from inspect, e.g. GanComponent, PostProcess) + property (e.g. Transparency, bloom.pBloomIntensity) + value, via official set_component — for AI-face skin strength, glow strength and the like. Texture or blend-mode changes need a reload — not comparable here. Full-set sub-layers adjust the same way; strengths revert, layers are not deleted.\n\n' +
-        `regions are frame fractions (0–1), e.g. under-eye, cheek, lip: per region each state gets mean RGB / HSL, luma (Rec.601), and skin detail (mean absolute difference after a σ ${DETAIL_SIGMA} px gaussian — higher = more texture), plus deltas vs the baseline; plus a zoomed side-by-side (baseline first, then variants, nearest-neighbour, wrapped when too wide). With reference (a reference image), each region takes ref (the same part on the reference, as fractions), states also get to_reference deltas, and the last tile is the reference crop (resized to match). On one still photo, frame-to-frame eye noise is about 0.5–0.8 (mean; 13–18 max) — smaller deltas are not visible.\n\n` +
-        'videos compares once per preview video in order, switching back afterwards. All changes are reverted; the project may show 「已修改」 afterwards (no need to save).',
+      description: `A/B compare temporary makeup/contact/filter or numeric component-property variants on a still-photo preview video: shoots baseline, applies each variant live, shoots zoomed side-by-side crops + RGB/HSL/luma/detail deltas (and optional to_reference deltas), then reverts all changes. Warns if baseline drifts >${DRIFT_MEAN}.`,
       shape: {
         ...target,
         variants: z
@@ -2282,11 +2266,43 @@ export function createServer(deps = {}) {
       },
     },
     {
+      name: 'editor_capabilities',
+      keywords: '内置 能力 地图 组件 菜单 玩法 查能力 editor capabilities atlas functions',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      description: 'Offline-queryable map of Xiangsu built-in editor capabilities (add-object menu, library panels, AI pipelines). Omit args for a compact overview by category; pass query/category for play-intent lookup (returns exact menu_id + how_to_add); pass from_functions to map competitor effect_detail.functions labels to editor menu_ids. Auto-caches live menu_list by editor version when a window is open.',
+      shape: {
+        ...target,
+        query: z.string().trim().min(1).optional().describe('Keyword or play intent (CN/EN), e.g. 「整蛊」「宠物」「头部分割」「下雪」「涂鸦」.'),
+        category: z.string().trim().min(1).optional().describe('Filter by menu group (Face, Body, 2DMenu, 3D, AIEffectMenu, Social, PetEffect, MusicEffect).'),
+        from_functions: z.array(z.string().min(1)).min(1).max(30).optional().describe('Platform capability labels from effect_detail.functions / pick_samples to map to editor menu_ids.'),
+        refresh: z.boolean().optional().describe('Force refresh from an open editor window into the versioned local cache.'),
+        limit: z.number().int().min(1).max(100).optional().describe('Max matched items for query/category search, default 25.'),
+      },
+      run: async ({ project_path, instance_id, query, category, from_functions, refresh = false, limit }) => {
+        const snap = d.atlas.loadSnapshot();
+        const shouldRefresh = refresh || (snap.source === 'baseline' && d.listInstances().length > 0);
+        if (shouldRefresh) {
+          try {
+            const win = await homeWindow({ project_path, instance_id });
+            const menu = await d.callPlugin('menu_list', { details: false }, win);
+            if (Array.isArray(menu?.items)) d.atlas.recordMenu(menu.items);
+            try {
+              const nav = await d.callPlugin('library_nav', {}, win);
+              if (Array.isArray(nav?.panels)) d.atlas.recordLibraryPanels(nav.panels);
+            } catch (_) {}
+          } catch (e) {
+            if (refresh) throw e;
+          }
+        }
+        if (from_functions?.length) return text(d.atlas.fromFunctions(from_functions));
+        if (query || category) return text(d.atlas.search({ query, category, limit }));
+        return text(d.atlas.overview());
+      },
+    },
+    {
       name: 'menu_list',
       keywords: '添加对象 菜单 官方功能 menu',
-      description: `Every official item of the 「添加对象」 add-object menu (toolbar makeup / reshape / AI live face, and face / body / 2D / 3D / AI / interaction / pet / music groups): menu_id, Chinese name, path, kind. The official edit_by_dsl add_builtin_object covers only part of them; face-lift, wrinkle removal, face generation (烟熏妆, cartoon faces), expression generation (香肠嘴, 呲牙尬笑), gender/age, feature shaping, body dress-up etc. go through menu_add.\n\n` +
-        `query filters by name, path or menu_id. details=true adds description and demo images (from the editor hover tip: image_url on the CDN, or image_file when bundled with the editor; null when neither) — hand them to image_view to pick AI faces, beauty fixes and the like by looks; ≤${MAX_MENU_PREVIEW} items per details call, more matches are an error.\n\n` +
-        'Cloud AI generation is not in this menu; the post-photo cloud-generation 「AI 组合效果」 is ai_combine_new / ai_combine_apply.',
+      description: `List official 「添加对象」 menu items (menu_id, name, path, kind) from an open window. query filters by name/path/menu_id; details=true adds hover descriptions and demo images (≤${MAX_MENU_PREVIEW} matches). For offline overview or play-intent search, use editor_capabilities.`,
       shape: {
         ...target,
         query: z.string().optional().describe('Filter by Chinese name, path or menu_id, such as 「表情」, 「美容」, 「烟熏妆」.'),
@@ -2294,7 +2310,11 @@ export function createServer(deps = {}) {
       },
       run: async (a) => {
         const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('menu_list', params, await homeWindow({ project_path, instance_id })));
+        const res = await d.callPlugin('menu_list', params, await homeWindow({ project_path, instance_id }));
+        if (!params.query && !params.details && Array.isArray(res?.items)) {
+          try { d.atlas.recordMenu(res.items); } catch (_) {}
+        }
+        return text(res);
       },
     },
     {
@@ -2350,222 +2370,153 @@ export function createServer(deps = {}) {
       run: plugin('ai_video_results'),
     },
     {
-      name: 'ai_makeup_submit',
+      name: 'ai_makeup',
       refs: true,
-      keywords: 'AI 妆容 提取 参考图 ai makeup',
-      description: `The library 「AI 妆容」 「立即提取」: upload a made-up reference portrait; AI extracts five makeup textures — face (blush, contour), contacts, eye area, lashes, lips — with recommended strengths per part, returning task_id. The task runs in the panel own AIMakeupManager, equally visible in its history.\n\n` +
-        `Reference image: ${AI_MAKEUP_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}, ≤${AI_MAKEUP_IMAGE_LIMIT.maxMB} MB, subject clear and unobstructed (the panel note); the closer to a front close-up, the better the extraction. Rejects while another task is running (AI_MAKEUP_RUNNING; the panel disables 「立即提取」 then). Waits by default, up to wait_s (measured 5–8 s each, 2026-11-11); when done returns: parts (per part name, texture image_ref, recommended intensity panel opacity, female / male strengths, blend_mode + its name; contacts add intensity, reflect_intensity and two blend modes), reference_image_ref, and preview_file (the panel 「整妆」 preview on the built-in sample face — hand to image_view). Unfinished: status running, continue with ai_makeup_tasks (task_id + wait_s). Happy: ai_makeup_import into the project. Whether it spends account quota is up to the editor — the editor code gives no hint (the history cost field is task seconds, not quota).`,
+      keywords: 'AI 妆容 提取 记录 导入 建层 ai makeup submit tasks import',
+      description: `Library 「AI 妆容」 pipeline: action=submit extracts 5 makeup textures (face, contacts, eye, lash, lip) from a portrait image (${AI_MAKEUP_IMAGE_LIMIT.exts.join('/').toUpperCase()}, ≤${AI_MAKEUP_IMAGE_LIMIT.maxMB} MB); action=tasks lists history or waits on one task_id; action=import imports a finished task into 「面部面具」 layers (fixes 9.8.x contacts EyeColorV2).`,
       shape: {
         ...target,
-        image_path: z.string().min(1).describe('Absolute path of the reference image.'),
-        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe(`Seconds to wait for the task at most, default ${AI_MAKEUP_WAIT_S}; 0 returns right after submission.`),
+        action: z.enum(['submit', 'tasks', 'import']).describe('Operation: submit, tasks, or import.'),
+        image_path: z.string().min(1).optional().describe('submit: absolute path of the reference portrait.'),
+        task_id: z.string().min(1).optional().describe('tasks (optional single lookup) / import (required): task_id.'),
+        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe(`submit (default ${AI_MAKEUP_WAIT_S}) / tasks with task_id (default 0): max seconds to wait.`),
+        cursor: z.number().int().min(0).optional().describe('tasks: page cursor (next_cursor).'),
+        count: z.number().int().min(1).max(AI_MAKEUP_HISTORY_PAGE).optional().describe(`tasks: items per page, default ${AI_MAKEUP_HISTORY_PAGE}.`),
+        parts: z.array(z.enum(['rest', 'pupil', 'eyepart', 'eyelash', 'lip'])).min(1).optional().describe('import: subset of parts (all 5 by default).'),
       },
       run: async (a) => {
-        const { project_path, instance_id, wait_s = AI_MAKEUP_WAIT_S, ...params } = a;
-        const got = await d.callPlugin('ai_makeup_submit', { ...params, wait_s }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: wait_s * 1000 + AI_MAKEUP_SLACK_MS });
-        return text(nameBlends(got));
-      },
-    },
-    {
-      name: 'ai_makeup_tasks',
-      refs: true,
-      keywords: 'AI 妆容 记录 任务 ai makeup tasks',
-      description: `Extraction history of the library 「AI 妆容」 (this account, the panel right-side list), newest first. Without task_id, paged by cursor: status (running / finished / failed), created / finished times, reference image reference_image_ref, failure reason failure, and finished tasks with parts (per-part texture image_ref, recommended strengths, blend modes — fields as ai_makeup_submit). With task_id, only this one; adding wait_s waits until it leaves running or the time runs out (max ${AI_MAKEUP_MAX_WAIT_S} s); finished ones also carry preview_file (the panel 「整妆」 preview, hand to image_view).`,
-      shape: {
-        ...target,
-        task_id: z.string().min(1).optional().describe('Only this task (a task_id from ai_makeup_submit).'),
-        wait_s: z.number().int().min(0).max(AI_MAKEUP_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
-        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
-        count: z.number().int().min(1).max(AI_MAKEUP_HISTORY_PAGE).optional().describe(`Items per page, default ${AI_MAKEUP_HISTORY_PAGE} (server cap).`),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, task_id, wait_s = 0, cursor, count } = a;
-        const win = await homeWindow({ project_path, instance_id });
-        if (task_id !== undefined) return text(nameBlends(await d.callPlugin('ai_makeup_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + AI_MAKEUP_SLACK_MS })));
-        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
-        return text(nameBlends(await d.callPlugin('ai_makeup_tasks', { cursor, count }, win)));
-      },
-    },
-    {
-      name: 'ai_makeup_import',
-      keywords: 'AI 妆容 导入 建层 ai makeup import',
-      description:
-        'Import a finished AI makeup task into the target project — the panel 「导入素材」 with parts checked (panel checkboxes untouched): each part texture is imported into Assets under the panel file name (「AI 美妆_面部.png」 etc.; an existing name gets 「 (1)」 appended, never overwriting), and a same-named layer is created under 「面部面具」 (with its camera when missing), strengths / female / male / blend modes from the AI recommendations. Contact layers get a fix on top: editor 9.8.1 writes the contact texture and strength onto a component the layer does not have, leaving a default brown iris at 0.8 — this tool writes the AI texture, recommended strength, reflect strength and blend modes onto the EyeColorV2 component and disables the opacity map per the panel intent. Undoable (two steps per part).\n\n' +
-        'parts imports a subset; all five by default. Returns added_objects, layers (per-layer object_path, texture, read-back intensity / female / male / blend — contacts intensity), skipped_parts (parts this extraction did not provide) and package_folders. Then makeup_compare to tune strengths, save_project.',
-      shape: {
-        ...target,
-        task_id: z.string().min(1).describe('A task_id from ai_makeup_submit / ai_makeup_tasks (status=finished).'),
-        parts: z
-          .array(z.enum(['rest', 'pupil', 'eyepart', 'eyelash', 'lip']))
-          .min(1)
-          .optional()
-          .describe('Import only these parts: rest face, pupil contacts, eyepart eye area, eyelash lashes, lip lips; all five by default.'),
-      },
-      run: async (args) => {
-        const { project_path, instance_id, ...params } = args;
+        const { action, project_path, instance_id, image_path, task_id, wait_s, cursor, count, parts } = a;
+        if (action === 'submit') {
+          if (!image_path) throw Error('INVALID_ARGUMENTS(ai_makeup): image_path is required for action=submit');
+          const ws = wait_s ?? AI_MAKEUP_WAIT_S;
+          const got = await d.callPlugin('ai_makeup_submit', { image_path, wait_s: ws }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: ws * 1000 + AI_MAKEUP_SLACK_MS });
+          return text(nameBlends(got));
+        }
+        if (action === 'tasks') {
+          const win = await homeWindow({ project_path, instance_id });
+          if (task_id !== undefined) {
+            const ws = wait_s ?? 0;
+            return text(nameBlends(await d.callPlugin('ai_makeup_task', { task_id, wait_s: ws }, { ...win, timeoutMs: ws * 1000 + AI_MAKEUP_SLACK_MS })));
+          }
+          if (wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+          return text(nameBlends(await d.callPlugin('ai_makeup_tasks', { cursor, count }, win)));
+        }
+        if (!task_id) throw Error('INVALID_ARGUMENTS(ai_makeup): task_id is required for action=import');
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        return text(nameBlends(await d.callPlugin('ai_makeup_import', params, { projectPath, timeoutMs: AI_MAKEUP_IMPORT_TIMEOUT_MS })));
+        return text(nameBlends(await d.callPlugin('ai_makeup_import', { task_id, ...(parts ? { parts } : {}) }, { projectPath, timeoutMs: AI_MAKEUP_IMPORT_TIMEOUT_MS })));
       },
     },
     {
-      name: 'ai3d_image_submit',
-      keywords: 'AI 3D 图生 3D 模型 ai3d image',
-      description: `The library 「AI 3D › 3D模型」 (image-to-3D): one reference image → a static 3D mesh in the cloud (no bones, no animation), returning task_id. Reference image: ${AI3D_IMAGE_LIMIT.exts.join(' / ').toUpperCase()}, ≤${AI3D_IMAGE_LIMIT.maxMB} MB, sides ≤${AI3D_IMAGE_LIMIT.maxSide} px; subject complete, clear, unobstructed, plain background preferred (the editor advice). A cartoon character: generate_image first for a front full-body shot on a plain background, then feed it here. Up to ${AI3D_MAX_RUNNING} tasks of this kind at once.\n\n` +
-        'Next: ai3d_tasks (task_id + wait_s) to wait, then ai3d_import to place it. Quota is up to the editor — no hint in the editor code.',
-      shape: {
-        ...target,
-        image_path: z.string().min(1).describe('Absolute path of the reference image.'),
-        precision: z
-          .enum(Object.keys(AI3D_FACE_NUM))
-          .optional()
-          .describe(`Precision (face count): ${Object.entries(AI3D_FACE_NUM).map(([k, v]) => `${k}=${v}`).join(', ')} — the editor low / medium / high; default medium.`),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('ai3d_image_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
-      },
-    },
-    {
-      name: 'ai3d_animation_submit',
-      keywords: 'AI 3D 动画 动作迁移 ai3d animation',
-      description: `The library 「AI 3D › 3D动画」: bake the motion of a person in a reference video onto an FBX with a standard humanoid skeleton, returning task_id. model: a built-in ${Object.keys(AI3D_PRESET_MODELS).join(' / ')} (full body / upper / lower / arms — editor-provided humanoid models) or a local .fbx path: must have the 20 standard humanoid bones (Hips, Spine, LeftUpLeg, ..., exact names, no mixamorig_ prefix — the editor only warns on missing ones and the reply carries warning), bones and face count within the editor import caps. Reference video: ${AI3D_VIDEO_LIMIT.animation.exts.join(' / ').toUpperCase()}, ≤${AI3D_VIDEO_LIMIT.animation.maxSeconds} s, ${AI3D_VIDEO_LIMIT.animation.maxMB} MB, sides ≤${AI3D_VIDEO_LIMIT.animation.maxSide}; single person, full body preferred. A model from ai3d_image_submit has no bones — not usable as model here.\n\n` +
-        'Next: ai3d_tasks to wait, ai3d_import (imports the animated FBX).',
-      shape: {
-        ...target,
-        video_path: z.string().min(1).describe('Absolute path of the reference video.'),
-        model: z.string().min(1).optional().describe(`${Object.keys(AI3D_PRESET_MODELS).join(' / ')}, or a local .fbx absolute path; default whole.`),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('ai3d_animation_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
-      },
-    },
-    {
-      name: 'ai3d_gs_segment',
+      name: 'ai3d',
       refs: true,
-      keywords: 'AI 3D 高精度 重建 分割 ai3d gs',
-      description: `The library 「AI 3D › 高精度模型重建」 step 1: upload a 360° orbit video of an object; the cloud identifies the subject, returning seg_task_id and subject_image_ref (hand to image_view). Confirm the subject is right, then ai3d_gs_submit generates the 3D Gaussian point cloud (.ply); wrong subject — re-shoot or switch videos. Video: ${AI3D_VIDEO_LIMIT.gs.exts.join(' / ').toUpperCase()}, ≤${AI3D_VIDEO_LIMIT.gs.maxSeconds} s, ${AI3D_VIDEO_LIMIT.gs.maxMB} MB, sides ≤${AI3D_VIDEO_LIMIT.gs.maxSide}; subject clear, good light, every angle covered. Identification takes ~20 s, waited up to wait_s; past that the editor cancels the run.`,
+      keywords: 'AI 3D 图生 动画 高精度 重建 高斯 模型 导入 取消 ai3d submit tasks import cancel',
+      description: `Library 「AI 3D」 pipeline: submit_image (image→static GLB, ≤${AI3D_IMAGE_LIMIT.maxMB} MB), submit_animation (video→humanoid FBX, model=${Object.keys(AI3D_PRESET_MODELS).join('/')} or .fbx), gs_segment+gs_submit (360° video→3DGS .ply), tasks (list by kind or wait on task_id), import (place into scene), cancel.`,
       shape: {
         ...target,
-        video_path: z.string().min(1).describe('Absolute path of the orbit video.'),
-        wait_s: z.number().int().min(10).max(AI3D_MAX_WAIT_S).optional().describe(`Seconds to wait for identification at most, default ${AI3D_SEGMENT_WAIT_S}.`),
+        action: z.enum(['submit_image', 'submit_animation', 'gs_segment', 'gs_submit', 'tasks', 'import', 'cancel']).describe('Operation.'),
+        image_path: z.string().min(1).optional().describe('submit_image: absolute path of the reference image.'),
+        precision: z.enum(Object.keys(AI3D_FACE_NUM)).optional().describe(`submit_image: ${Object.entries(AI3D_FACE_NUM).map(([k, v]) => `${k}=${v}`).join(', ')}; default medium.`),
+        video_path: z.string().min(1).optional().describe('submit_animation / gs_segment: absolute path of the reference video.'),
+        model: z.string().min(1).optional().describe(`submit_animation: ${Object.keys(AI3D_PRESET_MODELS).join('/')} or local .fbx path; default whole.`),
+        seg_task_id: z.string().min(1).optional().describe('gs_submit: seg_task_id returned by gs_segment.'),
+        kind: z.enum(['image', 'animation', 'gs']).optional().describe('tasks (required when listing history) / import (required): image, animation, or gs.'),
+        task_id: z.string().min(1).optional().describe('tasks (optional single) / import / cancel (required): task_id.'),
+        wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe(`gs_segment (min 10, default ${AI3D_SEGMENT_WAIT_S}) / tasks with task_id (default 0): max wait seconds.`),
+        cursor: z.number().int().min(0).optional().describe('tasks: page cursor (next_cursor).'),
+        count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`tasks: items per page, default ${AI3D_HISTORY_PAGE}.`),
       },
       run: async (a) => {
-        const { project_path, instance_id, wait_s = AI3D_SEGMENT_WAIT_S, ...params } = a;
-        const got = await d.callPlugin('ai3d_gs_segment', { ...params, wait_s }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS + wait_s * 1000 });
-        segments.set(got.seg_task_id, { subject_uri: got.subject_uri, req_json: got.req_json });
-        return text({ seg_task_id: got.seg_task_id, subject_image_url: got.subject_image_url });
-      },
-    },
-    {
-      name: 'ai3d_gs_submit',
-      keywords: 'AI 3D 高精度 生成 ai3d gs submit',
-      description: 'The library 「AI 3D › 高精度模型重建」 step 2: generate the 3D Gaussian point cloud from the subject identified by ai3d_gs_segment — the identification window 「确认主体」, returning task_id. Next: ai3d_tasks (kind=gs) to wait, ai3d_import to import.',
-      shape: { ...target, seg_task_id: z.string().min(1).describe('A seg_task_id from ai3d_gs_segment.') },
-      run: async (a) => {
-        const { project_path, instance_id, seg_task_id } = a;
-        const seg = segments.get(seg_task_id);
-        if (!seg) throw Error(`UNKNOWN_SEGMENT: ${seg_task_id}; call ai3d_gs_segment first`);
-        return text(await d.callPlugin('ai3d_gs_submit', seg, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
-      },
-    },
-    {
-      name: 'ai3d_tasks',
-      keywords: 'AI 3D 任务 记录 ai3d tasks',
-      description: `Generation tasks of the library 「AI 3D」 (this account). Without task_id, page the history by kind (required): status (running / finished / failed), created / finished times, input (image-to-3D precision, animation model), failure reason, and whether the result was downloaded with its local preview image / video (preview_image_file — hand to image_view). With task_id, only this one (no kind needed); adding wait_s waits until it leaves running or the time runs out (max ${AI3D_MAX_WAIT_S} s), then ai3d_import on status=finished.`,
-      shape: {
-        ...target,
-        kind: z.enum(['image', 'animation', 'gs']).optional().describe('To list history (required): image = 3D模型 (image-to-3D), animation = 3D动画, gs = 高精度模型重建. Not needed for one task_id.'),
-        task_id: z.string().min(1).optional().describe('Only this task (no kind needed).'),
-        wait_s: z.number().int().min(0).max(AI3D_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
-        cursor: z.number().int().min(0).optional().describe('Page cursor; take the previous page next_cursor.'),
-        count: z.number().int().min(1).max(AI3D_HISTORY_PAGE).optional().describe(`Items per page, default ${AI3D_HISTORY_PAGE} (server cap).`),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, kind, task_id, wait_s = 0, cursor, count } = a;
-        const win = await homeWindow({ project_path, instance_id });
-        if (task_id !== undefined) return text({ ...(kind ? { kind } : {}), ...(await d.callPlugin('ai3d_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 30000 })) });
-        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
-        if (kind === undefined) throw Error('INVALID_ARGUMENTS: kind is required to list the history (image, animation or gs)');
-        return text(await d.callPlugin('ai3d_tasks', { kind, cursor, count }, win));
-      },
-    },
-    {
-      name: 'ai3d_import',
-      keywords: 'AI 3D 导入 场景 ai3d import',
-      description:
-        'Download a finished AI 3D result into the editor AI 3D cache (visible in the panel too), import it into the project and place it into the scene (undoable) — the panel 「导入素材」 with the item checked: image-to-3D imports a GLB (scaled 15× by a 「模型大小控制」 wrapper), 3D animation imports an animated FBX, high-precision imports a PLY point cloud (scaled to 0.3). Returns added_objects (names + object_path), package_folders, local preview files. Then capture_preview for size and placement, save_project.',
-      shape: {
-        ...target,
-        task_id: z.string().min(1).describe('A task_id from ai3d_*_submit / ai3d_tasks.'),
-        kind: z.enum(['image', 'animation', 'gs']).describe('The task kind, matching the submission.'),
-      },
-      run: plugin('ai3d_import', AI3D_IMPORT_TIMEOUT_MS),
-    },
-    {
-      name: 'ai3d_cancel',
-      keywords: 'AI 3D 取消 ai3d cancel',
-      description: 'Cancel a still-running AI 3D generation task — the panel 「取消生成」.',
-      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
-      run: async (a) => {
-        const { project_path, instance_id, task_id } = a;
+        const { action, project_path, instance_id, image_path, precision, video_path, model, seg_task_id, kind, task_id, wait_s, cursor, count } = a;
+        if (action === 'submit_image') {
+          if (!image_path) throw Error('INVALID_ARGUMENTS(ai3d): image_path is required for action=submit_image');
+          return text(await d.callPlugin('ai3d_image_submit', { image_path, ...(precision ? { precision } : {}) }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+        }
+        if (action === 'submit_animation') {
+          if (!video_path) throw Error('INVALID_ARGUMENTS(ai3d): video_path is required for action=submit_animation');
+          return text(await d.callPlugin('ai3d_animation_submit', { video_path, ...(model ? { model } : {}) }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+        }
+        if (action === 'gs_segment') {
+          if (!video_path) throw Error('INVALID_ARGUMENTS(ai3d): video_path is required for action=gs_segment');
+          const ws = wait_s ?? AI3D_SEGMENT_WAIT_S;
+          if (ws < 10) throw Error('INVALID_ARGUMENTS(ai3d): wait_s must be >= 10 for action=gs_segment');
+          const got = await d.callPlugin('ai3d_gs_segment', { video_path, wait_s: ws }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS + ws * 1000 });
+          segments.set(got.seg_task_id, { subject_uri: got.subject_uri, req_json: got.req_json });
+          return text({ seg_task_id: got.seg_task_id, subject_image_url: got.subject_image_url });
+        }
+        if (action === 'gs_submit') {
+          if (!seg_task_id) throw Error('INVALID_ARGUMENTS(ai3d): seg_task_id is required for action=gs_submit');
+          const seg = segments.get(seg_task_id);
+          if (!seg) throw Error(`UNKNOWN_SEGMENT: ${seg_task_id}; call ai3d(action="gs_segment") first`);
+          return text(await d.callPlugin('ai3d_gs_submit', seg, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI3D_SUBMIT_TIMEOUT_MS }));
+        }
+        if (action === 'tasks') {
+          const win = await homeWindow({ project_path, instance_id });
+          if (task_id !== undefined) {
+            const ws = wait_s ?? 0;
+            return text({ ...(kind ? { kind } : {}), ...(await d.callPlugin('ai3d_task', { task_id, wait_s: ws }, { ...win, timeoutMs: ws * 1000 + 30000 })) });
+          }
+          if (wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+          if (kind === undefined) throw Error('INVALID_ARGUMENTS: kind is required to list the history (image, animation or gs)');
+          return text(await d.callPlugin('ai3d_tasks', { kind, cursor, count }, win));
+        }
+        if (action === 'import') {
+          if (!task_id || !kind) throw Error('INVALID_ARGUMENTS(ai3d): task_id and kind are required for action=import');
+          return plugin('ai3d_import', AI3D_IMPORT_TIMEOUT_MS)({ project_path, instance_id, task_id, kind });
+        }
+        if (!task_id) throw Error('INVALID_ARGUMENTS(ai3d): task_id is required for action=cancel');
         return text(await d.callPlugin('ai3d_cancel', { task_id }, await homeWindow({ project_path, instance_id })));
       },
     },
     {
-      name: 'ar_video_submit',
-      keywords: 'AR 视频 贴片 生成 ar video',
-      description:
-        'The library 「AI 素材 › AR 视频」 (AR video planes) — submit a generation, the panel 「立即生成」, returning task_id once the cloud (Seedance) accepts it. No mode switch in the editor; the input decides: mode=direct cuts out the subject only, no motion change — subject must be a video, no prompt or reference assets; mode=motion derives new motion or style from a required prompt, subject may be image or video, with optional reference images (e.g. adding props) and a reference action video.\n\n' +
-        "Inputs first go through the editor's own asset checks and conversion (same as panel uploads: JPG / JPEG / PNG / MP4 / MOV only; ≤9 images and 3 videos including the subject, each video ≥2 s, total video length within the editor switch cap, subject video under 60 s; off-spec images auto-scaled/compressed, videos auto-transcoded and trimmed — AR_VIDEO_INPUT_INVALID with the editor message when a conversion fails), and the video then passes the editor content review (up to 15 min). duration_s defaults to 10, min 4, cap from the editor switch (9.8.1: 15 s, 9.8.3: 30 s — ar_video_tasks limits is the source of truth). shadow is 「添加投影」, the editor default when omitted (switch dyeh_enable_ar_video_shadow, on as of 2026-11-08); on, the result is a projected floor video. Up to 10 tasks at once. Consumes the account AI model usage (per designer level); the editor gives no signal on remaining quota or per-run cost — exhausted reports 「模型使用次数达到上限」.\n\n" +
-        'The task downloads and composes in the window it was submitted from — ar_video_tasks / ar_video_import are fastest on that same window. Measured: a 10 s image-driven motion took ~6 min from submit to composed result.',
+      name: 'ar_video',
+      keywords: 'AR 视频 贴片 生成 任务 导入 取消 ar video submit tasks import cancel',
+      description: 'Library 「AI 素材 › AR 视频」 pipeline: action=submit generates an AR cutout video plane (mode=direct cuts out a video, mode=motion generates new motion from prompt+refs, spends quota); action=tasks lists/waits (succeeded returns 6-frame preview_image_file); action=import places AR plane+audio into scene; action=cancel.',
       shape: {
         ...target,
-        subject: z.string().min(1).describe('Absolute path of the subject image or video (the panel 「上传图片或视频」).'),
-        mode: z.enum(AR_VIDEO_MODES).describe('direct: the subject video becomes the AR plane as-is, cutout only; motion: new motion from prompt and reference assets.'),
-        prompt: z.string().optional().describe('Motion description (≤2000 chars), required for mode=motion, forbidden for mode=direct. Task-doc tip: writing 「生成高清视频」 tends to produce HD.'),
-        reference_images: z.array(z.string().min(1)).min(1).optional().describe('Reference image paths (JPG / JPEG / PNG), e.g. adding props; mode=motion only.'),
-        reference_video: z.string().min(1).optional().describe('Reference action video path (MP4 / MOV) for motion transfer; mode=motion only.'),
-        shadow: z.boolean().optional().describe('「添加投影」; the editor default when omitted. Usually off for front-camera selfie effects.'),
-        duration_s: z.number().int().positive().optional().describe('Output motion duration (s), default 10; range per the ar_video_tasks limits.'),
-      },
-      run: plugin('ar_video_submit', AR_VIDEO_SUBMIT_TIMEOUT_MS),
-    },
-    {
-      name: 'ar_video_tasks',
-      keywords: 'AR 视频 任务 记录 ar video tasks',
-      description: `Generation tasks of the library 「AR 视频」 (this account, the panel right-side list), newest first. Without task_id, paged by offset / count, with the current input limits limits; with task_id, only this one, waiting until it composes, fails, or the time runs out (max ${AR_VIDEO_MAX_WAIT_S} s).\n\n` +
-        'status: running (cloud generating), restoring (cloud done, downloading and composing locally), succeeded (importable), failed (failure = editor reason and error code), unconfirmed (cloud state unknown). Each carries name (the toolbar background-task name), mode, subject / reference-asset types, prompt, duration, shadow; succeeded adds actual seconds, dimensions, green_screen, original audio audio, local preview video preview_video_file (cutout over #1b1b1b), the video to import video_file, and a 6-frame horizontal preview grid preview_image_file (hand to image_view — no need to open the video). Tasks submitted from another window download and compose on first sight here, showing restoring first.',
-      shape: {
-        ...target,
-        task_id: z.string().min(1).optional().describe('Only this task (a task_id from ar_video_submit).'),
-        wait_s: z.number().int().min(0).max(AR_VIDEO_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
-        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
-        count: z.number().int().min(1).max(AR_VIDEO_HISTORY_PAGE).optional().describe(`Items per page, default ${AR_VIDEO_HISTORY_PAGE}.`),
+        action: z.enum(['submit', 'tasks', 'import', 'cancel']).describe('Operation: submit, tasks, import, or cancel.'),
+        subject: z.string().min(1).optional().describe('submit: absolute path of subject image or video.'),
+        mode: z.enum(AR_VIDEO_MODES).optional().describe('submit: direct (video cutout only) or motion (prompt-driven).'),
+        prompt: z.string().optional().describe('submit: motion description (required for mode=motion, forbidden for direct).'),
+        reference_images: z.array(z.string().min(1)).min(1).optional().describe('submit: reference image paths (mode=motion).'),
+        reference_video: z.string().min(1).optional().describe('submit: reference action video path (mode=motion).'),
+        shadow: z.boolean().optional().describe('submit: 「添加投影」; usually false for front-camera selfie effects.'),
+        duration_s: z.number().int().positive().optional().describe('submit: duration in seconds (default 10; range in tasks limits).'),
+        task_id: z.string().min(1).optional().describe('tasks (optional single) / import / cancel (required): task_id.'),
+        wait_s: z.number().int().min(0).max(AR_VIDEO_MAX_WAIT_S).optional().describe(`tasks with task_id: max wait seconds (max ${AR_VIDEO_MAX_WAIT_S}).`),
+        offset: z.number().int().min(0).optional().describe('tasks: paging offset, default 0.'),
+        count: z.number().int().min(1).max(AR_VIDEO_HISTORY_PAGE).optional().describe(`tasks: items per page, default ${AR_VIDEO_HISTORY_PAGE}.`),
       },
       run: async (a) => {
-        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
-        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        if (task_id !== undefined) return text(await d.callPlugin('ar_video_task', { task_id, wait_s }, { projectPath, timeoutMs: wait_s * 1000 + 120000 }));
-        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
-        return text(await d.callPlugin('ar_video_tasks', { offset, count }, { projectPath }));
+        const { action, project_path, instance_id, subject, mode, prompt, reference_images, reference_video, shadow, duration_s, task_id, wait_s, offset, count } = a;
+        if (action === 'submit') {
+          if (!subject || !mode) throw Error('INVALID_ARGUMENTS(ar_video): subject and mode are required for action=submit');
+          const params = {
+            subject,
+            mode,
+            ...(prompt !== undefined ? { prompt } : {}),
+            ...(reference_images ? { reference_images } : {}),
+            ...(reference_video ? { reference_video } : {}),
+            ...(shadow !== undefined ? { shadow } : {}),
+            ...(duration_s !== undefined ? { duration_s } : {}),
+          };
+          return plugin('ar_video_submit', AR_VIDEO_SUBMIT_TIMEOUT_MS)({ project_path, instance_id, ...params });
+        }
+        if (action === 'tasks') {
+          const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+          if (task_id !== undefined) {
+            const ws = wait_s ?? 0;
+            return text(await d.callPlugin('ar_video_task', { task_id, wait_s: ws }, { projectPath, timeoutMs: ws * 1000 + 120000 }));
+          }
+          if (wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+          return text(await d.callPlugin('ar_video_tasks', { offset, count }, { projectPath }));
+        }
+        if (action === 'import') {
+          if (!task_id) throw Error('INVALID_ARGUMENTS(ar_video): task_id is required for action=import');
+          return plugin('ar_video_import', AR_VIDEO_IMPORT_TIMEOUT_MS)({ project_path, instance_id, task_id });
+        }
+        if (!task_id) throw Error('INVALID_ARGUMENTS(ar_video): task_id is required for action=cancel');
+        return plugin('ar_video_cancel')({ project_path, instance_id, task_id });
       },
-    },
-    {
-      name: 'ar_video_import',
-      keywords: 'AR 视频 导入 场景 ar video import',
-      description:
-        'Import a succeeded AR video task into the target project — the panel 「导入素材」 with the item checked (only that one, other checked results unaffected): the video 「混合透明.mp4」, its video texture 「混合透明 MP4 播放器」 (Mp4Texture, .mp4Tex) and original audio 「原声.mp3」 are imported as project resources; the scene gets a render group 「AR跟踪」 with 「AR平面跟踪」 (AR plane, MeshRenderer) holding 「AR 视频主体 N」, plus 「AR摄像机」; an empty scene also gets a 「通用」 group (camera and lights).\n\n' +
-        '「AR 视频主体」: the Image texture is the video texture (loopCount=-1 loops forever); an AudioComponent plays the original audio; ARVideoAudioController (a built-in component, params playOriginalAudio_target, originalVolume_target, videoTexture_target) makes the original audio follow the video. Script-side control: texture.getControl() play() / pause() / resume() / stop(), events via APJS.EventManager.getObjectEmitter(texture) listening to APJS.Mp4Event.PlayBegin / PlayEnd etc.; visual-script uses the built-in node 「视频纹理播放器」. Returns added_objects (names + object_path), package_folders (resources created by this import) and plane_guid (the editor-selected 「AR平面跟踪」). Then capture_preview for placement and size, save_project.',
-      shape: { ...target, task_id: z.string().min(1).describe('A task_id from ar_video_submit / ar_video_tasks (succeeded or imported).') },
-      run: plugin('ar_video_import', AR_VIDEO_IMPORT_TIMEOUT_MS),
-    },
-    {
-      name: 'ar_video_cancel',
-      keywords: 'AR 视频 取消 ar video cancel',
-      description: 'Cancel an AR video task still running (or unconfirmed) — the panel 「取消生成」. Confirmed: the task leaves the records (cancelled=true); already finished before the cancel: cancelled=false with the status it ended at. Finished tasks (succeeded / failed / cancelled) refuse: AR_VIDEO_NOT_RUNNING.',
-      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
-      run: plugin('ar_video_cancel'),
     },
     {
       name: 'sfx_synth',
@@ -2810,169 +2761,122 @@ export function createServer(deps = {}) {
       run: plugin('preview_actions', 30000),
     },
     {
-      name: 'ai_vfx_submit',
-      keywords: 'AI 生成 画面 特效 ai vfx',
-      description:
-        'Generate a full-screen visual effect (new in 9.8.3, the 「AI 生成 › 画面特效」 library panel): from prompt and reference assets (≤10 images, 1 video, video ≤60 s — the editor truncates longer) in the cloud, returning task_id; the task runs in the panel own AIVisualEffectManager, equally visible there. prompt and reference assets: at least one.\n\n' +
-        'The reference video first goes through the editor upload review (up to ~15 min); a failure reports AI_VFX_REFERENCE_REJECTED. Up to 10 tasks running at once. Consumes the account AI model usage; the editor gives no signal on remaining quota.\n\n' +
-        'Next: ai_vfx_tasks (task_id + wait_s) to wait, preview the video and 6-frame grid, then ai_vfx_import when happy.',
+      name: 'ai_vfx',
+      keywords: 'AI 生成 画面 特效 任务 导入 取消 ai vfx submit tasks import cancel',
+      description: `Library 「AI 生成 › 画面特效」 (9.8.3) pipeline: action=submit generates a full-screen visual effect from prompt and/or reference assets (≤10 images, 1 video ≤60 s, spends quota); action=tasks lists/waits (succeeded returns 6-frame preview_image_file); action=import imports as Surface Graph; action=cancel.`,
       shape: {
         ...target,
-        prompt: z.string().optional().describe('Effect description, such as 「从画面中心扩散出金色粒子光环，带一点胶片颗粒」.'),
-        reference_images: z.array(absPath('参考图')).max(10).optional().describe('Reference images (PNG / JPG / JPEG).'),
-        reference_video: absPath('参考视频').optional().describe('Reference video (MP4 / MOV).'),
-        duration_s: z.number().int().min(1).max(10).optional().describe('Duration (s), default 5.'),
+        action: z.enum(['submit', 'tasks', 'import', 'cancel']).describe('Operation: submit, tasks, import, or cancel.'),
+        prompt: z.string().optional().describe('submit: effect description.'),
+        reference_images: z.array(absPath('参考图')).max(10).optional().describe('submit: reference images (PNG/JPG/JPEG).'),
+        reference_video: absPath('参考视频').optional().describe('submit: reference video (MP4/MOV).'),
+        duration_s: z.number().int().min(1).max(10).optional().describe('submit: duration in seconds, default 5.'),
+        task_id: z.string().min(1).optional().describe('tasks (optional single) / import / cancel (required): task_id.'),
+        wait_s: z.number().int().min(0).max(AI_VFX_MAX_WAIT_S).optional().describe(`tasks with task_id: max wait seconds (max ${AI_VFX_MAX_WAIT_S}).`),
+        offset: z.number().int().min(0).optional().describe('tasks: paging offset, default 0.'),
+        count: z.number().int().min(1).max(20).optional().describe('tasks: items per page, default 20.'),
       },
       run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('ai_vfx_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI_VFX_SUBMIT_TIMEOUT_MS }));
-      },
-    },
-    {
-      name: 'ai_vfx_tasks',
-      keywords: '画面 特效 任务 ai vfx tasks',
-      description: `Generation tasks of the 「画面特效」 library panel (this account, the same as the panel task list), newest first. Without task_id, paged by offset / count, with the current limits limits; with task_id, only this one, waiting up to wait_s for it to finish (max ${AI_VFX_MAX_WAIT_S} s).\n\n` +
-        'status: running, succeeded (importable), imported, failed / audit_failed (failure = the editor reason), canceled. Succeeded tasks carry the local preview video preview_video_file (the effect laid on the editor sample model) and a 6-frame horizontal preview grid preview_image_file (hand to image_view).',
-      shape: {
-        ...target,
-        task_id: z.string().min(1).optional().describe('A task_id from ai_vfx_submit / ai_vfx_tasks.'),
-        wait_s: z.number().int().min(0).max(AI_VFX_MAX_WAIT_S).optional().describe('With task_id: how long to wait at most, default 0 (check once).'),
-        offset: z.number().int().min(0).optional().describe('Paging start; take the previous page next_offset. Default 0.'),
-        count: z.number().int().min(1).max(20).optional().describe('Items per page, default 20.'),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
-        const win = await homeWindow({ project_path, instance_id });
-        if (task_id !== undefined) return text(await d.callPlugin('ai_vfx_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 120000 }));
-        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
-        return text(await d.callPlugin('ai_vfx_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
-      },
-    },
-    {
-      name: 'ai_vfx_import',
-      keywords: '画面 特效 导入 ai vfx import',
-      description: 'Import a succeeded visual effect task into the target project — selecting it in the library panel and clicking 「导入」: the generated effect package (ae2sg_export) is converted to a Surface Graph and materials, imported, and the preview reloads. Returns added_objects, package_folders. Then preview_frames to verify, save_project.',
-      shape: { ...target, task_id: z.string().min(1).describe('A task_id from ai_vfx_submit / ai_vfx_tasks (succeeded or imported).') },
-      run: plugin('ai_vfx_import', 300000),
-    },
-    {
-      name: 'ai_vfx_cancel',
-      keywords: '画面 特效 取消 ai vfx cancel',
-      description: 'Cancel a visual effect task still generating — the library panel 「取消」. When the cancel is not confirmed, the editor keeps polling and returns cancelled=false with the current status.',
-      shape: { ...target, task_id: z.string().min(1).describe('The task_id to cancel.') },
-      run: async (a) => {
-        const { project_path, instance_id, task_id } = a;
+        const { action, project_path, instance_id, prompt, reference_images, reference_video, duration_s, task_id, wait_s, offset, count } = a;
+        if (action === 'submit') {
+          const params = {
+            ...(prompt !== undefined ? { prompt } : {}),
+            ...(reference_images ? { reference_images } : {}),
+            ...(reference_video ? { reference_video } : {}),
+            ...(duration_s !== undefined ? { duration_s } : {}),
+          };
+          return text(await d.callPlugin('ai_vfx_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: AI_VFX_SUBMIT_TIMEOUT_MS }));
+        }
+        if (action === 'tasks') {
+          const win = await homeWindow({ project_path, instance_id });
+          if (task_id !== undefined) {
+            const ws = wait_s ?? 0;
+            return text(await d.callPlugin('ai_vfx_task', { task_id, wait_s: ws }, { ...win, timeoutMs: ws * 1000 + 120000 }));
+          }
+          if (wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+          return text(await d.callPlugin('ai_vfx_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
+        }
+        if (action === 'import') {
+          if (!task_id) throw Error('INVALID_ARGUMENTS(ai_vfx): task_id is required for action=import');
+          return plugin('ai_vfx_import', 300000)({ project_path, instance_id, task_id });
+        }
+        if (!task_id) throw Error('INVALID_ARGUMENTS(ai_vfx): task_id is required for action=cancel');
         return text(await d.callPlugin('ai_vfx_cancel', { task_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
       },
     },
     {
-      name: 'custom_gan_styles',
-      keywords: '实时变脸 风格 次数 custom gan',
-      description:
-        "The 「AI 生成 › 实时变脸」 library panel (train your own AI live face): styles and today's remaining training quota quota. 全身换装 (one full-body outfit reference image), 真人搞怪 (face reference; pick 30 of the candidate images before training, flow=select_30), 表情迁移, 真人美化 (face reference; train straight from the preview, flow=direct) — each with reference-image advice and estimated training time (3–12 h).\n\n" +
-        'Flow: custom_gan_submit generates the preview (no quota) → custom_gan_tasks watches the male/female previews → custom_gan_train trains (1 quota) → custom_gan_import imports into the project.',
-      shape: { ...target },
-      run: async ({ project_path, instance_id }) => text(await d.callPlugin('custom_gan_styles', {}, await homeWindow({ project_path, instance_id }))),
-    },
-    {
-      name: 'custom_gan_submit',
-      keywords: '实时变脸 生成 预览 custom gan submit',
-      description: "「实时变脸」 step 1 「生成」: one reference image (PNG / JPG / JPEG, ≤10 MB, subject clear and unobstructed), the cloud generates editor sample previews on male and female faces by style, returning task_id; no training quota spent.\n\n" +
-        'The panel allows one preview at a time; a running one reports CUSTOM_GAN_RUNNING. Next: custom_gan_tasks (task_id + wait_s).',
-      shape: {
-        ...target,
-        style: z.string().min(1).describe('Style name or preset, from custom_gan_styles style / preset (e.g. 「表情迁移」 or emotions).'),
-        image_path: absPath('参考图'),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('custom_gan_submit', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
-      },
-    },
-    {
-      name: 'custom_gan_tasks',
-      keywords: '实时变脸 任务 记录 custom gan tasks',
+      name: 'custom_gan',
       refs: true,
-      description: `「实时变脸」的任务（当前账号，与面板的记录同一份），最新的在前。每条有 stage：preview（预览，完成后带男女预览图 female_image_ref / male_image_ref）、select（真人搞怪的候选效果图：candidates 每张的 index、image_ref、是否已选）、train（训练中或训练完，完成的带男女预览视频 video_female_ref / video_male_ref、模型是否已下载到本机）；status 是 running / finished / failed / discarded。传 task_id 时只查这一个，再给 wait_s 就等到它不再 running（最多 ${CUSTOM_GAN_MAX_WAIT_S} 秒；训练要几个小时，隔一段时间再查）。`,
+      keywords: '实时变脸 风格 生成 任务 训练 导入 custom gan styles submit tasks train import',
+      description: `Library 「AI 生成 › 实时变脸」 (9.8.3) pipeline: action=styles lists styles & daily training quota; action=submit generates male/female previews (no quota); action=tasks lists/waits (returns preview refs/videos); action=train starts training (1 quota; 「真人搞怪」 first without selected then with ${CUSTOM_GAN_SELECT_COUNT} indices); action=import places trained model into scene.`,
       shape: {
         ...target,
-        task_id: z.string().min(1).optional(),
-        wait_s: z.number().int().min(0).max(CUSTOM_GAN_MAX_WAIT_S).optional(),
-        offset: z.number().int().min(0).optional(),
-        count: z.number().int().min(1).max(20).optional(),
+        action: z.enum(['styles', 'submit', 'tasks', 'train', 'import']).describe('Operation: styles, submit, tasks, train, or import.'),
+        style: z.string().min(1).optional().describe('submit: style name or preset from action=styles.'),
+        image_path: absPath('参考图').optional().describe('submit: reference image (PNG/JPG/JPEG, ≤10 MB).'),
+        task_id: z.string().min(1).optional().describe('tasks (optional single) / train / import (required): task_id.'),
+        wait_s: z.number().int().min(0).max(CUSTOM_GAN_MAX_WAIT_S).optional().describe(`tasks with task_id: max wait seconds (max ${CUSTOM_GAN_MAX_WAIT_S}).`),
+        offset: z.number().int().min(0).optional().describe('tasks: paging offset.'),
+        count: z.number().int().min(1).max(20).optional().describe('tasks: items per page.'),
+        selected: z.array(z.number().int().min(0)).length(CUSTOM_GAN_SELECT_COUNT).optional().describe(`train (真人搞怪): ${CUSTOM_GAN_SELECT_COUNT} candidate indices.`),
       },
       run: async (a) => {
-        const { project_path, instance_id, task_id, wait_s = 0, offset, count } = a;
-        const win = await homeWindow({ project_path, instance_id });
-        if (task_id !== undefined) return text(await d.callPlugin('custom_gan_task', { task_id, wait_s }, { ...win, timeoutMs: wait_s * 1000 + 120000 }));
-        if (a.wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
-        return text(await d.callPlugin('custom_gan_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
+        const { action, project_path, instance_id, style, image_path, task_id, wait_s, offset, count, selected } = a;
+        if (action === 'styles') {
+          return text(await d.callPlugin('custom_gan_styles', {}, await homeWindow({ project_path, instance_id })));
+        }
+        if (action === 'submit') {
+          if (!style || !image_path) throw Error('INVALID_ARGUMENTS(custom_gan): style and image_path are required for action=submit');
+          return text(await d.callPlugin('custom_gan_submit', { style, image_path }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
+        }
+        if (action === 'tasks') {
+          const win = await homeWindow({ project_path, instance_id });
+          if (task_id !== undefined) {
+            const ws = wait_s ?? 0;
+            return text(await d.callPlugin('custom_gan_task', { task_id, wait_s: ws }, { ...win, timeoutMs: ws * 1000 + 120000 }));
+          }
+          if (wait_s !== undefined) throw Error('INVALID_ARGUMENTS: wait_s only applies together with task_id');
+          return text(await d.callPlugin('custom_gan_tasks', { offset, count }, { ...win, timeoutMs: 120000 }));
+        }
+        if (action === 'train') {
+          if (!task_id) throw Error('INVALID_ARGUMENTS(custom_gan): task_id is required for action=train');
+          return text(await d.callPlugin('custom_gan_train', { task_id, ...(selected ? { selected } : {}) }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
+        }
+        if (!task_id) throw Error('INVALID_ARGUMENTS(custom_gan): task_id is required for action=import');
+        return plugin('custom_gan_import', CUSTOM_GAN_IMPORT_TIMEOUT_MS)({ project_path, instance_id, task_id });
       },
     },
     {
-      name: 'custom_gan_train',
-      keywords: '实时变脸 训练 custom gan train',
-      description: "「实时变脸」 training — the panel 「去训练」 (consumes 1 of the day's training quota, exhausted reports CUSTOM_GAN_NO_QUOTA; confirm the preview with the user before training). 表情迁移, 真人美化, 全身换装: train straight after the preview. 真人搞怪 (preset fun): two steps, like the panel — first call without selected, generate candidate images (no quota); once custom_gan_tasks reports stage=select done, pick 30, pass the indices to selected, and train for real. Training takes 3–12 h, check back over time.",
+      name: 'image_ai_edit',
+      keywords: '图片 超清 放大 消除 重绘 AI 抠图 贴纸 upscale repaint inpaint matting',
+      description: `Image editor cloud AI (no window opened): action=upscale (超清), action=repaint (消除 without prompt / 局部重绘 with prompt; requires mask or boxes), action=matting (抠图 returning subject + ${IMAGE_MATTING_PARTS.filter((p) => p !== 'subject').join('、')} PNGs).`,
       shape: {
         ...target,
-        task_id: z.string().min(1),
-        selected: z.array(z.number().int().min(0)).length(CUSTOM_GAN_SELECT_COUNT).optional().describe(`真人搞怪: indexes of the ${CUSTOM_GAN_SELECT_COUNT} candidate images picked.`),
-      },
-      run: async (a) => {
-        const { project_path, instance_id, ...params } = a;
-        return text(await d.callPlugin('custom_gan_train', params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 120000 }));
-      },
-    },
-    {
-      name: 'custom_gan_import',
-      keywords: '实时变脸 导入 模型 custom gan import',
-      description: 'Import a trained 「实时变脸」 model into the target project — selecting it in the library panel and clicking 「导入」: downloads the model files and male/female preview videos (like the panel training-completed card), then imports them as AI live face assets into the scene (undoable). Returns added_objects, package_folders, preview video paths.\n\n' +
-        'Frame-rate note: AI live face is the fixed large cost of effect detection.',
-      shape: { ...target, task_id: z.string().min(1).describe('A task_id from custom_gan_train / custom_gan_tasks (succeeded or imported).') },
-      run: plugin('custom_gan_import', CUSTOM_GAN_IMPORT_TIMEOUT_MS),
-    },
-    {
-      name: 'image_upscale',
-      keywords: '图片 超清 放大 image upscale',
-      description: 'Image upscale — the same cloud request as the editor image editor 「超清」 button (no editor window): returns the upscaled PNG (saved to out_dir or temp dir) and a downsized preview. For upscaling small images and frame grabs into icons or stickers. Whether it spends quota is up to the editor; the editor gives no signal.',
-      shape: { ...target, image_path: absPath('图片').describe('PNG / JPG / JPEG.'), out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).') },
-      run: async (a) => imageAi(a, 'image_upscale', {}, 'upscaled'),
-    },
-    {
-      name: 'image_repaint',
-      keywords: '图片 消除 重绘 inpaint repaint',
-      description: 'Image inpaint / repaint — the same cloud request as the editor image editor 「消除笔」 / 「局部重绘」 buttons (no editor window): mark the area with mask (an image; bright and opaque where to change, auto-stretched to the original size) or boxes (rectangles as fractions of the original); the area is painted green checkerboard and submitted, the editor way.\n\n' +
-        'No prompt = 「消除」 (remove what is there, fill the background); with prompt = 「重绘」 (paint the area by the description). Returns the result PNG, the marked submission image marked_file, and a preview.',
-      shape: {
-        ...target,
-        image_path: absPath('图片'),
-        mask: absPath('遮罩').optional(),
+        action: z.enum(['upscale', 'repaint', 'matting']).describe('Operation: upscale, repaint, or matting.'),
+        image_path: absPath('图片').describe('Input PNG / JPG / JPEG path.'),
+        mask: absPath('遮罩').optional().describe('repaint: mask image path (bright/opaque = edit area).'),
         boxes: z
           .array(z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().gt(0).max(1), height: z.number().gt(0).max(1) }))
           .max(20)
-          .optional(),
-        prompt: z.string().optional().describe('Repaint description; omitted = 「消除」.'),
-        out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).'),
+          .optional()
+          .describe('repaint: normalized rectangles [0..1] to edit.'),
+        prompt: z.string().optional().describe('repaint: description to paint; omit for object removal (消除).'),
+        out_dir: outDir.optional().describe('Output directory; omitted, saved to temp dir (24h TTL).'),
       },
       run: async (a) => {
-        if (!a.mask && !a.boxes?.length) throw Error('INVALID_ARGUMENTS: mark the area with mask or boxes');
-        const { markedCanvas, png } = await graphics();
-        const dir = a.out_dir ? saveDir(a.out_dir) : d.framesDir();
-        const stem = path.basename(a.image_path, path.extname(a.image_path));
-        const { canvas, marked_ratio } = await markedCanvas(a.image_path, { mask: a.mask, boxes: a.boxes });
-        const marked = path.join(dir, `${stem}_marked.png`);
-        fs.writeFileSync(marked, await png(canvas));
-        return imageAi({ ...a, image_path: marked }, 'image_repaint', { prompt: a.prompt }, a.prompt?.trim() ? 'repainted' : 'removed', { dir, stem, marked_file: marked, marked_ratio });
-      },
-    },
-    {
-      name: 'image_matting',
-      keywords: 'AI 抠图 贴纸 抠图 matting',
-      description: `AI matting — the same cloud request as the editor image editor 「抠图」 button (no editor window): returns the transparent-background subject subject, plus per-part PNGs of ${IMAGE_MATTING_PARTS.filter((p) => p !== 'subject').join('、')} (only when the photo has them), saved to out_dir or temp dir, with a preview of the subject. For stickers and icon assets.`,
-      shape: { ...target, image_path: absPath('图片'), out_dir: outDir.optional().describe('Output directory; omitted, it goes to the temp directory (24 hours before deletion).') },
-      run: async (a) => {
+        const { action, project_path, instance_id, image_path, mask, boxes, prompt, out_dir } = a;
+        if (action === 'upscale') return imageAi({ project_path, instance_id, image_path, out_dir }, 'image_upscale', {}, 'upscaled');
+        if (action === 'repaint') {
+          if (!mask && !boxes?.length) throw Error('INVALID_ARGUMENTS: mark the area with mask or boxes');
+          const { markedCanvas, png } = await graphics();
+          const dir = out_dir ? saveDir(out_dir) : d.framesDir();
+          const stem = path.basename(image_path, path.extname(image_path));
+          const { canvas, marked_ratio } = await markedCanvas(image_path, { mask, boxes });
+          const marked = path.join(dir, `${stem}_marked.png`);
+          fs.writeFileSync(marked, await png(canvas));
+          return imageAi({ project_path, instance_id, image_path: marked, out_dir }, 'image_repaint', { prompt }, prompt?.trim() ? 'repainted' : 'removed', { dir, stem, marked_file: marked, marked_ratio });
+        }
         const { previewJpeg } = await graphics();
-        const { project_path, instance_id, image_path, out_dir } = a;
         const got = await d.callPlugin('image_matting', { image_path }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: IMAGE_AI_TIMEOUT_MS });
         const dir = out_dir ? saveDir(out_dir) : d.framesDir();
         const stem = path.basename(image_path, path.extname(image_path));
@@ -2986,23 +2890,22 @@ export function createServer(deps = {}) {
       },
     },
     {
-      name: 'face_warp_list',
-      keywords: '塑型画笔 列表 face warp',
-      description: 'Lists every 「塑型画笔」 component (FaceWarpX, cat / dog faces included) with object_path, enabled state, and per-item brush index and intensity. The official edit_by_dsl set_component cannot write brush intensity — use face_warp_set_intensity.',
-      shape: { ...target },
-      run: plugin('face_warp_list'),
-    },
-    {
-      name: 'face_warp_set_intensity',
-      keywords: '塑型画笔 强度 face warp intensity',
-      description: 'Sets 「塑型画笔」 intensity — the inspector intensity slider, 0–100 — keeping brush data, undoable. object_path from face_warp_list, or uniquely-identifying trailing segments. Omitted item_index changes every brush item.',
+      name: 'face_warp',
+      keywords: '塑型画笔 列表 强度 face warp list intensity',
+      description: 'Inspect or tune 「塑型画笔」 (FaceWarpX, including cat/dog): action=list returns object_path, enabled, brush items; action=set_intensity sets 0–100 intensity (undoable; official edit_by_dsl cannot write brush intensity).',
       shape: {
         ...target,
-        object_path: z.string().min(1).describe('object_path from face_warp_list, or uniquely-identifying trailing segments.'),
-        intensity: z.number().min(0).max(100).describe('Intensity, 0–100.'),
-        item_index: z.number().int().min(0).optional().describe('Change only this brush item; omitted, all.'),
+        action: z.enum(['list', 'set_intensity']).describe('Operation: list or set_intensity.'),
+        object_path: z.string().min(1).optional().describe('set_intensity: object_path from action=list (or unique trailing segments).'),
+        intensity: z.number().min(0).max(100).optional().describe('set_intensity: 0–100.'),
+        item_index: z.number().int().min(0).optional().describe('set_intensity: brush item index; omitted changes all items.'),
       },
-      run: plugin('face_warp_set_intensity'),
+      run: async (a) => {
+        const { action, project_path, instance_id, object_path, intensity, item_index } = a;
+        if (action === 'list') return plugin('face_warp_list')({ project_path, instance_id });
+        if (!object_path || intensity === undefined) throw Error('INVALID_ARGUMENTS(face_warp): object_path and intensity are required for action=set_intensity');
+        return plugin('face_warp_set_intensity')({ project_path, instance_id, object_path, intensity, ...(item_index !== undefined ? { item_index } : {}) });
+      },
     },
     {
       name: 'object_remove',
@@ -3072,9 +2975,7 @@ export function createServer(deps = {}) {
   const rewritten = {
     edit_by_dsl: async (args) => {
       if (!Array.isArray(args.commands)) return args;
-      for (const [i, c] of args.commands.entries()) {
-        if (c && c.command_type === 'set_component' && Array.isArray(c.params?.properties)) throw Error(`INVALID_ARGUMENTS(edit_by_dsl): commands[${i}] set_component properties must be an object such as {"intensity": 0.5}, not an array`);
-      }
+      precheckEditByDsl(args.commands);
       const instance_id = String(args.instance_id);
       const inspect = (guid) => d.official.callJson('inspect', { instance_id, guid, intention: '把 $ref 的对象换成组件 guid' });
       return { ...args, commands: await resolveComponentRefs(args.commands, { objects: async () => sceneObjects(await namesTree(instance_id)), inspect }) };
@@ -3089,10 +2990,14 @@ export function createServer(deps = {}) {
     return failure(`${body.slice(0, OFFICIAL_ERROR_CHARS)}\n…（官方报错共 ${body.length} 字，已截断，全文在 ${file}）`);
   };
 
+  const listOfficialCached = async () => (await d.official.listTools()).filter((t) => !own.has(t.name) && !catalog.has(t.name));
+  const findOfficial = async (name) => (await listOfficialCached()).find((t) => t.name === name);
+
   const callTool = async (name, args) => {
     const t = own.get(name);
     if (t) {
-      const parsed = t.schema.safeParse(args);
+      const { args: cleanArgs } = normalizeIntention(args, { isOwn: true });
+      const parsed = t.schema.safeParse(cleanArgs);
       if (!parsed.success) return invalidArguments(name, parsed.error);
       try {
         let res = await t.run(parsed.data);
@@ -3102,23 +3007,39 @@ export function createServer(deps = {}) {
         return failure(e);
       }
     }
+
+    const officialDef = await findOfficial(name).catch(() => undefined);
+    const officialSchema = officialDef?.inputSchema;
+    let forward = args;
+    try {
+      const { args: afterIntention } = normalizeIntention(args, { isOwn: false, officialSchema });
+      forward = await normalizeOfficialArgs(name, afterIntention, {
+        officialSchema,
+        resolveInstanceId: officialInstance,
+        listOpenInstances: () => projects.officialInstances(),
+      });
+    } catch (e) {
+      return failure(e);
+    }
+
     if (Object.prototype.hasOwnProperty.call(intercepted, name)) {
       try {
-        return await intercepted[name](args);
+        return await intercepted[name](forward);
       } catch (e) {
         return failure(e);
       }
     }
-    let forward = args;
     if (Object.prototype.hasOwnProperty.call(rewritten, name)) {
       try {
-        forward = await rewritten[name](args);
+        forward = await rewritten[name](forward);
       } catch (e) {
         return failure(e);
       }
     }
     try {
-      return clipError(name, await d.official.callTool(name, forward));
+      let res = clipError(name, await d.official.callTool(name, forward));
+      if (name === 'edit_by_dsl') res = compactEditByDslResult(res);
+      return d.spill.apply(name, res);
     } catch (e) {
       if (e instanceof McpError) return clipError(name, failure(`OFFICIAL_TOOL_ERROR(${name}): ${e.message}`));
       if (e instanceof OfficialUnreachable) return failure(`OFFICIAL_MCP_UNAVAILABLE(${name}): ${e.message}；确认像塑已启动（${d.official.url}）`);
@@ -3141,19 +3062,18 @@ export function createServer(deps = {}) {
     if (hintNames) description = withHiddenToolHints(description, { self: t.name, knownNames: hintNames });
     return { ...t, description };
   };
-  const listOfficial = async () => (await d.official.listTools()).filter((t) => !own.has(t.name) && !catalog.has(t.name));
-  const findOfficial = async (name) => (await listOfficial()).find((t) => t.name === name);
+  const listOfficial = listOfficialCached;
   const unknownTool = (name) => {
     const status = d.official.status();
     const note = status.connected ? '' : '；官方 MCP 当前未连接，查官方工具请先启动像塑';
     return failure(`UNKNOWN_TOOL(${name}): 用 tool_search 查可用工具${note}`);
   };
   const toolName = z.string().trim().min(1).describe('Original tool name, as found by tool_search.');
-  const catalog = new Map((flatTools ? [] : [
+  const catalog = new Map([
     {
       name: 'tool_search',
       keywords: '查找 工具 搜索 tool search',
-      description: 'Find Xiangsu official and extension tools by keyword (Chinese or English). Results are names and one-line summaries, 12 per page. Get full parameters with tool_describe, then call via tool_call.',
+      description: 'Find Xiangsu official and extension tools by keyword (Chinese or English). Results are names, compact params, and one-line summaries, 12 per page. Get full parameters with tool_describe, then call via tool_call.',
       annotations: { readOnlyHint: true, openWorldHint: false },
       schema: z.strictObject({
         query: z.string().trim().min(1).optional().describe('Keyword by tool name or purpose, such as 「素材库」, 「工作流」, or "library apply". Omit to page through everything.'),
@@ -3187,22 +3107,58 @@ export function createServer(deps = {}) {
         name: toolName,
         arguments: z.record(z.string(), z.unknown()).optional().describe('The original tool parameter object.'),
       }),
-      run: async ({ name, arguments: args = {} }) => {
-        if (!own.has(name) && !await findOfficial(name)) return unknownTool(name);
+      run: async ({ name, arguments: rawArgs = {} }) => {
+        const local = own.get(name);
+        const official = local ? null : await findOfficial(name);
+        if (!local && !official) return unknownTool(name);
+        // Unwrap accidental double-nested { arguments: { ... } } emitted by compact-mode clients
+        // when the target tool itself has no "arguments" parameter.
+        let args = rawArgs;
+        const targetHasArgumentsKey = Boolean(local?.shape?.arguments || official?.inputSchema?.properties?.arguments);
+        if (!targetHasArgumentsKey && Object.keys(rawArgs).length === 1 && rawArgs.arguments && typeof rawArgs.arguments === 'object' && !Array.isArray(rawArgs.arguments)) {
+          args = rawArgs.arguments;
+        }
         return callTool(name, args);
       },
     },
-  ]).map((t) => [t.name, t]));
+  ].map((t) => [t.name, t]));
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [
+      {
+        uri: CAPABILITIES_RESOURCE_URI,
+        name: 'Xiangsu Editor Capability Atlas',
+        description: 'Built-in add-object menu categories, library panels, and AI pipelines (cached offline by editor version).',
+        mimeType: 'application/json',
+      },
+    ],
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+    if (req.params.uri !== CAPABILITIES_RESOURCE_URI) {
+      throw new McpError(-32602, `Unknown resource URI: ${req.params.uri}`);
+    }
+    return {
+      contents: [
+        {
+          uri: CAPABILITIES_RESOURCE_URI,
+          mimeType: 'application/json',
+          text: JSON.stringify(d.atlas.overview(), null, 2),
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const visible = (t) => flatTools || DIRECT_TOOLS.has(t.name);
+    const flat = isFlat();
+    const visible = (t) => flat || DIRECT_TOOLS.has(t.name);
     const official = await listOfficial();
-    const hintNames = flatTools ? null : new Set([...own.keys(), ...official.map((t) => t.name), ...catalog.keys()]);
+    const hintNames = flat ? null : new Set([...own.keys(), ...official.map((t) => t.name), ...catalog.keys()]);
     return {
       tools: [
         ...[...own.values()].filter(visible).map((t) => ownDefinition(t, { hintNames })),
         ...official.filter(visible).map((t) => officialDefinition(t, { hintNames })),
-        ...[...catalog.values()].map((t) => ownDefinition(t)),
+        ...(flat ? [] : [...catalog.values()].map((t) => ownDefinition(t))),
       ],
     };
   });
@@ -3211,7 +3167,7 @@ export function createServer(deps = {}) {
   // (frames over seconds, waiting for checks) are not ended as idle.
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const { name: requested, arguments: args = {} } = req.params;
-    const entry = catalog.get(requested);
+    const entry = isFlat() ? undefined : catalog.get(requested);
     const parsed = entry?.schema.safeParse(args);
     const name = requested === 'tool_call' && parsed?.success ? parsed.data.name : requested;
     const via = requested === 'tool_call' ? 'tool_call' : 'direct';

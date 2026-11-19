@@ -42,17 +42,15 @@
 
 ## 工具
 
-默认工具清单只公开 **16 个高频直调工具** 和 3 个查找入口（`tool_search` / `tool_describe` / `tool_call`）。直调含工程生命周期（`project_open` / `project_close` / `save_project`）、素材（`library_search` / `library_apply` / `list_resources`）、场景编辑与验收（`scene_tree` / `inspect_many` / `edit_by_dsl` / `preview_frames` / `image_view`），以及启动与选题（`ext_status` / `get_project_context` / `brief_today` / `effect_search` / `inspiration_detail`）。官方工具在连上像塑后出现；其余扩展工具经发现入口调用。
+默认按客户端能力**自动协商暴露模式**（统一服务所有 MCP 客户端，无需分别改配置）：
 
-其它工具按需使用。例如，想用素材库搜索工具：
+- **支持原生延迟加载的客户端**（如 Claude Code，`clientInfo.name = claude-code`）：自动切为**扁平强类型模式**，直接暴露全部扩展与官方工具，消除 `tool_call` 双重间接和弱类型信封错误。
+- **其它客户端**（Cursor、Codex、Grok Build、ZCode、Antigravity 等）：自动走**精简目录模式**，只公开 29 个高频直调工具（含 `editor_capabilities` / `menu_list` / `menu_add`）和 3 个发现入口（`tool_search` 带内联参数签名、`tool_describe`、`tool_call` 自动解包双层 `arguments`），避免工具数和上下文超限。
+- **手动覆盖**：环境变量 `XIANGSU_MCP_FLAT_TOOLS=1` 强制扁平；`XIANGSU_MCP_COMPACT_TOOLS=1`（或 `XIANGSU_MCP_FLAT_TOOLS=0`）强制精简；`XIANGSU_MCP_FLAT_CLIENTS=a,b` 可扩展自动扁平客户端名单。
 
-1. 调 **tool_search**，传 `{"query":"素材库"}`，查看匹配的名字和摘要。结果有 `next_offset` 时可继续翻页。
-2. 调 **tool_describe**，传 `{"name":"library_search"}`，读取完整说明和参数。已知工具名时从这一步开始。
-3. 调 **tool_call**，传 `{"name":"library_search","arguments":{"query":"复古滤镜"}}`。
+两种模式都共享同一套基础设施：MCP `instructions` 与 `editor_capabilities`（及资源 `xiangsu://capabilities`）提供离线可查的编辑器内置能力地图；代理层统一做 `intention` 归一化、单窗口 `instance_id` 自动补全与 `project_path` 换算、`edit_by_dsl` 预检及 16 KB 大包摘要落盘。
 
-需要在客户端直接看到全部工具时，在 MCP 服务的环境变量里设置 `XIANGSU_MCP_FLAT_TOOLS=1`，然后重启服务。使用 MCP SDK 的脚本可以按原名发送 `tools/call`。
-
-下表使用原工具名。接受 `project_path` 或官方 `instance_id` 的扩展工具可用其中之一指定工程（只开一个工程窗口时可省略）。
+下表使用原工具名。接受 `project_path` 或官方 `instance_id` 的工具可用其中之一指定工程（只开一个工程窗口时可省略）。
 
 | 工具 | 作用 |
 | --- | --- |
@@ -129,33 +127,19 @@
 | `makeup_compare` | 在同一张脸上比较几种妆容状态（关掉某层、男女强度、面板不透明度，或任意组件的数值属性如 AI 脸 Transparency、发光强度）：重置预览后截基线、逐个实时套上改动截图并改回、最后再截一次基线核对画面没变。要用静态照片做的模特视频；区域按画面比例给。可传 `reference` 参考图，区域带 `ref` 框时每种状态另给相对参考的差值，并排图末格是参考。每个区域返回平均色、亮度、皮肤细节及差值，并排放大图（不插值，一行放不下时换行） |
 | `preview_frames` | 按间隔连续截取预览，720×1280 原始分辨率（官方截图是 320×569），取自渲染结果，窗口在后台或最小化时也能截；默认先重置预览并等到重载后的画面再计时，截图期间临时恢复正常帧率（后台窗口平时 6 fps）；可依次换几个预览视频各截一组、截完切回（等编辑器把视频写回工程，原来干净的工程截完仍是干净的），可按比例裁出局部；每帧存成文件并返回，默认 24 小时后删除。这些截图 / 对比工具都可传 `save_to` 把结果另存到目录长期保留 |
 | `preview_videos` | 预览视频名，按 `tracking_type` 分组，外加当前视频；只给名字，挑 `preview_frames`、`makeup_compare` 的 `videos` 用（官方 `list_preview_videos` 约 70 KB） |
-| `menu_list` / `menu_add` | 「添加对象」菜单项列表（`total` 是命中数，`menu_total` 是菜单总数；`details=true` 时带说明和示意图，一次最多 8 项）、按菜单项添加（可撤销）；云端 AI 生成项不暴露（AI 组合效果用下面两个工具） |
+| `editor_capabilities` | 离线可查的编辑器内置能力地图（同时暴露为 MCP Resource `xiangsu://capabilities`）：按编辑器版本缓存「添加对象」菜单与素材库面板，支持无参看分区总览、按玩法意图词检索（整蛊/宠物/涂鸦/下雪等），以及按 `from_functions` 把竞品 `effect_detail.functions` 反查成具体 `menu_id` |
+| `menu_list` / `menu_add` | 「添加对象」菜单项列表（`total` 是命中数，`menu_total` 是菜单总数；`details=true` 时带说明和示意图，一次最多 8 项；无筛选时自动更新版本能力快照）、按菜单项添加（可撤销）；云端 AI 生成项不暴露（AI 组合效果用下面两个工具） |
 | `ai_combine_new` | 新建一张「AI 组合效果」工作流，等同 AI 效果窗口的「新建工作流」：本地建 AI Graph，只有「输入图」「效果组合」两个节点且未连线，不联网、不扣额度、不建云端草稿；返回 `ai_graph_id` 和各节点的 `node_id`（与官方 `get_workflow_context` 的节点 ID 相同） |
 | `ai_combine_apply` | 把一张 AI 工作流放进场景，等同「应用」（可撤销）：编辑器编译工作流、上传工作流文件，再添加「AI 组合效果」对象（没有 2D 前景时一并建「2D 前景」「2D 摄像机」）；不扣额度、不建草稿，生成过预览视频时一并上传供审核；编辑器拒绝时返回它的提示原文（如「请先连接效果组合器」）；返回新增对象和 `draft_id` |
 | `ai_video_node` | 在 AI 工作流里加或改一个「视频生成」节点，即 AI 效果窗口的「图生视频」（Seedance 2.0 Mini / Fast / 2.0 / 2.5 等），官方 `apply_workflow_patch` 只能建生图节点。新建时照节点编辑面板的做法用所选模型（默认 Seedance 2.0 Mini）初始化，连好「输入图 → 视频生成 → 效果组合」并摆在两者之间；传 `node_id` 时改已有节点，换模型时提示词沿用。提示词、时长、比例、分辨率按所选模型的面板核对（各模型范围不同，不合法时列出可选值）。改完存成云端草稿（同官方补丁），不扣额度 |
 | `ai_video_results` | 读 AI 工作流里「视频生成」和「效果组合」节点的生成结果（官方 `generate_workflow` 成功后；官方 `download_workflow_node_asset` 只认生图节点）：节点状态和每段视频的本机文件（AI 效果窗口预览用的缓存，没有下载水印）、宽高、时长 |
-| `ai_makeup_submit` | 素材库「AI 妆容」的「立即提取」：上传带妆人像（PNG/JPG/JPEG，不超过 10 MB），默认等到提取完（最多 `wait_s`，默认 60 秒，实测每次 5–8 秒），返回 `task_id`、五个部位的贴图 `image_ref` 和推荐强度（面板不透明度、男女强度、混合模式及名称）、参考原图和整妆预览 `preview_file`（妆画在编辑器内置样例脸上）；有任务在跑时拒绝 |
-| `ai_makeup_tasks` | 分页列出 AI 妆容提取记录（与面板同一份，最新的在前，每页最多 20 条）；带 `task_id` 时只查一个并给整妆预览，再给 `wait_s` 就等到它不再运行（最多 300 秒） |
-| `ai_makeup_import` | 把一个完成的提取按部位（`parts`，默认全部）导入工程：贴图按面板的文件名进 `Assets`（同名时编辑器自动加「 (1)」，不覆盖之前的），在「面部面具」下建层并套推荐强度（可撤销）；美瞳层另外写上 AI 美瞳贴图和强度（面板在 9.8.1 写不进去）；返回每层的 `object_path`、贴图和读回的强度 |
-| `ai3d_image_submit` | 素材库「AI 3D › 3D模型」：上传参考图（PNG/JPG/JPEG，不超过 10 MB、4000 像素），按精度（low / medium / high = 1000 / 10000 / 50000 面）提交图生 3D，返回 `task_id`；产物是静态网格，没有骨骼 |
-| `ai3d_animation_submit` | 「AI 3D › 3D动画」：上传参考视频（MP4，不超过 30 秒、20 MB、1280 像素）和模型（内置 `whole` / `upper_body` / `lower_body` / `arm`，或本地 FBX），提交动作生成；本地 FBX 按面板的方式检查骨骼（缺标准人形骨骼只提醒，与编辑器一致）和导入上限 |
-| `ai3d_gs_segment` / `ai3d_gs_submit` | 「AI 3D › 高精度模型重建」两步：上传环绕视频（MP4/MOV，不超过 120 秒、100 MB、4000 像素）识别主体，返回主体图 `subject_image_ref`；确认后按主体生成 3D 高斯点云 |
-| `ai3d_tasks` | 按类型分页列出 AI 3D 历史任务（状态、时间、输入、失败原因、本机是否已下载和预览文件），每页最多 20 条；带 `task_id` 时只查一个（不用给 `kind`），再给 `wait_s` 就等到它不再运行（最多 600 秒） |
-| `ai3d_import` | 下载并解压一个已完成任务的结果（放在编辑器的 AI 3D 缓存目录，面板里同样能看到），导入工程并放进场景（可撤销），与面板的「导入素材」相同 |
-| `ai3d_cancel` | 取消运行中的 AI 3D 任务 |
-| `ar_video_submit` | 素材库「AR 视频」的「立即生成」：`mode=direct` 主体视频只抠像，`mode=motion` 按 `prompt`（必填）和参考图 / 参考动作视频生成新动作；`shadow`（添加投影）、`duration_s`（4 秒到编辑器开关给的上限）。输入先过编辑器自己的检查、转换和视频审核，云端接受后返回 `task_id`，任务转到工具栏的后台任务里 |
-| `ar_video_tasks` | 列出 AR 视频生成记录（最新的在前，带当前限制 `limits`）；带 `task_id` 时只查一个，再给 `wait_s` 就等到结果在本机合成完（最多 600 秒）。完成的带预览视频、要导入的视频和一张横排 6 帧的预览图 `preview_image_file` |
-| `ar_video_import` | 把一个完成的任务导入工程并放进场景，等同面板「导入素材」，只导这一个；返回新增对象和 `plane_guid` |
-| `ar_video_cancel` | 取消运行中的 AR 视频任务 |
-| `ai_vfx_submit` | 素材库「AI 生成 › 画面特效」（9.8.3 新增）：描述加最多 10 张参考图、1 段参考视频，生成 1–10 秒全屏画面特效，返回 `task_id`；参考视频先过编辑器的上传审核 |
-| `ai_vfx_tasks` | 画面特效的生成记录（带当前限制）；带 `task_id` 时只查一个，再给 `wait_s` 就等它不再生成中。完成的带本机预览视频和横排 6 帧预览图 |
-| `ai_vfx_import` / `ai_vfx_cancel` | 把完成的画面特效导入工程（编辑器转成表面图和材质）、取消生成中的任务 |
-| `custom_gan_styles` | 素材库「AI 生成 › 实时变脸」的风格（全身换装、真人搞怪、表情迁移、真人美化）、各自的流程和今天剩余的训练次数 |
-| `custom_gan_submit` | 实时变脸第一步：一张参考图生成样例男女脸上的预览（不消耗训练次数），面板同时只允许一个预览在生成 |
-| `custom_gan_tasks` | 实时变脸的任务：预览图、真人搞怪的候选图、训练状态和预览视频；带 `task_id` 时可等 |
-| `custom_gan_train` | 训练（消耗 1 次当天的训练次数，3–12 小时）；真人搞怪先生成候选图，再挑满 30 张训练，和面板一样 |
-| `custom_gan_import` | 下载训练好的模型和预览视频，按 AI 实时变脸素材导入并放进场景（可撤销） |
-| `image_upscale` / `image_repaint` / `image_matting` | 图片编辑器的超清、消除 / 局部重绘（用遮罩图或矩形标区域，按编辑器的方式涂成绿色棋盘格再提交；给 `prompt` 是重绘）、AI 抠图（主体和头发、身体等部位），结果存成 PNG 并附预览 |
+| `ai_makeup` | 素材库「AI 妆容」全流程：`action=submit`（上传带妆人像提取五部位贴图与推荐强度）、`action=tasks`（分页查记录或等单个 `task_id`）、`action=import`（按 `parts` 导入工程建层并修复美瞳 EyeColorV2） |
+| `ai3d` | 素材库「AI 3D」全流程：`action=submit_image`（图生静态 GLB）、`submit_animation`（视频动作迁移到人形 FBX）、`gs_segment` / `gs_submit`（环绕视频主体识别与 3D 高斯重建）、`tasks`、`import`、`cancel` |
+| `ar_video` | 素材库「AR 视频」全流程：`action=submit`（`mode=direct` 抠像 / `mode=motion` 提示词生成新动作）、`tasks`（含 6 帧预览图与当前限制）、`import`、`cancel` |
+| `ai_vfx` | 素材库「AI 生成 › 画面特效」（9.8.3）全流程：`action=submit`、`tasks`、`import`、`cancel` |
+| `custom_gan` | 素材库「AI 生成 › 实时变脸」（9.8.3）全流程：`action=styles`（风格与今日训练次数）、`submit`（生成预览）、`tasks`、`train`（真人搞怪支持先出候选再选 30 张）、`import` |
+| `image_ai_edit` | 图片编辑器 AI 工具（不开窗口）：`action=upscale`（超清）、`repaint`（消除 / 局部重绘，需 `mask` 或 `boxes`）、`matting`（AI 抠图出主体和部位 PNG） |
+| `face_warp` | 「塑型画笔」（FaceWarpX，含猫狗脸）：`action=list` 列出组件与笔刷强度，`action=set_intensity` 改 0–100 强度（可撤销） |
 | `preview_audio_test` | 给预览喂模拟声音验声音玩法：开启编辑器内置 Agent 的试玩会话（预览重载一次，注入把模拟输入转成 AudioDetection 结果的运行时），按步骤喂音量 / 音高 / 关键词命中或未命中并截图，最后关会话（再重载一次）。脚本读到的值用官方 `get_script_logs` 看 |
 | `preview_actions` | 官方 `interact_by_dsl` 不收的预览命令：`touch_move`、`seek_to_time`、`switch_gesture_video`（换成编辑器给某个手势配好的预览视频） |
 | `sfx_synth` | 按预设合成音效（ding、tick、pop、boing、puff、win、chime、whoosh、wahwah、lose、reveal、sparkle、heartbeat、shutter、miss、hit、stamp、shiver 共 18 种，频率、包络、音量照各工程的音效脚本，没有随机噪声的和原脚本逐采样一致），可升降调、调音量，出双声道 128 kbps MP3 或 WAV。不用开像塑 |

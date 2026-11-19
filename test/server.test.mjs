@@ -14,46 +14,28 @@ import { MediaRefs, Spill } from '../src/outputs.mjs';
 
 const OWN = [
   'account_status',
-  'ai3d_animation_submit',
-  'ai3d_cancel',
-  'ai3d_gs_segment',
-  'ai3d_gs_submit',
-  'ai3d_image_submit',
-  'ai3d_import',
-  'ai3d_tasks',
+  'ai3d',
   'ai_combine_apply',
   'ai_combine_new',
-  'ai_makeup_import',
-  'ai_makeup_submit',
-  'ai_makeup_tasks',
-  'ai_vfx_cancel',
-  'ai_vfx_import',
-  'ai_vfx_submit',
-  'ai_vfx_tasks',
+  'ai_makeup',
+  'ai_vfx',
   'ai_video_node',
   'ai_video_results',
-  'ar_video_cancel',
-  'ar_video_import',
-  'ar_video_submit',
-  'ar_video_tasks',
+  'ar_video',
   'audio_probe',
   'brief_today',
   'changes_ack',
   'changes_since',
-  'custom_gan_import',
-  'custom_gan_styles',
-  'custom_gan_submit',
-  'custom_gan_tasks',
-  'custom_gan_train',
+  'custom_gan',
   'douyin_hot_detail',
   'douyin_hot_list',
+  'editor_capabilities',
   'effect_check',
   'effect_detail',
   'effect_search',
   'effect_videos',
   'ext_status',
-  'face_warp_list',
-  'face_warp_set_intensity',
+  'face_warp',
   'failure_lessons',
   'growth_task_detail',
   'growth_tasks_list',
@@ -66,10 +48,8 @@ const OWN = [
   'icon_compose',
   'icon_open',
   'icon_set',
-  'image_matting',
-  'image_repaint',
+  'image_ai_edit',
   'image_sheet',
-  'image_upscale',
   'image_view',
   'inspect_many',
   'inspiration_bind',
@@ -181,7 +161,7 @@ test('flat mode lists own tools plus the official tools, own names first', async
 const useTool = (client, name, args = {}) => client.callTool({ name, arguments: args });
 const toolJson = async (client, name, args) => JSON.parse((await useTool(client, name, args)).content[0].text);
 
-test('the default list keeps only frequently used tools and the catalog', async () => {
+test('compact mode keeps only frequently used tools and the catalog', async () => {
   const upstream = ['get_scene', 'get_project_context', 'edit_by_dsl', 'save_project', 'list_resources', 'library_search'].map((name) => ({
     name,
     description: '官方工具',
@@ -189,26 +169,27 @@ test('the default list keeps only frequently used tools and the catalog', async 
   }));
   // library_search is an own tool; keep an official-only direct name in the upstream set.
   const officialOnly = upstream.filter((t) => !['library_search'].includes(t.name));
-  const { client } = await connect({ official: fakeOfficial({ tools: officialOnly }) });
+  const { client } = await connect({ flatTools: false, official: fakeOfficial({ tools: officialOnly }) });
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [
-    'brief_today', 'edit_by_dsl', 'effect_search', 'ext_status', 'get_project_context', 'image_view', 'inspect_many', 'inspiration_detail',
-    'library_apply', 'library_search', 'list_resources', 'preview_frames', 'project_close', 'project_open', 'save_project', 'scene_tree',
-    'tool_call', 'tool_describe', 'tool_search',
+    'brief_today', 'edit_by_dsl', 'editor_capabilities', 'effect_detail', 'effect_search', 'effect_videos',
+    'ext_status', 'get_project_context', 'image_view', 'inspect_many', 'inspiration_detail', 'inspirations_find',
+    'library_apply', 'library_search', 'list_resources', 'menu_add', 'menu_list', 'preview_frames',
+    'project_close', 'project_open', 'rank_list', 'save_project', 'scene_tree', 'tool_call', 'tool_describe', 'tool_search', 'topic_crowd',
   ]);
   assert.equal(tools.find((t) => t.name === 'save_project').name, 'save_project');
   assert.equal(tools.find((t) => t.name === 'tool_search').annotations?.readOnlyHint, true);
-  // Measured: 16 direct + 3 catalog ≈ 27.8 KB with real official tools; keep under 32 KB.
-  assert.ok(Buffer.byteLength(JSON.stringify({ tools })) < 32_000);
+  // Expanded direct set + 3 catalog entries stays compact (<42 KB).
+  assert.ok(Buffer.byteLength(JSON.stringify({ tools })) < 42_000);
 });
 
 test('catalog searches and pages the tool names, then describes a single tool in full', async () => {
   const upstream = { name: 'get_scene', description: '读取官方场景', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } };
-  const { client } = await connect({ official: fakeOfficial({ tools: [upstream] }) });
+  const { client } = await connect({ flatTools: false, official: fakeOfficial({ tools: [upstream] }) });
   const byName = await toolJson(client, 'tool_search', { query: 'LIBRARY APPLY' });
   assert.equal(byName.tools[0].name, 'library_apply');
   const byPurpose = await toolJson(client, 'tool_search', { query: '素材 应用' });
-  assert.deepEqual(Object.keys(byPurpose.tools.find((t) => t.name === 'library_apply')).sort(), ['name', 'summary']);
+  assert.deepEqual(Object.keys(byPurpose.tools.find((t) => t.name === 'library_apply')).sort(), ['name', 'params', 'summary']);
   const first = await toolJson(client, 'tool_search');
   const second = await toolJson(client, 'tool_search', { offset: first.next_offset });
   assert.equal(first.total, OWN.length + 1);
@@ -225,7 +206,7 @@ test('catalog returns local tools while the official MCP is offline and reports 
   const tools = [];
   const official = fakeOfficial({ tools });
   official.status = () => ({ connected: tools.length > 0 });
-  const { client } = await connect({ official });
+  const { client } = await connect({ flatTools: false, official });
   const offline = await toolJson(client, 'tool_search', { query: 'library_apply' });
   assert.equal(offline.official_connected, false);
   assert.equal(offline.tools[0].name, 'library_apply');
@@ -244,19 +225,20 @@ test('catalog calls use the original validation, official result content and too
   const log = [];
   const writes = [];
   const { client } = await connect({
+    flatTools: false,
     official,
     callPlugin: async (...args) => (calls.push(args), { changed: 1 }),
     callLog: { call: (e) => log.push(e), write: (e) => writes.push(e) },
   });
-  const name = 'face_warp_set_intensity';
-  const args = { project_path: '/proj/A', object_path: 'Face', intensity: 101 };
+  const name = 'face_warp';
+  const args = { action: 'set_intensity', project_path: '/proj/A', object_path: 'Face', intensity: 101 };
   const bad = await useTool(client, 'tool_call', { name, arguments: args });
   assert.equal(bad.isError, true);
-  assert.match(bad.content[0].text, /INVALID_ARGUMENTS\(face_warp_set_intensity\): intensity/);
+  assert.match(bad.content[0].text, /INVALID_ARGUMENTS\(face_warp\): intensity/);
   assert.deepEqual(calls, []);
   const ok = await toolJson(client, 'tool_call', { name, arguments: { ...args, intensity: 20 } });
   assert.deepEqual(ok, { changed: 1 });
-  assert.deepEqual(calls, [[name, { object_path: 'Face', intensity: 20 }, { projectPath: '/proj/A', timeoutMs: undefined }]]);
+  assert.deepEqual(calls, [['face_warp_set_intensity', { object_path: 'Face', intensity: 20 }, { projectPath: '/proj/A', timeoutMs: undefined }]]);
   const proxied = await useTool(client, 'tool_call', { name: 'get_scene', arguments: { instance_id: '1' } });
   assert.deepEqual(proxied.content, [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }]);
   const unknown = await useTool(client, 'tool_call', { name: 'not_an_editor_tool' });
@@ -317,7 +299,7 @@ test('own tools route to the plugin window by project_path or official instance_
   assert.deepEqual(seen[0].method, 'library_search');
   assert.deepEqual(seen[1], { method: 'menu_list', params: { query: 'x' }, opts: { projectPath: '/proj/C' } });
   assert.deepEqual(seen[2], { method: 'library_apply', params: { item: { templateId: '111', title: '芒果脸' } }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
-  await client.callTool({ name: 'face_warp_set_intensity', arguments: { instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
+  await client.callTool({ name: 'face_warp', arguments: { action: 'set_intensity', instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
   assert.deepEqual(seen[3], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
   await client.callTool({ name: 'ai_combine_apply', arguments: { instance_id: '1', graph_id: 'g-1' } });
   assert.deepEqual(seen[4], { method: 'ai_combine_apply', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/A', timeoutMs: 180000 } });
@@ -334,9 +316,9 @@ test('own tools route to the plugin window by project_path or official instance_
 test('invalid arguments are rejected before reaching the plugin', async () => {
   const seen = [];
   const { client } = await connect({ official: fakeOfficial(), callPlugin: async (m) => (seen.push(m), {}) });
-  const res = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a', intensity: 101 } });
+  const res = await client.callTool({ name: 'face_warp', arguments: { action: 'set_intensity', object_path: 'a', intensity: 101 } });
   assert.equal(res.isError, true);
-  assert.match(res.content[0].text, /INVALID_ARGUMENTS\(face_warp_set_intensity\): intensity/);
+  assert.match(res.content[0].text, /INVALID_ARGUMENTS\(face_warp\): intensity/);
   const extra = await client.callTool({ name: 'library_search', arguments: { query: 'x', bogus: 1 } });
   assert.equal(extra.isError, true);
   assert.deepEqual(seen, []);
@@ -488,7 +470,11 @@ test('own answers over the spill limit come back as a file and an outline, after
   });
   const res = await client.callTool({ name: 'music_search', arguments: { query: '夏天' } });
   const summary = JSON.parse(res.content[0].text);
-  assert.deepEqual(summary.outline.items, { items: 300, item_keys: ['music_id', 'title', 'cover_ref', 'preview_ref', 'note'] });
+  assert.deepEqual(summary.outline.items, {
+    items: 300,
+    item_keys: ['music_id', 'title', 'cover_ref', 'preview_ref', 'note'],
+    sample: [{ title: '歌0' }, { title: '歌1' }, { title: '歌2' }, { title: '歌3' }, { title: '歌4' }],
+  });
   const full = JSON.parse(fs.readFileSync(summary.spilled_to, 'utf8'));
   assert.deepEqual(full.items[1], { music_id: '1', title: '歌1', cover_ref: 'img:3', preview_ref: 'audio:4', note: items[1].note });
   const small = JSON.parse((await client.callTool({ name: 'music_search', arguments: { query: '冬天' } })).content[0].text);
@@ -608,7 +594,7 @@ test('official tools that overlap ours are listed with a note naming ours; the r
   assert.equal(desc('list_resources'), '官方list_resources');
 });
 
-test('ai_makeup tools route account calls to any window, imports to the project, and name the blend modes', async () => {
+test('ai_makeup tool routes account calls to any window, imports to the project, and names the blend modes', async () => {
   const seen = [];
   const part = { part: 'pupil', name: '美瞳', image_url: 'https://cdn/pupil.png', intensity: 0.35, reflect_intensity: 0.1, blend_mode: 0, reflect_blend_mode: 1 };
   const view = { task_id: 't1', status: 'finished', reference_image_url: 'https://cdn/ref.jpg', parts: [part], preview_file: '/state/ai-makeup/t1.png' };
@@ -623,36 +609,36 @@ test('ai_makeup tools route account calls to any window, imports to the project,
     },
   });
   const call = async (name, args) => client.callTool({ name, arguments: args });
-  const sent = JSON.parse((await call('ai_makeup_submit', { image_path: '/a/ref.jpg' })).content[0].text);
+  const sent = JSON.parse((await call('ai_makeup', { action: 'submit', image_path: '/a/ref.jpg' })).content[0].text);
   assert.deepEqual(seen[0], { method: 'ai_makeup_submit', params: { image_path: '/a/ref.jpg', wait_s: 60 }, opts: { pid: 20, timeoutMs: 330000 } });
   assert.match(sent.reference_image_ref, /^img:\d+$/);
   assert.match(sent.parts[0].image_ref, /^img:\d+$/);
   assert.deepEqual([sent.parts[0].blend_mode_name, sent.parts[0].reflect_blend_mode_name, sent.preview_file], ['普通', '正片叠底', '/state/ai-makeup/t1.png']);
-  await call('ai_makeup_submit', { image_path: '/a/ref.jpg', wait_s: 0 });
+  await call('ai_makeup', { action: 'submit', image_path: '/a/ref.jpg', wait_s: 0 });
   assert.deepEqual([seen[1].params.wait_s, seen[1].opts.timeoutMs], [0, 270000]);
 
-  const listed = JSON.parse((await call('ai_makeup_tasks', { count: 5 })).content[0].text);
+  const listed = JSON.parse((await call('ai_makeup', { action: 'tasks', count: 5 })).content[0].text);
   assert.deepEqual(seen[2], { method: 'ai_makeup_tasks', params: { cursor: undefined, count: 5 }, opts: { pid: 20 } });
   assert.equal(listed.items[0].parts[0].blend_mode_name, '普通');
-  await call('ai_makeup_tasks', { task_id: 't1', wait_s: 30 });
+  await call('ai_makeup', { action: 'tasks', task_id: 't1', wait_s: 30 });
   assert.deepEqual(seen[3], { method: 'ai_makeup_task', params: { task_id: 't1', wait_s: 30 }, opts: { pid: 20, timeoutMs: 300000 } });
-  const stray = await call('ai_makeup_tasks', { wait_s: 30 });
+  const stray = await call('ai_makeup', { action: 'tasks', wait_s: 30 });
   assert.match(stray.content[0].text, /wait_s only applies together with task_id/);
-  const tooMany = await call('ai_makeup_tasks', { count: 21 });
-  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai_makeup_tasks\): count/);
+  const tooMany = await call('ai_makeup', { action: 'tasks', count: 21 });
+  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai_makeup\): count/);
 
-  const imported = JSON.parse((await call('ai_makeup_import', { project_path: '/proj/B', task_id: 't1', parts: ['lip', 'pupil'] })).content[0].text);
+  const imported = JSON.parse((await call('ai_makeup', { action: 'import', project_path: '/proj/B', task_id: 't1', parts: ['lip', 'pupil'] })).content[0].text);
   assert.deepEqual(seen[4], { method: 'ai_makeup_import', params: { task_id: 't1', parts: ['lip', 'pupil'] }, opts: { projectPath: '/proj/B', timeoutMs: 300000 } });
   assert.deepEqual(imported.layers, [
     { part: 'lip', kind: 'face_mask', blend: 1, blend_name: '正片叠底' },
     { part: 'pupil', kind: 'eye_color', intensity: 0.35 },
   ]);
-  const badPart = await call('ai_makeup_import', { task_id: 't1', parts: ['brow'] });
-  assert.match(badPart.content[0].text, /INVALID_ARGUMENTS\(ai_makeup_import\): parts\.0/);
+  const badPart = await call('ai_makeup', { action: 'import', task_id: 't1', parts: ['brow'] });
+  assert.match(badPart.content[0].text, /INVALID_ARGUMENTS\(ai_makeup\): parts\.0/);
   assert.equal(seen.length, 5);
 });
 
-test('ai3d tools route account calls to any window and keep the found subject for ai3d_gs_submit', async () => {
+test('ai3d tool routes account calls to any window and keeps the found subject for gs_submit', async () => {
   const seen = [];
   const { client } = await connect({
     official: fakeOfficial(),
@@ -664,45 +650,45 @@ test('ai3d tools route account calls to any window and keep the found subject fo
     },
   });
   const call = async (name, args) => client.callTool({ name, arguments: args });
-  await call('ai3d_image_submit', { image_path: '/a/dog.png' });
+  await call('ai3d', { action: 'submit_image', image_path: '/a/dog.png' });
   assert.deepEqual(seen[0], { method: 'ai3d_image_submit', params: { image_path: '/a/dog.png' }, opts: { pid: 20, timeoutMs: 300000 } });
 
-  const missing = await call('ai3d_gs_submit', { seg_task_id: 's1' });
-  assert.match(missing.content[0].text, /UNKNOWN_SEGMENT: s1; call ai3d_gs_segment first/);
-  const seg = JSON.parse((await call('ai3d_gs_segment', { video_path: '/a/cup.mov' })).content[0].text);
+  const missing = await call('ai3d', { action: 'gs_submit', seg_task_id: 's1' });
+  assert.match(missing.content[0].text, /UNKNOWN_SEGMENT: s1; call ai3d\(action="gs_segment"\) first/);
+  const seg = JSON.parse((await call('ai3d', { action: 'gs_segment', video_path: '/a/cup.mov' })).content[0].text);
   assert.equal(seg.seg_task_id, 's1');
   assert.match(seg.subject_image_ref, /^img:\d+$/);
   assert.equal(seg.subject_uri, undefined, 'internal fields stay in the server');
   assert.deepEqual(seen[1], { method: 'ai3d_gs_segment', params: { video_path: '/a/cup.mov', wait_s: 120 }, opts: { pid: 20, timeoutMs: 420000 } });
-  await call('ai3d_gs_submit', { seg_task_id: 's1' });
+  await call('ai3d', { action: 'gs_submit', seg_task_id: 's1' });
   assert.deepEqual(seen[2].params, { subject_uri: 'tos-subject', req_json: { req_type: 1, vid: 'v1' } });
 
-  await call('ai3d_tasks', { kind: 'image', count: 5 });
+  await call('ai3d', { action: 'tasks', kind: 'image', count: 5 });
   assert.deepEqual(seen[3], { method: 'ai3d_tasks', params: { kind: 'image', cursor: undefined, count: 5 }, opts: { pid: 20 } });
-  const one = JSON.parse((await call('ai3d_tasks', { kind: 'image', task_id: 't1', wait_s: 60 })).content[0].text);
+  const one = JSON.parse((await call('ai3d', { action: 'tasks', kind: 'image', task_id: 't1', wait_s: 60 })).content[0].text);
   assert.deepEqual(one, { kind: 'image', ok: 'ai3d_task' });
   assert.deepEqual(seen[4], { method: 'ai3d_task', params: { task_id: 't1', wait_s: 60 }, opts: { pid: 20, timeoutMs: 90000 } });
-  const stray = await call('ai3d_tasks', { kind: 'image', wait_s: 60 });
+  const stray = await call('ai3d', { action: 'tasks', kind: 'image', wait_s: 60 });
   assert.match(stray.content[0].text, /wait_s only applies together with task_id/);
 
-  await call('ai3d_import', { project_path: '/proj/B', task_id: 't1', kind: 'image' });
+  await call('ai3d', { action: 'import', project_path: '/proj/B', task_id: 't1', kind: 'image' });
   assert.deepEqual(seen[5], { method: 'ai3d_import', params: { task_id: 't1', kind: 'image' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
-  const tooLong = await call('ai3d_tasks', { kind: 'image', task_id: 't1', wait_s: 601 });
-  assert.match(tooLong.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): wait_s/);
+  const tooLong = await call('ai3d', { action: 'tasks', kind: 'image', task_id: 't1', wait_s: 601 });
+  assert.match(tooLong.content[0].text, /INVALID_ARGUMENTS\(ai3d\): wait_s/);
   // The history API refuses pages of more than 20.
-  const tooMany = await call('ai3d_tasks', { kind: 'image', count: 21 });
-  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai3d_tasks\): count/);
+  const tooMany = await call('ai3d', { action: 'tasks', kind: 'image', count: 21 });
+  assert.match(tooMany.content[0].text, /INVALID_ARGUMENTS\(ai3d\): count/);
   assert.equal(seen.length, 6);
   // One task is queried by id alone; listing needs to know which history.
-  const bare = JSON.parse((await call('ai3d_tasks', { task_id: 't2' })).content[0].text);
+  const bare = JSON.parse((await call('ai3d', { action: 'tasks', task_id: 't2' })).content[0].text);
   assert.deepEqual(bare, { ok: 'ai3d_task' });
   assert.deepEqual(seen[6].params, { task_id: 't2', wait_s: 0 });
-  const unlisted = await call('ai3d_tasks', {});
+  const unlisted = await call('ai3d', { action: 'tasks' });
   assert.match(unlisted.content[0].text, /INVALID_ARGUMENTS: kind is required to list the history/);
   assert.equal(seen.length, 7);
 });
 
-test('ar_video tools go to the target project window, where the task is composed', async () => {
+test('ar_video tool goes to the target project window, where the task is composed', async () => {
   const seen = [];
   const { client } = await connect({
     official: fakeOfficial(),
@@ -711,24 +697,24 @@ test('ar_video tools go to the target project window, where the task is composed
   });
   const call = async (name, args) => client.callTool({ name, arguments: { project_path: '/proj/B', ...args } });
   const submit = { subject: '/a/cat.png', mode: 'motion', prompt: '扭屁股', reference_images: ['/a/hat.png'], shadow: false, duration_s: 10 };
-  await call('ar_video_submit', submit);
+  await call('ar_video', { action: 'submit', ...submit });
   assert.deepEqual(seen[0], { method: 'ar_video_submit', params: submit, opts: { projectPath: '/proj/B', timeoutMs: 1200000 } });
-  await call('ar_video_tasks', { count: 5 });
+  await call('ar_video', { action: 'tasks', count: 5 });
   assert.deepEqual(seen[1], { method: 'ar_video_tasks', params: { offset: undefined, count: 5 }, opts: { projectPath: '/proj/B' } });
-  await call('ar_video_tasks', { task_id: 'wf1', wait_s: 300 });
+  await call('ar_video', { action: 'tasks', task_id: 'wf1', wait_s: 300 });
   assert.deepEqual(seen[2], { method: 'ar_video_task', params: { task_id: 'wf1', wait_s: 300 }, opts: { projectPath: '/proj/B', timeoutMs: 420000 } });
-  await call('ar_video_import', { task_id: 'wf1' });
+  await call('ar_video', { action: 'import', task_id: 'wf1' });
   assert.deepEqual(seen[3], { method: 'ar_video_import', params: { task_id: 'wf1' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
-  await call('ar_video_cancel', { task_id: 'wf1' });
+  await call('ar_video', { action: 'cancel', task_id: 'wf1' });
   assert.deepEqual(seen[4], { method: 'ar_video_cancel', params: { task_id: 'wf1' }, opts: { projectPath: '/proj/B', timeoutMs: undefined } });
 
   for (const [args, re] of [
-    [{ task_id: 'wf1', wait_s: 601 }, /INVALID_ARGUMENTS\(ar_video_tasks\): wait_s/],
-    [{ count: 21 }, /INVALID_ARGUMENTS\(ar_video_tasks\): count/],
-    [{ wait_s: 10 }, /wait_s only applies together with task_id/],
-  ]) assert.match((await call('ar_video_tasks', args)).content[0].text, re);
-  assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'dance' })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): mode/);
-  assert.match((await call('ar_video_submit', { subject: '/a/cat.png', mode: 'motion', duration_s: 9.5 })).content[0].text, /INVALID_ARGUMENTS\(ar_video_submit\): duration_s/);
+    [{ action: 'tasks', task_id: 'wf1', wait_s: 601 }, /INVALID_ARGUMENTS\(ar_video\): wait_s/],
+    [{ action: 'tasks', count: 21 }, /INVALID_ARGUMENTS\(ar_video\): count/],
+    [{ action: 'tasks', wait_s: 10 }, /wait_s only applies together with task_id/],
+  ]) assert.match((await call('ar_video', args)).content[0].text, re);
+  assert.match((await call('ar_video', { action: 'submit', subject: '/a/cat.png', mode: 'dance' })).content[0].text, /INVALID_ARGUMENTS\(ar_video\): mode/);
+  assert.match((await call('ar_video', { action: 'submit', subject: '/a/cat.png', mode: 'motion', duration_s: 9.5 })).content[0].text, /INVALID_ARGUMENTS\(ar_video\): duration_s/);
   assert.equal(seen.length, 5);
 });
 

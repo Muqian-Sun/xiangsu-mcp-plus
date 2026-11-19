@@ -1,23 +1,55 @@
-// Default tools/list keeps a short direct set; everything else is reached via tool_search →
-// tool_describe → tool_call. DIRECT_TOOLS is sized from local call logs (16,474 calls after
- // dropping retired tools): the prior 11 covered 50%, these 16 cover 58% of (session, tool) uses.
+// Clients verified to have native deferred tool loading (e.g. Claude Code ToolSearch), so exposing
+// full typed tools directly avoids double indirection without bloating the upfront prompt.
+// All other clients (Cursor, Codex, Grok Build, ZCode, Antigravity, unknown) default to compact mode
+// so their tool count and upfront schema budget stay small (~32 tools, <42 KB).
+const DEFAULT_FLAT_CLIENTS = [/^claude[-_ ]?code$/i];
+
+export function isNativeDeferredClient(clientInfo, extra = process.env.XIANGSU_MCP_FLAT_CLIENTS) {
+  const name = String(clientInfo?.name || '').trim();
+  if (!name) return false;
+  if (DEFAULT_FLAT_CLIENTS.some((re) => re.test(name))) return true;
+  if (extra) {
+    const list = extra.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (list.includes(name.toLowerCase())) return true;
+  }
+  return false;
+}
+
+// Compact-mode direct set (for clients without native deferred tool loading, enabled automatically
+// in auto mode or forced via XIANGSU_MCP_COMPACT_TOOLS=1 / XIANGSU_MCP_FLAT_TOOLS=0). Sized from
+// server.log (19,686 calls, plus 2,326 post-progressive-discovery calls): expands from the prior 16
+// (58%) to 29 tools covering >85% of real calls plus editor_capabilities / menu_list / menu_add so
+// built-in capabilities are visible.
 export const DIRECT_TOOLS = new Set([
   'brief_today',
   'edit_by_dsl',
+  'editor_capabilities',
+  'effect_detail',
   'effect_search',
+  'effect_videos',
   'ext_status',
   'get_project_context',
+  'get_script_logs',
   'image_view',
+  'inspect',
   'inspect_many',
   'inspiration_detail',
+  'inspirations_find',
+  'interact_by_dsl',
   'library_apply',
   'library_search',
   'list_resources',
+  'menu_add',
+  'menu_list',
   'preview_frames',
   'project_close',
   'project_open',
+  'rank_list',
+  'run_otsc_check',
   'save_project',
   'scene_tree',
+  'set_preview_video',
+  'topic_crowd',
 ]);
 
 // Picked to keep each search result short enough to scan in one tool response.
@@ -26,13 +58,20 @@ const SUMMARY_CHARS = 120;
 
 // High-frequency Chinese / colloquial queries that miss the English tool names.
 const SYNONYMS = [
-  [/抠图|抠像/gu, 'matting'],
-  [/美瞳/gu, 'eye'],
-  [/变脸/gu, 'gan face_warp'],
-  [/报错|日志/gu, 'script_logs'],
-  [/提审|发布/gu, 'submit'],
+  [/抠图|抠像/gu, 'matting image_ai_edit'],
+  [/美瞳/gu, 'eye makeup'],
+  [/变脸/gu, 'gan custom_gan face_warp'],
+  [/报错|日志/gu, 'script_logs get_script_logs'],
+  [/提审|发布|送审/gu, 'submit'],
   [/字体/gu, 'font'],
   [/打包/gu, 'bundle'],
+  [/内置|能力|组件|菜单/gu, 'editor_capabilities menu_list menu_add'],
+  [/排行榜|榜单|挑战榜/gu, 'rank_list rank_hotspots rank_subjects'],
+  [/热榜|热点/gu, 'douyin_hot_list hot_topics rank_hotspots'],
+  [/截图|截帧|预览/gu, 'preview_frames capture_preview preview_videos'],
+  [/触摸|点击|滑动|交互/gu, 'interact_by_dsl preview_actions'],
+  [/检测|性能|帧率/gu, 'effect_check run_otsc_check'],
+  [/音效|声音|音乐/gu, 'sfx_synth music_search music_apply preview_audio_test'],
 ];
 
 const normalize = (value) => value.normalize('NFKC').toLowerCase().replace(/[_\s]+/gu, ' ').trim();
@@ -72,6 +111,22 @@ function summarize(tool) {
   return chars.length > SUMMARY_CHARS ? `${chars.slice(0, SUMMARY_CHARS).join('').trimEnd()}…` : firstLine;
 }
 
+function paramSignature(tool) {
+  const schema = tool.inputSchema;
+  if (schema?.properties) {
+    const req = new Set(Array.isArray(schema.required) ? schema.required : []);
+    const keys = Object.keys(schema.properties);
+    return keys.length ? keys.map((k) => (req.has(k) ? `${k}*` : k)).join(', ') : '';
+  }
+  if (tool.shape && typeof tool.shape === 'object') {
+    const keys = Object.keys(tool.shape);
+    return keys.length
+      ? keys.map((k) => (typeof tool.shape[k]?.isOptional === 'function' && tool.shape[k].isOptional() ? k : `${k}*`)).join(', ')
+      : '';
+  }
+  return '';
+}
+
 export function searchTools(tools, query = '', offset = 0) {
   const phrase = expandQuery(query);
   const words = phrase ? phrase.split(' ').filter(Boolean) : [];
@@ -92,7 +147,10 @@ export function searchTools(tools, query = '', offset = 0) {
   return {
     total: matches.length,
     next_offset: end < matches.length ? end : null,
-    tools: matches.slice(offset, end).map(({ tool }) => ({ name: tool.name, summary: summarize(tool) })),
+    tools: matches.slice(offset, end).map(({ tool }) => {
+      const params = paramSignature(tool);
+      return { name: tool.name, ...(params ? { params } : {}), summary: summarize(tool) };
+    }),
   };
 }
 
