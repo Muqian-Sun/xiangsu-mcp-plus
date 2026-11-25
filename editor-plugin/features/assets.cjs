@@ -9,6 +9,10 @@ const { SQUARE_PANEL } = require('./square.cjs');
 
 // Editor internals each feature relies on; checked up front so an editor upgrade fails with a precise list.
 const REQUIRED = {
+  audioSourceUpload: [
+    [M.uploadApi, 'uploadFileCommon'],
+    ...['Audio', 'Picture', 'Video', 'Effect', 'Project'].map(kind => [M.uploadApi, `FileType.${kind}`]),
+  ],
   assets: [
     [M.nav, 'getDefaultNavList'],
     [M.navConst, 'SearchNavItemKeys'],
