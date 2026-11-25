@@ -1244,7 +1244,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_prepare',
       keywords: '提交 填表 提审 prepare',
-      description: "Inspect the whole project (including files outside Assets), report largest_project_files, and check the native project ZIP against its 200 MiB limit separately from the runtime effect package. Remove unused production materials before calling. An oversized ZIP closes the window and returns opened=false with PROJECT_PACKAGE_TOO_LARGE before filling. Otherwise fill name/trigger_hint/camera/inspiration/task/pick_nomination (and optional icon_image), wait for checks on 「提交审核」 and read back fields. Never ticks the agreement or submits. Next: submit_confirm when the user has authorized submission.",
+      description: 'Inspect the whole project (including files outside Assets), report largest_project_files, and check the native project ZIP against its 200 MiB limit separately from the runtime effect package. Remove unused production materials before calling. An oversized ZIP closes the window and returns opened=false with PROJECT_PACKAGE_TOO_LARGE before filling. Otherwise fill name/trigger_hint/camera/inspiration/task/pick_nomination/pick_types/pick_highlight (and optional icon_image), wait for checks on 「提交审核」 and read back fields. Never ticks the agreement or submits. Next: submit_confirm when the user has authorized submission.',
       shape: {
         ...target,
         name: z.string().min(1).describe('Effect name: ≤10 chars, two English letters or digits count as one, no emoji or special symbols. Page truncation or an error fails the call.'),
@@ -1259,6 +1259,8 @@ export function createServer(deps = {}) {
         task: z.string().min(1).optional().describe('Task title to pick in 「任务绑定」 (a received task, the tasks_list title). 「暂不参与」 unbinds; omitted keeps what the page carried in.'),
         task_track: z.string().min(1).optional().describe('Track name under the task; required when the task has tracks, else SUBMIT_TASK_NEEDS_TRACK with the tracks listed.'),
         pick_nomination: z.boolean().optional().describe('Optional: tick (true) or untick (false) 「精选提报」 (LV3+ daily quota). Omit to leave unchanged.'),
+        pick_types: z.array(z.string().min(1)).min(1).optional().describe('Exact display labels for 「提报类型（可多选）」, e.g. [「玩法创新」] or [「设计精美」, 「玩法创新」]. Replaces the selected types; requires 精选提报 checked (pass pick_nomination=true). Omit to keep the page selection. When checked, at least one type is required; errors list the live options.'),
+        pick_highlight: z.string().optional().describe('「精选提报」亮点 text (page counter: 50). Requires 精选提报 checked; omitted keeps the page text, empty string clears it. Page truncation or rejection fails the call.'),
       },
       run: async (a) => {
         const { project_path, instance_id, icon_image, ...fill } = a;
@@ -1270,7 +1272,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_confirm',
       keywords: '送审 提交 审核 submit confirm',
-      description: "Submit the effect for review in the window filled by submit_prepare (irreversible, consumes account submission quota; user authorization required). Rechecks the native project ZIP limit, matching name, passed page checks and newest 10 works for duplicates. Presses 提交审核 once. Explicit project-size errors stop immediately. A missing result, bridge error or closed window triggers bounded read-only account checks for a new effect_id, excluding all pre-submit IDs; returns confirmation_source and reconciliation attempts. Never guesses an old ID by name. On SUBMIT_FAILED / SUBMIT_RESULT_UNKNOWN, never auto-retry: check pipeline_refresh + pipeline_works first.",
+      description: 'Submit the effect for review in the window filled by submit_prepare (irreversible, consumes account submission quota; user authorization required). Rechecks the native project ZIP limit, matching name, passed page checks and newest 10 works for duplicates. Presses 提交审核 once. Explicit project-size errors stop immediately. A missing result, bridge error or closed window triggers bounded read-only account checks for a new effect_id, excluding all pre-submit IDs; returns confirmation_source and reconciliation attempts. Never guesses an old ID by name. On SUBMIT_FAILED / SUBMIT_RESULT_UNKNOWN, never auto-retry: check pipeline_refresh + pipeline_works first.',
       shape: { ...target, name: z.string().min(1).describe('The effect name to submit; must equal filled.name from the submit_prepare summary.') },
       run: async (a) => {
         const { project_path, instance_id, name } = a;

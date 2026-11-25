@@ -61,6 +61,14 @@ function fakePage(options = {}) {
     // Measured 2026-11-19 on Douyin AR 9.8.3 DYEHEffectSubmissionWindow: 'none' | 'available' | 'checked' | 'disabled' | 'stuck'
     pickNomination: 'none',
     pickRemaining: 1,
+    // Live submit-orion.9ab197f1.js (2026-11-23): checked nomination requires >=1 type.
+    pickTypes: [],
+    pickTypeOptions: ['设计精美', '玩法创新', '技术创新'],
+    pickTypesStuck: false,
+    pickHighlight: '',
+    pickHighlightStuck: false,
+    pickHighlightMissing: false,
+    pickConfigAt: 0,
     ...options,
   };
   const steps = o.settingsStep ? ['特效基础信息', '特效发布设置', '提交审核'] : ['特效基础信息', '提交审核'];
@@ -71,7 +79,7 @@ function fakePage(options = {}) {
   const pickHtml =
     o.pickNomination === 'none'
       ? ''
-      : `<div class="innovation-wrapper"><div class="innovation-header"><div class="innovation-title">精选提报</div><div class="innovation-check"><div class="innovation-check-box-wrapper"><div class="custom-checkbox${o.pickNomination === 'checked' ? ' checked' : ''}${o.pickNomination === 'disabled' ? ' disabled' : ''}"></div></div></div></div><div class="innovation-main"><span class="innovation-content">每日有${o.pickRemaining}次提报精选的机会，被评为精选可获得 </span><span class="innovation-highlight">50元现金、15%加权激励 </span><span class="innovation-content">等。</span><span class="innovation-detail">查看审核标准</span></div></div>`;
+      : `<div class="innovation-wrapper"><div class="innovation-header"><div class="innovation-title">精选提报</div><div class="innovation-check"><div class="innovation-check-box-wrapper"><div class="custom-checkbox${o.pickNomination === 'checked' ? ' checked' : ''}${o.pickNomination === 'disabled' ? ' disabled' : ''}"></div></div></div></div><div class="innovation-category" style="display: none;"></div><div class="nomination-error text-err"></div><div class="innovation-main"><span class="innovation-content">每日有${o.pickRemaining}次提报精选的机会，被评为精选可获得 </span><span class="innovation-highlight">50元现金、15%加权激励 </span><span class="innovation-content">等。</span><span class="innovation-detail">查看审核标准</span></div></div>`;
   const html = `<!doctype html><html><body><div id="root"><div class="submit-wrap">
 <header class="nav-wrap">${steps.map((s, i) => `<div class="nav-item${i === 0 ? ' active' : ''}"><div class="nav-item-text">${s}</div></div>`).join('')}</header>
 <main><div class="content show"><div class="content-left">
@@ -98,10 +106,42 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   let trickle = o.trickle ? window.setInterval(() => requests.push({ name: 'https://log' }), 15) : null;
   const name = $('.name-wrapper input');
   const pickBox = $('.innovation-wrapper .custom-checkbox');
+  const selectedTypes = new Set(o.pickTypes);
+  let highlight = o.pickHighlight;
   if (pickBox) {
+    if (o.pickConfigAt) {
+      $('.innovation-wrapper').style.display = 'none';
+      window.setTimeout(() => { $('.innovation-wrapper').style.display = ''; }, o.pickConfigAt);
+    }
+    const category = $('.innovation-category');
+    const renderTypes = () => {
+      category.style.display = pickBox.classList.contains('checked') ? 'block' : 'none';
+      // Replace nodes like a rerender; listeners update the page state, independent of the bridge.
+      category.innerHTML = `<div class="innovation-category-content">提报类型（可多选）：${o.pickTypeOptions.map((t) => `<div class="innovation-category-content-check-box${selectedTypes.has(t) ? ' category-check-active' : ''}">${t}</div>`).join('')}</div>${o.pickHighlightMissing ? '' : '<div class="input-container"><div class="input-div"><textarea placeholder="填写亮点可增加被评为【官方精选】的概率"></textarea></div><div class="item-counter">0/50</div></div>'}`;
+      const input = $('textarea', category);
+      if (input) {
+        input.value = highlight;
+        input.addEventListener('input', () => {
+          // The live page truncates at counter 50; these limit fixtures use Chinese text only.
+          if (!o.pickHighlightStuck) highlight = input.value.slice(0, 50);
+          input.value = highlight;
+        });
+      }
+      for (const box of $$('.innovation-category-content-check-box', category)) {
+        box.addEventListener('click', () => {
+          if (o.pickTypesStuck) return;
+          const label = box.textContent;
+          if (selectedTypes.has(label)) selectedTypes.delete(label);
+          else selectedTypes.add(label);
+          renderTypes();
+        });
+      }
+    };
+    renderTypes();
     pickBox.addEventListener('click', () => {
       if (o.pickNomination === 'disabled' || o.pickNomination === 'stuck') return;
       pickBox.classList.toggle('checked');
+      renderTypes();
     });
   }
   window.setTimeout(() => {
@@ -185,6 +225,10 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
       if (!o.iconsUploaded) return void ($('.upload-icon-wrapper .text-err').textContent = '请至少上传一个图标');
       if (!name.value) return void ($('.name-wrapper .text-err').textContent = '请输入特效名称');
     }
+    if (steps[step] === '特效发布设置' && pickBox?.classList.contains('checked') && !selectedTypes.size) {
+      $('.nomination-error').textContent = '请选择提报类型';
+      return;
+    }
     if (step < steps.length - 1) show(step + 1);
   });
 
@@ -193,7 +237,7 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   if (insp) {
     const list = $('.favor-list', insp);
     const render = (names, note = '') =>
-      (list.innerHTML = note + (o.collected.length || o.searchable.length ? ['暂不绑定', ...names] : []).map((n) => `<div class="favor-option"><div class="option-name">${n}</div></div>`).join(''));
+      (list.innerHTML = !names.length && !note ? '<div class="empty-list">暂无收藏的灵感或热点，快到像塑移动版看看吧</div>' : note + (o.collected.length || o.searchable.length ? ['暂不绑定', ...names] : []).map((n) => `<div class="favor-option"><div class="option-name">${n}</div></div>`).join(''));
     render(o.collected);
     $('.selector-input', insp).addEventListener('mousedown', () => $('.selector-list', insp).classList.toggle('hidden'));
     list.addEventListener('click', (e) => {
@@ -204,6 +248,7 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
       $('.selector-list', insp).classList.add('hidden');
     });
     const search = $('.search-input', insp);
+    if (!o.collected.length && !o.searchable.length) search.remove();
     search.addEventListener('input', () => {
       render([], '<div class="empty-list">搜索中...</div>');
       window.setTimeout(() => {
@@ -356,6 +401,55 @@ test('submit_prepare keeps fields it is not given as the page shows them', async
   assert.deepEqual(out.filled, { icons: { female: true, male: true }, name: '只填名字', trigger_hint: '', camera: '前置' });
   assert.deepEqual(out.bindings, { inspiration: '选择收藏的灵感或热点', task: '选择任务' });
   assert.equal(out.review.trigger_hint, '无');
+});
+
+test('submit_prepare accepts already-unbound inspiration when the collection is empty', async () => {
+  const page = fakePage({ collected: [], searchable: [] });
+  const { lib } = editor(page);
+  const out = await lib.submitPrepare({ name: '空灵感提交', inspiration: '暂不绑定' });
+  assert.deepEqual({ inspiration: out.bindings.inspiration, step: out.step, pressed: page.stats.presses }, { inspiration: '暂不绑定', step: '提交审核', pressed: 0 });
+});
+
+test('submit_prepare blocks an oversized native project ZIP even when the runtime checks passed', async () => {
+  const page = fakePage();
+  const { lib, open } = editor(page, { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES + 1 });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual({ opened: out.opened, ok: out.check.ok, bytes: out.check.project_package_bytes, issue: out.check.issues[0].split(':')[0], name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
+    opened: false, ok: false, bytes: 209715201, issue: 'PROJECT_PACKAGE_TOO_LARGE', name: '', pressed: 0, windows: 0,
+  });
+});
+
+test('submit_prepare checks the ZIP rather than refusing a large compressible source directory', async () => {
+  const { lib } = editor(fakePage());
+  lib.submitChecks = async () => ({ ok: true, issues: [], project_directory_bytes: 400000000 });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([out.opened, out.check.project_directory_bytes, out.check.project_package_bytes], [true, 400000000, 1000]);
+});
+
+test('submit_prepare permits exactly the native project ZIP limit', async () => {
+  const { lib } = editor(fakePage(), { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([out.opened, out.check.ok, out.check.project_package_bytes], [true, true, 209715200]);
+});
+
+test('submit_prepare reports native project export and ZIP failures before filling or publishing', async () => {
+  for (const options of [{ exportError: 'native resource export failed' }, { zipError: 'native ZIP creation failed' }]) {
+    const page = fakePage();
+    const { lib, open } = editor(page, options);
+    const error = await lib.submitPrepare(fill).then(() => null, (e) => e.message);
+    assert.deepEqual({ error, name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
+      error: `PROJECT_EXPORT_FAILED: ${options.exportError || options.zipError} (the submit window was closed; nothing was submitted)`, name: '', pressed: 0, windows: 0,
+    });
+  }
+});
+
+test('submit_prepare closes an old submission before inspecting and exporting the project', async () => {
+  const old = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() { this.isClosed = true; } };
+  const { lib } = editor(fakePage(), { left: [old] });
+  let inspectedAfterClose = false;
+  lib.submitChecks = async () => { inspectedAfterClose = old.isClosed; return { ok: true, issues: [] }; };
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([inspectedAfterClose, out.closed_previous, out.opened], [true, 1, true]);
 });
 
 test('the summary check catches a name the page wiped after it was typed', async () => {
@@ -564,131 +658,6 @@ test('submit_confirm takes a submission the page did not confirm as done when th
   }
 });
 
-test('submit_confirm says to check the dashboard when it cannot read the account after an unconfirmed submission', async () => {
-  const { lib, open } = await prepared(
-    { report: 'stop' },
-    {
-      effects: (n) => {
-        if (n > 0) throw Error('GET_MY_EFFECTS_FAILED');
-        return [];
-      },
-    },
-  );
-  await assert.rejects(
-    lib.submitConfirm({ name: fill.name }),
-    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\); the account's newest 10 effects have no new .*read-only checks.*call pipeline_refresh.*$/,
-  );
-  assert.equal(open().length, 1);
-});
-
-test('submit_confirm needs exactly one open submit window, and refuses one already submitted', async () => {
-  const none = editor(fakePage());
-  await assert.rejects(none.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_NOT_OPEN/);
-  await assert.rejects(none.lib.submitConfirm({}), /INVALID_NAME/);
-  const extra = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() {} };
-  const two = await prepared();
-  globalThis.App._windows.push(extra);
-  await assert.rejects(two.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_AMBIGUOUS: 2 submit windows/);
-  assert.equal(two.page.stats.presses, 0);
-  const stuck = await prepared({}, { closes: false });
-  const out = await stuck.lib.submitConfirm({ name: fill.name });
-  assert.equal(out.window_closed, false);
-  assert.match(out.close_error, /WINDOW_NOT_CLOSED/);
-  await assert.rejects(stuck.lib.submitConfirm({ name: fill.name }), /SUBMIT_ALREADY_DONE/);
-  assert.equal(stuck.page.stats.presses, 1);
-});
-
-test('submit_prepare supports pick_nomination: tick, untick, omit, unavailable, exhausted, and not applied', async () => {
-  // 1. LV3+ available & pick_nomination: true
-  const avail = editor(fakePage({ pickNomination: 'available', pickRemaining: 1 }));
-  const ticked = await avail.lib.submitPrepare({ name: '精选测试', pick_nomination: true });
-  assert.deepEqual(ticked.pick_nomination, {
-    available: true,
-    checked: true,
-    remaining: null,
-    daily_limit: 1,
-    disabled: false,
-    text: '每日有1次提报精选的机会，被评为精选可获得 50元现金、15%加权激励 等。查看审核标准',
-  });
-  await avail.lib.submitClose();
-
-  // 2. Already checked & pick_nomination: false unticks it
-  const checked = editor(fakePage({ pickNomination: 'checked' }));
-  const unticked = await checked.lib.submitPrepare({ name: '精选测试', pick_nomination: false });
-  assert.equal(unticked.pick_nomination.checked, false);
-  await checked.lib.submitClose();
-
-  // 3. Omitted pick_nomination leaves checked state untouched
-  const keep = editor(fakePage({ pickNomination: 'checked' }));
-  const kept = await keep.lib.submitPrepare({ name: '精选测试' });
-  assert.equal(kept.pick_nomination.checked, true);
-  await keep.lib.submitClose();
-
-  // 4. Non-LV3+ (no section) + pick_nomination: true -> UNAVAILABLE
-  const nonLv3 = editor(fakePage({ pickNomination: 'none' }));
-  await assert.rejects(nonLv3.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
-  await nonLv3.lib.submitClose();
-
-  // 5. Disabled / quota exhausted + pick_nomination: true -> EXHAUSTED
-  const exhausted = editor(fakePage({ pickNomination: 'disabled', pickRemaining: 1 }));
-  await assert.rejects(exhausted.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_EXHAUSTED/);
-  await exhausted.lib.submitClose();
-
-  // 6. Click ignored / reset by page -> NOT_APPLIED
-  const stuck = editor(fakePage({ pickNomination: 'stuck' }));
-  await assert.rejects(stuck.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_NOT_APPLIED/);
-  await stuck.lib.submitClose();
-});
-
-test('submit_prepare accepts already-unbound inspiration when the collection is empty', async () => {
-  const page = fakePage({ collected: [], searchable: [] });
-  const { lib } = editor(page);
-  const out = await lib.submitPrepare({ name: '空灵感提交', inspiration: '暂不绑定' });
-  assert.deepEqual({ inspiration: out.bindings.inspiration, step: out.step, pressed: page.stats.presses }, { inspiration: '暂不绑定', step: '提交审核', pressed: 0 });
-});
-
-test('submit_prepare blocks an oversized native project ZIP even when the runtime checks passed', async () => {
-  const page = fakePage();
-  const { lib, open } = editor(page, { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES + 1 });
-  const out = await lib.submitPrepare(fill);
-  assert.deepEqual({ opened: out.opened, ok: out.check.ok, bytes: out.check.project_package_bytes, issue: out.check.issues[0].split(':')[0], name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
-    opened: false, ok: false, bytes: 209715201, issue: 'PROJECT_PACKAGE_TOO_LARGE', name: '', pressed: 0, windows: 0,
-  });
-});
-
-test('submit_prepare checks the ZIP rather than refusing a large compressible source directory', async () => {
-  const { lib } = editor(fakePage());
-  lib.submitChecks = async () => ({ ok: true, issues: [], project_directory_bytes: 400000000 });
-  const out = await lib.submitPrepare(fill);
-  assert.deepEqual([out.opened, out.check.project_directory_bytes, out.check.project_package_bytes], [true, 400000000, 1000]);
-});
-
-test('submit_prepare permits exactly the native project ZIP limit', async () => {
-  const { lib } = editor(fakePage(), { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES });
-  const out = await lib.submitPrepare(fill);
-  assert.deepEqual([out.opened, out.check.ok, out.check.project_package_bytes], [true, true, 209715200]);
-});
-
-test('submit_prepare reports native project export and ZIP failures before filling or publishing', async () => {
-  for (const options of [{ exportError: 'native resource export failed' }, { zipError: 'native ZIP creation failed' }]) {
-    const page = fakePage();
-    const { lib, open } = editor(page, options);
-    const error = await lib.submitPrepare(fill).then(() => null, (e) => e.message);
-    assert.deepEqual({ error, name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
-      error: `PROJECT_EXPORT_FAILED: ${options.exportError || options.zipError} (the submit window was closed; nothing was submitted)`, name: '', pressed: 0, windows: 0,
-    });
-  }
-});
-
-test('submit_prepare closes an old submission before inspecting and exporting the project', async () => {
-  const old = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() { this.isClosed = true; } };
-  const { lib } = editor(fakePage(), { left: [old] });
-  let inspectedAfterClose = false;
-  lib.submitChecks = async () => { inspectedAfterClose = old.isClosed; return { ok: true, issues: [] }; };
-  const out = await lib.submitPrepare(fill);
-  assert.deepEqual([inspectedAfterClose, out.closed_previous, out.opened], [true, 1, true]);
-});
-
 test('submit_confirm reconciles delayed listing, excludes every pre-submit id and presses only once', async () => {
   const old = { effect_id: 'old', name: fill.name, status: 101 };
   const live = { effect_id: 'new', name: fill.name, status: 100 };
@@ -741,4 +710,161 @@ test('submit_confirm refuses a review whose checks could not be read', async () 
   page.window.document.querySelector('.effect-test-container').innerHTML = '';
   const error = await lib.submitConfirm({ name: fill.name }).then(() => null, (e) => e.message.split(':')[0]);
   assert.deepEqual([error, page.stats.presses], ['SUBMIT_PAGE_CHANGED', 0]);
+});
+
+test('submit_confirm says to check the dashboard when it cannot read the account after an unconfirmed submission', async () => {
+  const { lib, open } = await prepared(
+    { report: 'stop' },
+    {
+      effects: (n) => {
+        if (n > 0) throw Error('GET_MY_EFFECTS_FAILED');
+        return [];
+      },
+    },
+  );
+  await assert.rejects(
+    lib.submitConfirm({ name: fill.name }),
+    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\); the account's newest 10 effects have no new .*read-only checks.*call pipeline_refresh.*$/,
+  );
+  assert.equal(open().length, 1);
+});
+
+test('submit_confirm needs exactly one open submit window, and refuses one already submitted', async () => {
+  const none = editor(fakePage());
+  await assert.rejects(none.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_NOT_OPEN/);
+  await assert.rejects(none.lib.submitConfirm({}), /INVALID_NAME/);
+  const extra = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() {} };
+  const two = await prepared();
+  globalThis.App._windows.push(extra);
+  await assert.rejects(two.lib.submitConfirm({ name: fill.name }), /SUBMIT_WINDOW_AMBIGUOUS: 2 submit windows/);
+  assert.equal(two.page.stats.presses, 0);
+  const stuck = await prepared({}, { closes: false });
+  const out = await stuck.lib.submitConfirm({ name: fill.name });
+  assert.equal(out.window_closed, false);
+  assert.match(out.close_error, /WINDOW_NOT_CLOSED/);
+  await assert.rejects(stuck.lib.submitConfirm({ name: fill.name }), /SUBMIT_ALREADY_DONE/);
+  assert.equal(stuck.page.stats.presses, 1);
+});
+
+test('submit_prepare supports pick_nomination: tick, untick, omit, unavailable, exhausted, and not applied', async () => {
+  // 1. LV3+ available & pick_nomination: true
+  const avail = editor(fakePage({ pickNomination: 'available', pickRemaining: 1 }));
+  const ticked = await avail.lib.submitPrepare({ name: '精选测试', pick_nomination: true, pick_types: ['玩法创新'] });
+  assert.deepEqual(ticked.pick_nomination, {
+    available: true,
+    checked: true,
+    remaining: null,
+    daily_limit: 1,
+    disabled: false,
+    text: '每日有1次提报精选的机会，被评为精选可获得 50元现金、15%加权激励 等。查看审核标准',
+    types: ['玩法创新'],
+    type_options: ['设计精美', '玩法创新', '技术创新'],
+    highlight: '',
+  });
+  await avail.lib.submitClose();
+
+  // 2. Already checked & pick_nomination: false unticks it
+  const checked = editor(fakePage({ pickNomination: 'checked' }));
+  const unticked = await checked.lib.submitPrepare({ name: '精选测试', pick_nomination: false });
+  assert.equal(unticked.pick_nomination.checked, false);
+  await checked.lib.submitClose();
+
+  // 3. Omitted pick_nomination leaves checked state untouched
+  const keep = editor(fakePage({ pickNomination: 'checked', pickTypes: ['设计精美'] }));
+  const kept = await keep.lib.submitPrepare({ name: '精选测试' });
+  assert.equal(kept.pick_nomination.checked, true);
+  await keep.lib.submitClose();
+
+  // 4. Non-LV3+ (no section) + pick_nomination: true -> UNAVAILABLE
+  const nonLv3 = editor(fakePage({ pickNomination: 'none' }));
+  await assert.rejects(nonLv3.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+  await nonLv3.lib.submitClose();
+
+  // 5. Disabled / quota exhausted + pick_nomination: true -> EXHAUSTED
+  const exhausted = editor(fakePage({ pickNomination: 'disabled', pickRemaining: 1 }));
+  await assert.rejects(exhausted.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_EXHAUSTED/);
+  await exhausted.lib.submitClose();
+
+  // 6. Click ignored / reset by page -> NOT_APPLIED
+  const stuck = editor(fakePage({ pickNomination: 'stuck' }));
+  await assert.rejects(stuck.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_NOT_APPLIED/);
+  await stuck.lib.submitClose();
+});
+
+test('submit_prepare replaces nomination types, preserves omitted types, and leaves publishing to confirm', async () => {
+  const page = fakePage({ pickNomination: 'checked', pickTypes: ['技术创新'] });
+  const { lib } = editor(page);
+  const out = await lib.submitPrepare({ name: '类型多选', pick_types: ['玩法创新', '设计精美'] });
+  assert.equal(out.step, '提交审核');
+  assert.deepEqual(out.pick_nomination.types, ['设计精美', '玩法创新']);
+  assert.deepEqual([...page.window.document.querySelectorAll('.category-check-active')].map((b) => b.textContent), ['设计精美', '玩法创新']);
+  assert.equal(page.stats.presses, 0);
+
+  const keep = editor(fakePage({ pickNomination: 'checked', pickTypes: ['技术创新'] }));
+  assert.deepEqual((await keep.lib.submitPrepare({ name: '保留类型' })).pick_nomination.types, ['技术创新']);
+  const off = editor(fakePage({ pickNomination: 'available' }));
+  const skipped = await off.lib.submitPrepare({ name: '普通提交' });
+  assert.equal(skipped.pick_nomination.checked, false);
+  assert.deepEqual(skipped.pick_nomination.types, []);
+});
+
+test('submit_prepare reports required, unavailable, unknown, missing and rejected nomination types', async () => {
+  const required = editor(fakePage({ pickNomination: 'available' }));
+  await assert.rejects(required.lib.submitPrepare({ name: '缺类型', pick_nomination: true }), /SUBMIT_PICK_TYPES_REQUIRED:.*pick_types.*设计精美.*玩法创新.*技术创新/);
+  const unavailable = editor(fakePage({ pickNomination: 'none' }));
+  await assert.rejects(unavailable.lib.submitPrepare({ name: '无精选', pick_types: ['玩法创新'] }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+  const unchecked = editor(fakePage({ pickNomination: 'available' }));
+  await assert.rejects(unchecked.lib.submitPrepare({ name: '未勾选', pick_types: ['玩法创新'] }), /SUBMIT_PICK_TYPES_UNAVAILABLE:.*pick_nomination=true/);
+  const noStep = editor(fakePage({ settingsStep: false }));
+  await assert.rejects(noStep.lib.submitPrepare({ name: '无设置页', pick_types: ['玩法创新'] }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+
+  const page = fakePage({ pickNomination: 'checked', pickTypes: ['设计精美'], pickTypeOptions: ['设计精美', '新增类型'] });
+  const unknown = editor(page);
+  await assert.rejects(unknown.lib.submitPrepare({ name: '未知类型', pick_types: ['新增类型', '玩法创新'] }), /SUBMIT_OPTION_NOT_FOUND: 提报类型.*设计精美.*新增类型/);
+  assert.deepEqual([...page.window.document.querySelectorAll('.category-check-active')].map((b) => b.textContent), ['设计精美'], 'validate all labels before altering any selection');
+  const dynamic = editor(fakePage({ pickNomination: 'available', pickTypeOptions: ['新增类型'] }));
+  assert.deepEqual((await dynamic.lib.submitPrepare({ name: '动态选项', pick_nomination: true, pick_types: ['新增类型'] })).pick_nomination.types, ['新增类型']);
+  const missing = editor(fakePage({ pickNomination: 'checked', pickTypeOptions: [] }));
+  await assert.rejects(missing.lib.submitPrepare({ name: '页面改版', pick_types: ['玩法创新'] }), /SUBMIT_PAGE_CHANGED:.*提报类型/);
+  const stuck = editor(fakePage({ pickNomination: 'checked', pickTypes: ['设计精美'], pickTypesStuck: true }));
+  await assert.rejects(stuck.lib.submitPrepare({ name: '拒绝选择', pick_types: ['玩法创新'] }), /SUBMIT_PICK_TYPES_NOT_APPLIED/);
+});
+
+test('submit_prepare fills nomination highlights through the textarea, preserves omitted text and clears explicit empty text', async () => {
+  const page = fakePage({ pickNomination: 'available' });
+  const { lib } = editor(page);
+  const text = '五夹逐轮加速，栗子随机掉头，考验点屏时机。';
+  const out = await lib.submitPrepare({ name: '填写亮点', pick_nomination: true, pick_types: ['玩法创新'], pick_highlight: text });
+  assert.equal(out.pick_nomination.highlight, text);
+  assert.equal(page.window.document.querySelector('.innovation-category textarea').value, text);
+  assert.equal(out.step, '提交审核');
+  assert.equal(page.stats.presses, 0);
+
+  const keep = editor(fakePage({ pickNomination: 'checked', pickTypes: ['玩法创新'], pickHighlight: '原来的亮点' }));
+  assert.equal((await keep.lib.submitPrepare({ name: '保留亮点' })).pick_nomination.highlight, '原来的亮点');
+  const clear = editor(fakePage({ pickNomination: 'checked', pickTypes: ['玩法创新'], pickHighlight: '原来的亮点' }));
+  assert.equal((await clear.lib.submitPrepare({ name: '清空亮点', pick_highlight: '' })).pick_nomination.highlight, '');
+});
+
+test('submit_prepare waits for asynchronous nomination configuration before filling types and highlights', async () => {
+  const { lib } = editor(fakePage({ pickNomination: 'available', pickConfigAt: 200 }));
+  const out = await lib.submitPrepare({ name: '等待配置', pick_nomination: true, pick_types: ['玩法创新'], pick_highlight: '逐轮加速' });
+  assert.deepEqual(out.pick_nomination.types, ['玩法创新']);
+  assert.equal(out.pick_nomination.highlight, '逐轮加速');
+  assert.equal(out.step, '提交审核');
+});
+
+test('submit_prepare rejects unavailable, missing, truncated or ignored nomination highlights', async () => {
+  const none = editor(fakePage());
+  await assert.rejects(none.lib.submitPrepare({ name: '无精选', pick_highlight: '亮点' }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+  const off = editor(fakePage({ pickNomination: 'available' }));
+  await assert.rejects(off.lib.submitPrepare({ name: '未勾选', pick_highlight: '亮点' }), /SUBMIT_PICK_HIGHLIGHT_UNAVAILABLE/);
+  const noStep = editor(fakePage({ settingsStep: false }));
+  await assert.rejects(noStep.lib.submitPrepare({ name: '无设置页', pick_highlight: '亮点' }), /SUBMIT_PICK_NOMINATION_UNAVAILABLE/);
+  const missing = editor(fakePage({ pickNomination: 'checked', pickTypes: ['玩法创新'], pickHighlightMissing: true }));
+  await assert.rejects(missing.lib.submitPrepare({ name: '无文本框', pick_highlight: '亮点' }), /SUBMIT_PAGE_CHANGED:.*亮点 textarea/);
+  const long = editor(fakePage({ pickNomination: 'checked', pickTypes: ['玩法创新'] }));
+  await assert.rejects(long.lib.submitPrepare({ name: '超长亮点', pick_highlight: '亮'.repeat(51) }), /SUBMIT_PICK_HIGHLIGHT_NOT_APPLIED:.*page limit: 50/);
+  const stuck = editor(fakePage({ pickNomination: 'checked', pickTypes: ['玩法创新'], pickHighlightStuck: true }));
+  await assert.rejects(stuck.lib.submitPrepare({ name: '未应用', pick_highlight: '亮点' }), /SUBMIT_PICK_HIGHLIGHT_NOT_APPLIED/);
 });

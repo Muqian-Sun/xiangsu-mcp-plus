@@ -285,6 +285,14 @@ test('submitChecks passes a clean project and removes its scratch export', async
   assert.deepEqual(leftovers(instance), []);
 });
 
+test('submitChecks reports the whole source inventory separately from the runtime package', async () => {
+  const { lib, projectDir } = setup();
+  fs.mkdirSync(path.join(projectDir, '素材'));
+  fs.writeFileSync(path.join(projectDir, '素材/录屏.mp4'), Buffer.alloc(6000));
+  const out = await lib.submitChecks();
+  assert.deepEqual([out.package_bytes, out.project_directory_bytes, out.project_file_count, out.largest_project_files, out.project_package_limit_bytes], [1000, 6000, 1, [{ path: '素材/录屏.mp4', bytes: 6000 }], 209715200]);
+});
+
 test('submitChecks reads the unsaved state before its export, which can mark the project changed by itself', async () => {
   const { lib, modules, projectDir } = setup();
   fs.mkdirSync(path.join(projectDir, 'Icon'));
@@ -387,6 +395,22 @@ test('submit_prepare checks its arguments and does not open the submit window wh
   await assert.rejects(bad.lib.submitPrepare({}), /INVALID_NAME/);
   await assert.rejects(bad.lib.submitPrepare({ name: 'a', camera: 'side' }), /INVALID_CAMERA: side/);
   await assert.rejects(bad.lib.submitPrepare({ name: 'a', task_track: '赛道' }), /INVALID_TASK/);
+});
+
+test('submit_prepare rejects invalid nomination types before checking or opening the project', async () => {
+  const { lib } = setup();
+  lib.submitChecks = async () => { throw Error('checks must not run for invalid arguments'); };
+  for (const pick_types of [[], '玩法创新', [''], [' '], [1]]) {
+    await assert.rejects(lib.submitPrepare({ name: '类型参数', pick_types }), /INVALID_PICK_TYPES/);
+  }
+  await assert.rejects(lib.submitPrepare({ name: '类型参数', pick_nomination: false, pick_types: ['玩法创新'] }), /INVALID_PICK_TYPES:.*pick_nomination=false/);
+});
+
+test('submit_prepare rejects invalid nomination highlights before checking or opening the project', async () => {
+  const { lib } = setup();
+  lib.submitChecks = async () => { throw Error('checks must not run for invalid arguments'); };
+  await assert.rejects(lib.submitPrepare({ name: '亮点参数', pick_highlight: 1 }), /INVALID_PICK_HIGHLIGHT: pass/);
+  await assert.rejects(lib.submitPrepare({ name: '亮点参数', pick_nomination: false, pick_highlight: '亮点' }), /INVALID_PICK_HIGHLIGHT:.*pick_nomination=false/);
 });
 
 test('mobile_preview exports like the toolbar popup and returns the QR text it would show', async () => {
@@ -518,8 +542,10 @@ test('submit_prepare needs a name, sets icon_image first and passes the rest to 
   const missing = await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p' } });
   assert.equal(missing.isError, true);
   assert.deepEqual(seen, []);
-  const fill = { name: '名字', trigger_hint: '张嘴', camera: 'back', inspiration: '灵感', task: '任务', task_track: '赛道' };
-  assert.deepEqual(json(await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p', ...fill } })), { method: 'submit_prepare' });
+  const fill = { name: '名字', trigger_hint: '张嘴', camera: 'back', inspiration: '灵感', task: '任务', task_track: '赛道', pick_nomination: true, pick_types: ['玩法创新'], pick_highlight: '点屏挑战手速' };
+  const filled = await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p', ...fill } });
+  assert.equal(filled.isError, undefined, filled.content[0].text);
+  assert.deepEqual(json(filled), { method: 'submit_prepare' });
   assert.deepEqual(seen, [['submit_prepare', fill, { projectPath: '/p', timeoutMs: 360000 }]]);
   seen.length = 0;
   await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p', name: '名字', icon_image: '/img.jpg' } });
@@ -827,12 +853,4 @@ test('music_categories, music_list and music_search each do one thing, and music
   assert.deepEqual(seen.at(-1), ['music_search', { query: '晴天' }]);
   await client.callTool({ name: 'music_apply', arguments: { music_id: '8' } });
   assert.deepEqual(seen.at(-1), ['music_apply', { item: { id: 8, duration: 20 } }]);
-});
-
-test('submitChecks reports the whole source inventory separately from the runtime package', async () => {
-  const { lib, projectDir } = setup();
-  fs.mkdirSync(path.join(projectDir, '素材'));
-  fs.writeFileSync(path.join(projectDir, '素材/录屏.mp4'), Buffer.alloc(6000));
-  const out = await lib.submitChecks();
-  assert.deepEqual([out.package_bytes, out.project_directory_bytes, out.project_file_count, out.largest_project_files, out.project_package_limit_bytes], [1000, 6000, 1, [{ path: '素材/录屏.mp4', bytes: 6000 }], 209715200]);
 });
