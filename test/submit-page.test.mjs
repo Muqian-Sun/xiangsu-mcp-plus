@@ -1,6 +1,8 @@
 import test from 'node:test';
-import './tmp.mjs';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { JSDOM } from 'jsdom';
 
@@ -8,8 +10,9 @@ const require = createRequire(import.meta.url);
 const { Library, M } = require('../editor-plugin/library.cjs');
 const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
 const { BRIDGE_SCOPE, SOURCE_URL } = require('../editor-plugin/features/webpages.cjs');
+const { PROJECT_PACKAGE_LIMIT_BYTES } = require('../editor-plugin/features/submission-project.cjs');
 
-Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300, resultMs: 1500 });
+Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300, resultMs: 1500, verifyMs: 250, verifyPollMs: 10 });
 
 class Bus {
   constructor() {
@@ -167,6 +170,11 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
         return;
       }
       if (o.report === 'fail') report({ failReason: '服务繁忙' });
+      if (o.report === 'project_oversize') {
+        d.body.insertAdjacentHTML('beforeend', '<div role="alert">工程文件超出200M，无法完成打包，请检查工程中的过大资源</div>');
+        next.classList.remove('disable', 'loading');
+        return;
+      }
       d.body.insertAdjacentHTML('beforeend', '<div class="semi-toast-wrapper"><span class="semi-toast-content-text">网络异常，请检查网络后重试</span></div>');
       next.classList.remove('disable', 'loading');
     }, 50);
@@ -185,7 +193,7 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   if (insp) {
     const list = $('.favor-list', insp);
     const render = (names, note = '') =>
-      (list.innerHTML = note + ['暂不绑定', ...names].map((n) => `<div class="favor-option"><div class="option-name">${n}</div></div>`).join(''));
+      (list.innerHTML = note + (o.collected.length || o.searchable.length ? ['暂不绑定', ...names] : []).map((n) => `<div class="favor-option"><div class="option-name">${n}</div></div>`).join(''));
     render(o.collected);
     $('.selector-input', insp).addEventListener('mousedown', () => $('.selector-list', insp).classList.toggle('hidden'));
     list.addEventListener('click', (e) => {
@@ -248,7 +256,7 @@ const quietDepth = () => globalThis[Symbol.for('xiangsu-mcp-plus.quiet')]?.toolD
 // editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
 // evaluateJavascript, answers come back as orionJSB:// queries. `effects(n)` answers the n-th (from 0)
 // my_effects lookup with the account's newest effects.
-function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], closes = true, effects = () => [] } = {}) {
+function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], closes = true, effects = () => [], projectZipBytes = 1000, exportError, zipError, loseConfirmReply = false, closeAfterPress = false } = {}) {
   const depths = [];
   const business = new Bus();
   const legacy = new Bus();
@@ -257,10 +265,18 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], cl
   const handlers = new Map();
   // Queries the page sends to the editor's own bridges, as `scope/method` and params.
   const native = [];
+  let closedEvaluations = 0;
+  const projectZip = path.join(tmpdir('xs-native-project-'), 'project.zip');
+  fs.closeSync(fs.openSync(projectZip, 'w'));
+  fs.truncateSync(projectZip, projectZipBytes);
   const Win = {
     [windowName]: class {
       constructor() {
         this.isClosed = false;
+        this.exportPromise = exportError ? Promise.reject(Error(exportError)) : Promise.resolve();
+        this.zipProjectPromise = zipError ? Promise.reject(Error(zipError)) : Promise.resolve(projectZip);
+        this.exportPromise.catch(() => {});
+        this.zipProjectPromise.catch(() => {});
       }
       closeWindow() {
         if (closes) setTimeout(() => (this.isClosed = true), 5);
@@ -274,6 +290,7 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], cl
     win.JSB = { joinRegisterHandler: (scope, h) => handlers.set(scope, { ...handlers.get(scope), ...h }) };
     win.webview = {
       evaluateJavascript: (code, source) => {
+        if (win.isClosed) closedEvaluations++;
         sources.push(source);
         assert.equal(typeof source, 'string', 'a non-string second argument crashes the editor');
         page.window.eval(code);
@@ -283,7 +300,13 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], cl
       const m = /^orionJSB:\/\/([^/]+)\/([^?]+)\?(.*)$/.exec(request);
       const params = JSON.parse(decodeURIComponent(m[3]));
       if (m[1] !== BRIDGE_SCOPE) native.push([`${m[1]}/${m[2]}`, params]);
-      else if (page.o.answer) handlers.get(m[1])[m[2]](params);
+      else if (page.o.answer) {
+        if (params.value && Object.prototype.hasOwnProperty.call(params.value, 'ticked')) {
+          if (closeAfterPress) win.isClosed = true;
+          if (loseConfirmReply) Object.assign(params, { ok: false, error: 'PAGE_NO_ANSWER: confirm reply was lost' });
+        }
+        handlers.get(m[1])[m[2]](params);
+      }
     };
     legacy.emit('OnSubmitWindowOpened', 1, 0);
   });
@@ -299,7 +322,7 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [], cl
   const lookups = [];
   lib.myEffects = async (args) => ({ items: effects(lookups.push(args) - 1) });
   const open = () => globalThis.App._windows.filter((w) => w.constructor.name === windowName && !w.isClosed);
-  return { lib, sources, handlers, open, depths, native, lookups };
+  return { lib, sources, handlers, open, depths, native, lookups, projectZip, closedEvaluations: () => closedEvaluations };
 }
 
 const fill = { name: '测试特效名', trigger_hint: '张嘴试试', camera: 'back', inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' };
@@ -435,6 +458,7 @@ test('submit_confirm presses 提交审核 once, reads the effect id the page rep
   assert.deepEqual(out, {
     submitted: true,
     effect_id: '7001',
+    confirmation_source: 'bridge',
     name: '测试特效名',
     trigger_hint: '张嘴试试',
     agreement_ticked: false,
@@ -498,26 +522,26 @@ test('submit_confirm presses nothing for a window filled for another name, or wh
   assert.equal(running.page.stats.presses, 0);
 });
 
-const NOT_LISTED = "; the account's newest 10 effects have no 「测试特效名」 yet, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)";
+const NOT_LISTED = /the account's newest 10 effects have no new 「测试特效名」 after \d+ read-only checks, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again/;
 
 test('submit_confirm passes on the failure the page reports, with its toast, once the account does not list the effect', async () => {
   const { page, lib, open, native, lookups } = await prepared({ report: 'fail' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试${NOT_LISTED}` });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), (error) => error.message.startsWith('SUBMIT_FAILED: 服务繁忙; the page says: 网络异常，请检查网络后重试') && NOT_LISTED.test(error.message));
   assert.deepEqual(native, [[SUBMIT_REPORT, { failReason: '服务繁忙' }]]);
   assert.equal(page.stats.presses, 1);
   assert.equal(open().length, 1);
-  assert.equal(lookups.length, 2, 'looked up before pressing and after the page failed');
+  assert.ok(lookups.length > 2, 'read-only reconciliation continues after the first empty result');
 });
 
 test('submit_confirm reports an unknown outcome when the page stops submitting without a report', async () => {
   const { page, lib } = await prepared({ report: 'stop' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; the page says: 网络异常，请检查网络后重试${NOT_LISTED}` });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), (error) => error.message.startsWith('SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; the page says: 网络异常，请检查网络后重试') && NOT_LISTED.test(error.message));
   assert.equal(page.stats.presses, 1);
 });
 
 test('submit_confirm reports an unknown outcome when the page never answers, and does not press again', async () => {
   const { page, lib, open } = await prepared({ report: 'silent' });
-  await assert.rejects(lib.submitConfirm({ name: fill.name }), { message: `SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms${NOT_LISTED}` });
+  await assert.rejects(lib.submitConfirm({ name: fill.name }), (error) => error.message.startsWith('SUBMIT_RESULT_UNKNOWN: the page reported no result in 1500 ms') && NOT_LISTED.test(error.message));
   assert.equal(page.stats.presses, 1);
   assert.equal(open().length, 1);
 });
@@ -552,7 +576,7 @@ test('submit_confirm says to check the dashboard when it cannot read the account
   );
   await assert.rejects(
     lib.submitConfirm({ name: fill.name }),
-    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\), so call pipeline_refresh and look at pipeline_works before submitting again \(the submit window is left open\)$/,
+    /^Error: SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result; .*reading the account's effects to see whether it went through anyway failed \(GET_MY_EFFECTS_FAILED\); the account's newest 10 effects have no new .*read-only checks.*call pipeline_refresh.*$/,
   );
   assert.equal(open().length, 1);
 });
@@ -614,4 +638,107 @@ test('submit_prepare supports pick_nomination: tick, untick, omit, unavailable, 
   const stuck = editor(fakePage({ pickNomination: 'stuck' }));
   await assert.rejects(stuck.lib.submitPrepare({ name: '精选测试', pick_nomination: true }), /SUBMIT_PICK_NOMINATION_NOT_APPLIED/);
   await stuck.lib.submitClose();
+});
+
+test('submit_prepare accepts already-unbound inspiration when the collection is empty', async () => {
+  const page = fakePage({ collected: [], searchable: [] });
+  const { lib } = editor(page);
+  const out = await lib.submitPrepare({ name: '空灵感提交', inspiration: '暂不绑定' });
+  assert.deepEqual({ inspiration: out.bindings.inspiration, step: out.step, pressed: page.stats.presses }, { inspiration: '暂不绑定', step: '提交审核', pressed: 0 });
+});
+
+test('submit_prepare blocks an oversized native project ZIP even when the runtime checks passed', async () => {
+  const page = fakePage();
+  const { lib, open } = editor(page, { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES + 1 });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual({ opened: out.opened, ok: out.check.ok, bytes: out.check.project_package_bytes, issue: out.check.issues[0].split(':')[0], name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
+    opened: false, ok: false, bytes: 209715201, issue: 'PROJECT_PACKAGE_TOO_LARGE', name: '', pressed: 0, windows: 0,
+  });
+});
+
+test('submit_prepare checks the ZIP rather than refusing a large compressible source directory', async () => {
+  const { lib } = editor(fakePage());
+  lib.submitChecks = async () => ({ ok: true, issues: [], project_directory_bytes: 400000000 });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([out.opened, out.check.project_directory_bytes, out.check.project_package_bytes], [true, 400000000, 1000]);
+});
+
+test('submit_prepare permits exactly the native project ZIP limit', async () => {
+  const { lib } = editor(fakePage(), { projectZipBytes: PROJECT_PACKAGE_LIMIT_BYTES });
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([out.opened, out.check.ok, out.check.project_package_bytes], [true, true, 209715200]);
+});
+
+test('submit_prepare reports native project export and ZIP failures before filling or publishing', async () => {
+  for (const options of [{ exportError: 'native resource export failed' }, { zipError: 'native ZIP creation failed' }]) {
+    const page = fakePage();
+    const { lib, open } = editor(page, options);
+    const error = await lib.submitPrepare(fill).then(() => null, (e) => e.message);
+    assert.deepEqual({ error, name: page.window.document.querySelector('.name-wrapper input').value, pressed: page.stats.presses, windows: open().length }, {
+      error: `PROJECT_EXPORT_FAILED: ${options.exportError || options.zipError} (the submit window was closed; nothing was submitted)`, name: '', pressed: 0, windows: 0,
+    });
+  }
+});
+
+test('submit_prepare closes an old submission before inspecting and exporting the project', async () => {
+  const old = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() { this.isClosed = true; } };
+  const { lib } = editor(fakePage(), { left: [old] });
+  let inspectedAfterClose = false;
+  lib.submitChecks = async () => { inspectedAfterClose = old.isClosed; return { ok: true, issues: [] }; };
+  const out = await lib.submitPrepare(fill);
+  assert.deepEqual([inspectedAfterClose, out.closed_previous, out.opened], [true, 1, true]);
+});
+
+test('submit_confirm reconciles delayed listing, excludes every pre-submit id and presses only once', async () => {
+  const old = { effect_id: 'old', name: fill.name, status: 101 };
+  const live = { effect_id: 'new', name: fill.name, status: 100 };
+  const { lib, page } = await prepared({ report: 'stop' }, { effects: (n) => n === 0 ? [old] : n < 4 ? [{ ...old, status: 100 }] : [live] });
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual({ id: out.effect_id, source: out.confirmation_source, attempts: out.confirmation.attempts, pressed: page.stats.presses }, { id: 'new', source: 'account_list', attempts: 4, pressed: 1 });
+});
+
+test('submit_confirm recovers a transient lookup failure without a second submit press', async () => {
+  const { lib, page } = await prepared({ report: 'stop' }, { effects: (n) => { if (n === 1) throw Error('temporary lookup failure'); return n < 3 ? [] : [{ effect_id: 'new', name: fill.name, status: 100 }]; } });
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual([out.effect_id, out.confirmation.attempts, page.stats.presses], ['new', 3, 1]);
+});
+
+test('submit_confirm reconciles a bridge failure after the press without repeating it', async () => {
+  const { lib, page } = await prepared({ report: 'stop' }, { loseConfirmReply: true, effects: (n) => n < 2 ? [] : [{ effect_id: 'new', name: fill.name, status: 100 }] });
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual([out.effect_id, out.confirmation_source, page.stats.presses], ['new', 'account_list', 1]);
+});
+
+test('submit_confirm reconciles after the user closes the window and does not evaluate it again', async () => {
+  const { lib, page, closedEvaluations } = await prepared({ report: 'stop' }, { closeAfterPress: true, effects: (n) => n < 2 ? [] : [{ effect_id: 'new', name: fill.name, status: 100 }] });
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual([out.effect_id, out.confirmation_source, page.stats.presses, closedEvaluations()], ['new', 'account_list', 1, 0]);
+});
+
+test('submit_confirm rechecks a project ZIP changed after preparation before pressing submit', async () => {
+  const { lib, page, projectZip } = await prepared();
+  fs.truncateSync(projectZip, PROJECT_PACKAGE_LIMIT_BYTES + 1);
+  const error = await lib.submitConfirm({ name: fill.name }).then(() => null, (e) => e.message.split(':')[0]);
+  assert.deepEqual([error, page.stats.presses], ['PROJECT_PACKAGE_TOO_LARGE', 0]);
+});
+
+test('submit_confirm returns the actual project oversize alert rather than unknown or a long wait', async () => {
+  const { lib, page, lookups } = await prepared({ report: 'project_oversize' });
+  const error = await lib.submitConfirm({ name: fill.name }).then(() => null, (e) => e.message);
+  assert.deepEqual([error, page.stats.presses, lookups.length], ['PROJECT_PACKAGE_TOO_LARGE: 工程文件超出200M，无法完成打包，请检查工程中的过大资源 (the submit window is left open)', 1, 1]);
+});
+
+test('submit_confirm ignores hidden stale project error notifications', async () => {
+  const { lib, page } = await prepared();
+  page.window.document.head.insertAdjacentHTML('beforeend', '<style>.old-error { display: none }</style>');
+  page.window.document.body.insertAdjacentHTML('beforeend', '<div class="old-error" role="alert">工程文件超出200M</div>');
+  const out = await lib.submitConfirm({ name: fill.name });
+  assert.deepEqual([out.effect_id, page.stats.presses], ['7001', 1]);
+});
+
+test('submit_confirm refuses a review whose checks could not be read', async () => {
+  const { lib, page } = await prepared();
+  page.window.document.querySelector('.effect-test-container').innerHTML = '';
+  const error = await lib.submitConfirm({ name: fill.name }).then(() => null, (e) => e.message.split(':')[0]);
+  assert.deepEqual([error, page.stats.presses], ['SUBMIT_PAGE_CHANGED', 0]);
 });

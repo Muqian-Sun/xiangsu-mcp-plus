@@ -30,9 +30,13 @@ async function submitPage(arg) {
     return el;
   };
   const shown = (el) => {
-    for (let e = el; e; e = e.parentElement) if (e.style && e.style.display === 'none') return false;
+    for (let e = el; e; e = e.parentElement) {
+      const style = getComputedStyle(e);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
     return true;
   };
+  const notifications = () => [...new Set([...document.querySelectorAll('.semi-toast-content-text, .semi-toast-content, [role="alert"]')].filter(shown).map(text).filter(Boolean))];
   // A section title is its first text node; the required-field star and the help icon follow it.
   const titleOf = (el) => {
     const t = el && el.querySelector('.title-main');
@@ -76,6 +80,22 @@ async function submitPage(arg) {
   switch (arg.action) {
     case 'state': {
       const requests = performance.getEntriesByType('resource');
+      // Keep query strings (signed asset URLs and account data) out of diagnostic output.
+      const address = (value) => {
+        try {
+          const u = new URL(value, location.href);
+          return `${u.origin === 'null' ? `${u.protocol}//${u.host}` : u.origin}${u.pathname}`;
+        } catch (_) {
+          return '(unreadable URL)';
+        }
+      };
+      const completed = new Set(requests.map((r) => r.name));
+      const pendingScripts = [...document.querySelectorAll('script[src]')]
+        .filter((s) => !completed.has(s.src))
+        .map((s) => ({ kind: 'script', url: address(s.src) }));
+      const pendingImages = [...document.images]
+        .filter((img) => img.src && (!img.complete || !img.naturalWidth))
+        .map((img) => ({ kind: 'image', url: address(img.currentSrc || img.src), complete: img.complete }));
       return {
         ready_state: document.readyState,
         step: step(),
@@ -83,7 +103,48 @@ async function submitPage(arg) {
         icons_loaded: document.querySelectorAll('.upload-icon-wrapper .icon-bottom > div').length > 0,
         name_config_loaded: requests.some((r) => /[?&]key=aiName(&|$)/.test(r.name)),
         resources: requests.length,
+        // Picked bounds: enough recent resources to identify a stalled dependency without dumping the page.
+        diagnostics: {
+          page: address(location.href),
+          title: document.title,
+          icon_sections: document.querySelectorAll('.upload-icon-wrapper').length,
+          icon_status: [...document.querySelectorAll('.upload-icon-wrapper .icon-bottom')].map((el) => ({
+            class: el.className, children: el.children.length, text: text(el).slice(0, 120),
+          })),
+          errors: errors(),
+          api_resources: requests.filter((r) => r.name.includes('/creator/') || r.name.includes('/platform/')).slice(-12).map((r) => ({
+            url: address(r.name), kind: r.initiatorType || null, duration_ms: Math.round(r.duration || 0), status: r.responseStatus ?? null,
+          })),
+          pending_assets: [...pendingScripts, ...pendingImages].slice(-12),
+          last_resources: requests.slice(-12).map((r) => ({
+            url: address(r.name), kind: r.initiatorType || null, duration_ms: Math.round(r.duration || 0),
+            bytes: r.transferSize ?? null, status: r.responseStatus ?? null,
+          })),
+        },
       };
+    }
+
+    case 'diagnose': {
+      const state = await submitPage({ action: 'state' });
+      const request = performance.getEntriesByType('resource').findLast((r) => r.name.includes('/creator/v1/effect_task_list'));
+      if (!request) {
+        state.diagnostics.task_probe = { attempted: false, reason: 'task request not observed' };
+        return state;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), arg.wait_ms);
+      try {
+        // Repeat only the task-list GET already made by this page, in the same logged-in page context.
+        const response = await fetch(request.name, { credentials: 'include', signal: controller.signal });
+        const result = await response.json();
+        state.diagnostics.task_probe = { attempted: true, status: response.status, code: result?.code ?? null,
+          count: Array.isArray(result?.data?.effect_task_list) ? result.data.effect_task_list.length : null };
+      } catch (e) {
+        state.diagnostics.task_probe = { attempted: true, error: e.name };
+      } finally {
+        clearTimeout(timer);
+      }
+      return state;
     }
 
     case 'basic': {
@@ -119,7 +180,7 @@ async function submitPage(arg) {
     }
 
     case 'bind': {
-      if (arg.inspiration !== undefined) {
+      if (arg.inspiration !== undefined && !(arg.inspiration === '暂不绑定' && shownText(binder('灵感绑定')) === '选择收藏的灵感或热点')) {
         const w = need(binder('灵感绑定'), 'the 灵感绑定 selector');
         const match = () => [...w.querySelectorAll('.favor-option')].find((o) => optionName(o) === arg.inspiration);
         press(need(w.querySelector('.selector-input'), 'the 灵感绑定 box'));
@@ -183,7 +244,8 @@ async function submitPage(arg) {
           if (after.checked !== arg.pick_nomination) throw Error(`SUBMIT_PICK_NOMINATION_NOT_APPLIED: 精选提报 stayed ${after.checked}, expected ${arg.pick_nomination}`);
         }
       }
-      return { inspiration: shownText(binder('灵感绑定')), task: shownText(binder('任务绑定')), pick_nomination: readPickNomination(), sections: sections(), errors: errors() };
+      const inspiration = shownText(binder('灵感绑定'));
+      return { inspiration: arg.inspiration === '暂不绑定' && inspiration === '选择收藏的灵感或热点' ? '暂不绑定' : inspiration, task: shownText(binder('任务绑定')), pick_nomination: readPickNomination(), sections: sections(), errors: errors() };
     }
 
     case 'review': {
@@ -204,6 +266,8 @@ async function submitPage(arg) {
         checks: [...document.querySelectorAll('.publish-wrap .effect-test-item-top-text')].map(text),
         agreed: agreement ? !!agreement.querySelector('.agreed') : null,
         submit_enabled: !submit.classList.contains('disable'),
+        toasts: notifications(),
+        page_errors: errors(),
       };
     }
 
@@ -258,7 +322,8 @@ async function submitPage(arg) {
         success_text: text(document.querySelector('.upload-preview header h2')) || null,
         needs_real_name: !!footerButton('实名认证'),
         loading: !!submit && submit.classList.contains('loading'),
-        toasts: [...document.querySelectorAll('.semi-toast-content-text')].map(text).filter(Boolean),
+        toasts: notifications(),
+        page_errors: errors(),
       };
     }
 
@@ -326,6 +391,7 @@ function pageBridge(win, pageFn) {
   });
   return (arg, ms = CALL_TIMEOUT_MS) =>
     new Promise((resolve, reject) => {
+      if (win.isClosed) return reject(Error('PAGE_WINDOW_CLOSED: the page window was closed; no script was evaluated'));
       const id = String(++seq);
       const timer = setTimeout(() => {
         pending.delete(id);

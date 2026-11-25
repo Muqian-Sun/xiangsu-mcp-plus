@@ -525,14 +525,15 @@ export function createServer(deps = {}) {
     return { ...got, root };
   };
   const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
-  // The submitted effect in my_effects, the account's own record of it: by effect_id, or by name when the
-  // page showed 提交成功 without reporting the id.
-  const listedEffect = async (projectPath, { effect_id, name }) => {
+  // The plugin reconciles missing IDs against its pre-submit baseline. Never guess an older
+  // same-name work here when the success page did not provide an ID.
+  const listedEffect = async (projectPath, { effect_id }) => {
+    if (!effect_id) return { listed: null, listed_note: 'the page confirmed submission but its effect_id is not available yet; call pipeline_refresh and look at pipeline_works; do not submit again' };
     try {
       const { items } = await d.callPlugin('my_effects', { count: SUBMITTED_LOOKUP }, { projectPath });
-      const hit = effect_id ? items.find((e) => e.effect_id === effect_id) : items.find((e) => e.name === name);
+      const hit = items.find((e) => String(e.effect_id) === String(effect_id));
       if (hit) return { listed: hit };
-      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects ${effect_id ? `by effect_id ${effect_id}` : `by name 「${name}」`}; call pipeline_refresh, then look at pipeline_works in a minute` };
+      return { listed: null, listed_note: `not among the newest ${SUBMITTED_LOOKUP} effects of my_effects by effect_id ${effect_id}; call pipeline_refresh, then look at pipeline_works in a minute` };
     } catch (e) {
       return { listed: null, listed_error: e.message };
     }
@@ -1218,7 +1219,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_prepare',
       keywords: '提交 填表 提审 prepare',
-      description: 'Open a minimized submit window, fill name/trigger_hint/camera/inspiration/task (and optional icon_image), wait for on-page checks on 「提交审核」, and read back every field to verify. Never ticks the agreement or clicks submit. Next: submit_confirm after user approval.',
+      description: "Inspect the whole project (including files outside Assets), report largest_project_files, and check the native project ZIP against its 200 MiB limit separately from the runtime effect package. Remove unused production materials before calling. An oversized ZIP closes the window and returns opened=false with PROJECT_PACKAGE_TOO_LARGE before filling. Otherwise fill name/trigger_hint/camera/inspiration/task/pick_nomination (and optional icon_image), wait for checks on 「提交审核」 and read back fields. Never ticks the agreement or submits. Next: submit_confirm when the user has authorized submission.",
       shape: {
         ...target,
         name: z.string().min(1).describe('Effect name: ≤10 chars, two English letters or digits count as one, no emoji or special symbols. Page truncation or an error fails the call.'),
@@ -1244,7 +1245,7 @@ export function createServer(deps = {}) {
     {
       name: 'submit_confirm',
       keywords: '送审 提交 审核 submit confirm',
-      description: 'Submit the effect for review in the window filled by submit_prepare (irreversible, consumes account submission quota; confirm with user first). Verifies name matches filled.name, checks pass, and no duplicate among newest 10 works; ticks 《创作者协议》 if needed and waits up to 5 min for effect_id. On SUBMIT_FAILED / SUBMIT_RESULT_UNKNOWN, never auto-retry: check pipeline_refresh + pipeline_works first.',
+      description: "Submit the effect for review in the window filled by submit_prepare (irreversible, consumes account submission quota; user authorization required). Rechecks the native project ZIP limit, matching name, passed page checks and newest 10 works for duplicates. Presses 提交审核 once. Explicit project-size errors stop immediately. A missing result, bridge error or closed window triggers bounded read-only account checks for a new effect_id, excluding all pre-submit IDs; returns confirmation_source and reconciliation attempts. Never guesses an old ID by name. On SUBMIT_FAILED / SUBMIT_RESULT_UNKNOWN, never auto-retry: check pipeline_refresh + pipeline_works first.",
       shape: { ...target, name: z.string().min(1).describe('The effect name to submit; must equal filled.name from the submit_prepare summary.') },
       run: async (a) => {
         const { project_path, instance_id, name } = a;

@@ -6,6 +6,7 @@ const path = require('path');
 const { M, scratchDir, exportEffectPackage, nextEvent } = require('./common.cjs');
 const { submitPageBridge, perfPageBridge } = require('./webpages.cjs');
 const { FAILED_STATUSES } = require('./community.cjs');
+const { PROJECT_PACKAGE_LIMIT_BYTES, projectInventory, beforeDeadline, preparedProjectPackage, projectSizeIssue } = require('./submission-project.cjs');
 
 // IconPreviewManager.iconTypeToProjectIconPathMap keys (IconType: Female 0, Male 1, Common 2).
 const ICON_TYPES = { female: 0, male: 1, common: 2 };
@@ -23,14 +24,18 @@ const CAMERA = { front: '前置', back: '后置' };
 const STEP = { basic: '特效基础信息', settings: '特效发布设置', review: '提交审核' };
 // Sections each step fills; others on the page are reported as left as the page shows them.
 const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称', '特效触发提示', '灵感绑定', '任务绑定', '精选提报'];
-// The page loaded within 4 s in the live runs of 2026-11-07; the other values are picked. Its aiName config
+// Native browser logs on 2026-11-25 show 35–56 s cold loads while login CDN chunks fail; readyMs is
+// twice that observed maximum, rounded up. The other values are picked. Its aiName config
 // request (done 2.4 s in, after the form appeared) remounts the name field and wipes what was typed (seen
 // live), so filling waits for that request, or, should the page stop making it, until no request has
 // finished for quietMs. settleMs lets a picked option or typed text render before it is read back.
 // The 提交审核 step's checks (performance, similarity…) finished within a minute live; checksMs is picked.
 // closeMs is picked: closed submit windows were gone within 0.5 s live. resultMs is picked: after 提交审核
 // the page uploads the package and the project before it submits.
-const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000, resultMs: 300000 };
+// Native project uploads allow 200 s; resultMs adds a picked 40 s margin. A picked 30 s read-only
+// reconciliation window covers delayed account listing (seen on 2026-11-25). Returned attempts and
+// wait time let this be calibrated; the combined 270 s leaves room under a client's 300 s deadline.
+const PAGE_TIMING = { readyMs: 120000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000, resultMs: 240000, verifyMs: 30000, verifyPollMs: 1500 };
 // Picked: a repeated submission follows the first within minutes, so the newest effects hold the first.
 const RECENT_EFFECTS = 10;
 const checkPending = (c) => c.endsWith('中...');
@@ -59,7 +64,7 @@ function openWindows(className) {
 }
 
 async function closeWindows(wins) {
-  for (const w of wins) w.closeWindow();
+  for (const w of wins) if (!w.isClosed) w.closeWindow();
   const until = Date.now() + PAGE_TIMING.closeMs;
   while (wins.some((w) => !w.isClosed) && Date.now() < until) await sleep(100);
   const left = wins.filter((w) => !w.isClosed);
@@ -155,6 +160,9 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     throw Error(`SUBMIT_REVIEW_MISMATCH: the summary shows 名称「${first.name}」 触发提示「${first.trigger_hint}」, filled 「${basic.name}」 「${hint}」`);
   }
   const review = await settledReview(run, first);
+  if (!review.checks.length) throw Error('SUBMIT_PAGE_CHANGED: no review checks were found');
+  const projectError = projectPageError(review);
+  if (projectError) throw Error(`PROJECT_PACKAGE_TOO_LARGE: ${projectError}`);
   const failing = review.checks.filter((c) => !checkPassed(c) && !checkPending(c));
   let next;
   if (review.checks.some(checkPending)) next = `the page's checks were still running after ${PAGE_TIMING.checksMs} ms; call submit_confirm once they are done`;
@@ -183,14 +191,19 @@ async function settledReview(run, review) {
 
 // Polls the page after 提交审核 until it reports a result or shows its 提交成功 page, until it stops
 // submitting (it marks the button loading meanwhile) without either, or until resultMs runs out.
-async function submitOutcome(run) {
-  const until = Date.now() + PAGE_TIMING.resultMs;
+async function submitOutcome(run, win, until) {
   let busy = false;
   let out;
   do {
     await sleep(PAGE_TIMING.pollMs);
-    out = await run({ action: 'outcome' });
+    try {
+      out = await run({ action: 'outcome' }, Math.max(1, Math.min(15000, until - Date.now())));
+    } catch (error) {
+      return { ...out, bridge_error: error.message, timed_out: false };
+    }
+    out.native_error = win.lastErrorMessage || null;
     if (out.result || out.submitted) return { ...out, timed_out: false };
+    if (projectPageError(out)) return { ...out, timed_out: false };
     if (busy && !out.loading) return { ...out, timed_out: false };
     busy = busy || out.loading;
   } while (Date.now() < until);
@@ -200,18 +213,55 @@ async function submitOutcome(run) {
 // Why the page left the submission unconfirmed, or null when it confirmed it (an effect id, or its
 // 提交成功 view).
 function unconfirmed(out) {
+  if (out.submitted || reportedEffectId(out)) return null;
+  const projectError = projectPageError(out);
+  if (projectError) return `PROJECT_PACKAGE_TOO_LARGE: ${projectError}`;
   if (out.result && out.result.unreadable !== undefined) return `SUBMIT_RESULT_UNKNOWN: the page reported ${out.result.unreadable}, which does not parse`;
-  if (out.result && out.result.effectId === undefined) return `SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}`;
-  if (out.result || out.submitted) return null;
+  if (out.result) return `SUBMIT_FAILED: ${out.result.failReason || JSON.stringify(out.result)}`;
+  if (out.bridge_error) return `SUBMIT_RESULT_UNKNOWN: ${out.bridge_error}`;
+  if (out.native_error) return `SUBMIT_FAILED: ${out.native_error}`;
   if (out.timed_out) return `SUBMIT_RESULT_UNKNOWN: the page reported no result in ${PAGE_TIMING.resultMs} ms`;
   return 'SUBMIT_RESULT_UNKNOWN: the page stopped submitting without a result';
 }
 
 // The account's effect named `name` that is in review or past it (one whose review failed does not
 // count), among its newest.
-async function liveEffect(lib, name) {
-  const { items } = await lib.myEffects({ count: RECENT_EFFECTS });
-  return items.find((e) => e.name === name && !FAILED_STATUSES.includes(e.status)) || null;
+function reportedEffectId(out) {
+  const id = out.result?.effectId;
+  return (typeof id === 'string' || typeof id === 'number') && String(id).trim() ? String(id) : null;
+}
+
+function projectPageError(out) {
+  return [out.result?.failReason, out.native_error, ...(out.toasts || []), ...(out.page_errors || [])]
+    .find((message) => typeof message === 'string' && (/工程(?:源文件|文件|包).*?(?:超出|超过|过大)/.test(message) || /Uploaded Project Oversize/i.test(message))) || null;
+}
+
+async function recentEffects(lib, deadline) {
+  const result = await beforeDeadline(lib.myEffects({ count: RECENT_EFFECTS }), deadline, 'GET_MY_EFFECTS_TIMEOUT');
+  if (!Array.isArray(result?.items)) throw Error('GET_MY_EFFECTS_INVALID: items is not an array');
+  return result.items;
+}
+
+function findLiveEffect(items, name, excluded = new Set()) {
+  return items.find((effect) => effect.name === name && !FAILED_STATUSES.includes(effect.status) && !excluded.has(String(effect.effect_id))) || null;
+}
+
+async function verifySubmission(lib, name, excluded, deadline) {
+  const started = Date.now();
+  let attempts = 0;
+  let error = null;
+  while (Date.now() < deadline) {
+    attempts++;
+    try {
+      const found = findLiveEffect(await recentEffects(lib, deadline), name, excluded);
+      error = null;
+      if (found) return { found, attempts, waited_ms: Date.now() - started, error: null };
+    } catch (e) {
+      error = e.message;
+    }
+    if (Date.now() < deadline) await sleep(Math.min(PAGE_TIMING.verifyPollMs, deadline - Date.now()));
+  }
+  return { found: null, attempts, waited_ms: Date.now() - started, error };
 }
 
 const methods = {
@@ -276,6 +326,7 @@ const methods = {
     const project = activeProject(this);
     // Read before the export, which can mark the project changed by itself.
     const unsaved = typeof project.isProjectChanged === 'function' ? project.isProjectChanged() : null;
+    const inventory = projectInventory(project.path);
     const api = this.mod(M.orionui).ExtensionManager.host.getAPI(this.mod(M.submission).EffectSubmissionAPIKey);
     const dir = scratchDir(this, 'check');
     let pkg;
@@ -300,6 +351,8 @@ const methods = {
       issues,
       package_bytes: pkg.size,
       package_limit_bytes: maxBytes,
+      ...inventory,
+      project_package_limit_bytes: PROJECT_PACKAGE_LIMIT_BYTES,
       icons,
       logged_in: !!isLoggedIn,
       saved: typeof project.isSaved === 'function' ? project.isSaved() : null,
@@ -358,16 +411,31 @@ const methods = {
     if (camera !== undefined && !Object.prototype.hasOwnProperty.call(CAMERA, camera)) throw Error(`INVALID_CAMERA: ${camera}; valid: ${Object.keys(CAMERA).join(', ')}`);
     if (task_track !== undefined && task === undefined) throw Error('INVALID_TASK: task_track needs task');
     if (pick_nomination !== undefined && typeof pick_nomination !== 'boolean') throw Error('INVALID_PICK_NOMINATION: pass true or false');
-    const check = await this.submitChecks();
-    if (!check.ok) return { opened: false, check };
     const closed_previous = await closeWindows(openWindows(SUBMIT_WINDOW));
+    const check = await this.submitChecks();
+    if (!check.ok) return { opened: false, check, closed_previous };
     const win = await openSubmitWindow(this);
     if (!win) return { opened: false, check, closed_previous, note: 'the submit window did not open; the editor shows the reason (e.g. login, size limit) in a toast or dialog' };
     const run = submitPageBridge(win);
     try {
+      Object.assign(check, await preparedProjectPackage(win, Date.now() + PAGE_TIMING.readyMs, PAGE_TIMING.pollMs));
+      const issue = projectSizeIssue(check);
+      if (issue) {
+        check.ok = false;
+        check.issues.push(issue);
+        await closeWindows([win]);
+        return { opened: false, check, closed_previous };
+      }
       return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track, pick_nomination })) };
     } catch (e) {
-      throw Error(`${e.message} (the submit window is left open)`);
+      if (e.message.startsWith('PROJECT_EXPORT_FAILED:')) {
+        await closeWindows([win]);
+        throw Error(`${e.message} (the submit window was closed; nothing was submitted)`);
+      }
+      const action = e.message.startsWith('SUBMIT_OPTION_NOT_FOUND: 任务绑定') ? 'diagnose' : 'state';
+      const details = e.message.startsWith('SUBMIT_PAGE_NOT_READY:') ? '' : await run({ action, wait_ms: PAGE_TIMING.stepMs }, PAGE_TIMING.stepMs + PAGE_TIMING.pollMs * 10)
+        .then((state) => `; page state ${JSON.stringify(state)}`, (error) => `; page diagnostics unavailable: ${error.message}`);
+      throw Error(`${e.message}${details} (the submit window is left open)`);
     }
   },
 
@@ -390,36 +458,53 @@ const methods = {
     if (wins.length > 1) throw Error(`SUBMIT_WINDOW_AMBIGUOUS: ${wins.length} submit windows are open; run submit_prepare again, which leaves one`);
     const win = wins[0];
     const run = submitPageBridge(win);
-    const review = await settledReview(run, await run({ action: 'review' }));
+    const deadline = Date.now() + PAGE_TIMING.resultMs + PAGE_TIMING.verifyMs;
+    const review = await run({ action: 'review' });
+    if (!review.checks.length) throw Error('SUBMIT_PAGE_CHANGED: no review checks were found; nothing was pressed');
+    const projectError = projectPageError(review);
+    if (projectError) throw Error(`PROJECT_PACKAGE_TOO_LARGE: ${projectError}`);
     if (review.name !== name) throw Error(`SUBMIT_NAME_MISMATCH: the submit window is filled for 「${review.name}」, not 「${name}」`);
-    if (review.checks.some(checkPending)) throw Error(`SUBMIT_CHECKS_RUNNING: the page's checks were still running after ${PAGE_TIMING.checksMs} ms; call submit_confirm again later`);
+    if (review.checks.some(checkPending)) throw Error('SUBMIT_CHECKS_RUNNING: the page checks are not finished; nothing was pressed, wait for them before confirming');
     const failing = review.checks.filter((c) => !checkPassed(c));
     if (failing.length) throw Error(`SUBMIT_CHECKS_FAILED: ${failing.join(' | ')}; fix the effect and run submit_prepare again`);
-    let prior;
+    const source = await preparedProjectPackage(win, Math.min(deadline, Date.now() + PAGE_TIMING.readyMs), PAGE_TIMING.pollMs);
+    const sourceIssue = projectSizeIssue(source);
+    if (sourceIssue) throw Error(sourceIssue);
+    let before;
     try {
-      prior = await liveEffect(this, name);
+      before = await recentEffects(this, deadline - PAGE_TIMING.verifyMs);
     } catch (e) {
       throw Error(`SUBMIT_LOOKUP_FAILED: the account's effects could not be read to rule out submitting 「${name}」 twice (${e.message}); nothing was pressed, call submit_confirm again`);
     }
+    const prior = findLiveEffect(before, name);
     if (prior) {
       throw Error(`SUBMIT_ALREADY_SUBMITTED: the account already has 「${name}」 (effect ${prior.effect_id}, ${prior.status_text || prior.status}, created ${prior.created_at}); nothing was pressed, close the window with submit_close`);
     }
-    const { ticked } = await run({ action: 'confirm', settle_ms: PAGE_TIMING.settleMs });
-    const out = await submitOutcome(run);
-    let effectId = out.result ? String(out.result.effectId) : null;
+    if (Date.now() >= deadline - PAGE_TIMING.verifyMs) throw Error('SUBMIT_DEADLINE_EXCEEDED: pre-submit checks used the call budget; nothing was pressed');
+    let ticked = null;
+    let out;
+    try {
+      ({ ticked } = await run({ action: 'confirm', settle_ms: PAGE_TIMING.settleMs }));
+      out = await submitOutcome(run, win, deadline - PAGE_TIMING.verifyMs);
+    } catch (e) {
+      // A lost bridge reply does not establish whether the press happened. Only reconcile; never press again.
+      out = { bridge_error: e.message, toasts: [] };
+    }
+    let effectId = reportedEffectId(out);
+    let confirmationSource = effectId ? 'bridge' : out.submitted ? 'success_page' : null;
     let pageProblem = unconfirmed(out);
-    if (pageProblem) {
-      pageProblem += quote(out.toasts);
-      let found;
-      try {
-        found = await liveEffect(this, name);
-      } catch (e) {
-        throw Error(`${pageProblem}; reading the account's effects to see whether it went through anyway failed (${e.message}), so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)`);
+    let verification;
+    if (pageProblem?.startsWith('PROJECT_PACKAGE_TOO_LARGE:')) throw Error(`${pageProblem} (the submit window is left open)`);
+    if (pageProblem) pageProblem += quote(out.toasts || []);
+    if (!effectId) {
+      verification = await verifySubmission(this, name, new Set(before.map((effect) => String(effect.effect_id))), Math.min(deadline, Date.now() + PAGE_TIMING.verifyMs));
+      if (verification.found) {
+        effectId = String(verification.found.effect_id);
+        confirmationSource = 'account_list';
+      } else if (pageProblem) {
+        const lookup = verification.error ? `; reading the account's effects to see whether it went through anyway failed (${verification.error})` : '';
+        throw Error(`${pageProblem}${lookup}; the account's newest ${RECENT_EFFECTS} effects have no new 「${name}」 after ${verification.attempts} read-only checks, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)`);
       }
-      if (!found) {
-        throw Error(`${pageProblem}; the account's newest ${RECENT_EFFECTS} effects have no 「${name}」 yet, but it may still show up, so call pipeline_refresh and look at pipeline_works before submitting again (the submit window is left open)`);
-      }
-      effectId = found.effect_id;
     }
     let closed = true;
     let close_error;
@@ -432,6 +517,7 @@ const methods = {
     return {
       submitted: true,
       effect_id: effectId,
+      confirmation_source: confirmationSource,
       name: review.name,
       trigger_hint: review.trigger_hint,
       agreement_ticked: ticked,
@@ -439,6 +525,7 @@ const methods = {
       needs_real_name: out.needs_real_name,
       window_closed: closed,
       ...(pageProblem ? { page_problem: pageProblem } : {}),
+      ...(verification ? { confirmation: { attempts: verification.attempts, waited_ms: verification.waited_ms, ...(verification.error ? { lookup_error: verification.error } : {}) } } : {}),
       ...(close_error ? { close_error } : {}),
     };
   },

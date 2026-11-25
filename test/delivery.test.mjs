@@ -564,13 +564,16 @@ test('submit_confirm needs the name, waits longer than the plugin and finds the 
   assert.equal(broken.listed_error, 'GET_MY_EFFECTS_FAILED');
 });
 
-test('submit_confirm looks the effect up by name when the page showed 提交成功 without its id', async () => {
+test('submit_confirm does not substitute an old same-name work when a success page has no id', async () => {
+  const seen = [];
   const client = await connect({
-    callPlugin: async (method) =>
-      method === 'my_effects' ? { items: [{ effect_id: '7002', name: '名字' }, { effect_id: '6990', name: '名字' }] } : { submitted: true, effect_id: null, name: '名字' },
+    callPlugin: async (method) => {
+      seen.push(method);
+      return method === 'my_effects' ? { items: [{ effect_id: '6990', name: '名字' }] } : { submitted: true, effect_id: null, name: '名字' };
+    },
   });
   const out = json(await client.callTool({ name: 'submit_confirm', arguments: { project_path: '/p', name: '名字' } }));
-  assert.deepEqual(out.listed, { effect_id: '7002', name: '名字' });
+  assert.deepEqual([out.submitted, out.effect_id, out.listed, seen], [true, null, null, ['submit_confirm']]);
 });
 
 test('effect_check makes the single cloud check call, with an RPC timeout longer than the wait', async () => {
@@ -824,4 +827,12 @@ test('music_categories, music_list and music_search each do one thing, and music
   assert.deepEqual(seen.at(-1), ['music_search', { query: '晴天' }]);
   await client.callTool({ name: 'music_apply', arguments: { music_id: '8' } });
   assert.deepEqual(seen.at(-1), ['music_apply', { item: { id: 8, duration: 20 } }]);
+});
+
+test('submitChecks reports the whole source inventory separately from the runtime package', async () => {
+  const { lib, projectDir } = setup();
+  fs.mkdirSync(path.join(projectDir, '素材'));
+  fs.writeFileSync(path.join(projectDir, '素材/录屏.mp4'), Buffer.alloc(6000));
+  const out = await lib.submitChecks();
+  assert.deepEqual([out.package_bytes, out.project_directory_bytes, out.project_file_count, out.largest_project_files, out.project_package_limit_bytes], [1000, 6000, 1, [{ path: '素材/录屏.mp4', bytes: 6000 }], 209715200]);
 });
