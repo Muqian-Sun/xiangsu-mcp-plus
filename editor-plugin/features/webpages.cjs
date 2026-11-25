@@ -46,10 +46,11 @@ async function submitPage(arg) {
   const errors = () => [...document.querySelectorAll('.text-err')].filter(shown).map(text).filter(Boolean);
   const sections = () => [...document.querySelectorAll('main .content-left .section-title')].filter(shown).map((s) => titleOf(s.parentElement));
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  const setTextareaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
   // data: null makes the page's input handler take the whole value, the way it treats a paste.
   const type = (input, value) => {
     input.focus();
-    setValue.call(input, value);
+    (input instanceof HTMLTextAreaElement ? setTextareaValue : setValue).call(input, value);
     input.dispatchEvent(new InputEvent('input', { bubbles: true, data: null, inputType: 'insertReplacementText' }));
     input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
     input.blur();
@@ -65,16 +66,23 @@ async function submitPage(arg) {
   const shownText = (w) => (w ? text(w.querySelector('.selector-input .text')) : null);
   const optionName = (o) => text(o.querySelector('.option-name'));
   const pickNominationWrapper = () => [...document.querySelectorAll('.innovation-wrapper')].filter(shown).find((w) => /精选提报/.test(text(w.querySelector('.innovation-title'))));
+  const pickTypeBoxes = () => [...(pickNominationWrapper()?.querySelectorAll('.innovation-category-content-check-box') || [])].filter(shown);
   const readPickNomination = () => {
     const w = pickNominationWrapper();
-    if (!w) return { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null };
+    if (!w) return { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null, types: [], type_options: [], highlight: null };
     const box = w.querySelector('.custom-checkbox');
     const contentText = text(w.querySelector('.innovation-main')) || text(w);
     const mRem = /(?:剩余|还可提报)\s*(\d+)\s*次/.exec(contentText);
     const mLim = /每日有\s*(\d+)\s*次/.exec(contentText);
     const disabled = !box || box.classList.contains('disabled') || box.hasAttribute('disabled') || box.getAttribute('aria-disabled') === 'true';
     const checked = !!box && (box.classList.contains('checked') || box.classList.contains('active') || box.getAttribute('aria-checked') === 'true' || !!box.querySelector('input:checked'));
-    return { available: true, checked, remaining: mRem ? Number(mRem[1]) : null, daily_limit: mLim ? Number(mLim[1]) : null, disabled, text: contentText || null };
+    const types = pickTypeBoxes();
+    return {
+      available: true, checked, remaining: mRem ? Number(mRem[1]) : null, daily_limit: mLim ? Number(mLim[1]) : null, disabled, text: contentText || null,
+      types: types.filter((b) => b.classList.contains('category-check-active')).map(text),
+      type_options: types.map(text),
+      highlight: checked ? w.querySelector('.innovation-category textarea')?.value ?? null : null,
+    };
   };
 
   switch (arg.action) {
@@ -180,6 +188,11 @@ async function submitPage(arg) {
     }
 
     case 'bind': {
+      // The live page fetches eligibility, then innovation_statement config + type labels, separately
+      // from aiName. The settings step can be active before that region has mounted (seen 2026-11-23).
+      if (arg.pick_nomination === true || arg.pick_types !== undefined || arg.pick_highlight !== undefined) {
+        for (let waited = 0; !pickNominationWrapper() && waited < arg.wait_ms; waited += 100) await sleep(100);
+      }
       if (arg.inspiration !== undefined && !(arg.inspiration === '暂不绑定' && shownText(binder('灵感绑定')) === '选择收藏的灵感或热点')) {
         const w = need(binder('灵感绑定'), 'the 灵感绑定 selector');
         const match = () => [...w.querySelectorAll('.favor-option')].find((o) => optionName(o) === arg.inspiration);
@@ -244,8 +257,43 @@ async function submitPage(arg) {
           if (after.checked !== arg.pick_nomination) throw Error(`SUBMIT_PICK_NOMINATION_NOT_APPLIED: 精选提报 stayed ${after.checked}, expected ${arg.pick_nomination}`);
         }
       }
+      if (arg.pick_types !== undefined) {
+        const cur = readPickNomination();
+        if (!cur.available) throw Error('SUBMIT_PICK_NOMINATION_UNAVAILABLE: 精选提报 section is not present on this page');
+        if (!cur.checked) throw Error('SUBMIT_PICK_TYPES_UNAVAILABLE: 提报类型 requires 精选提报 checked; pass pick_nomination=true');
+        if (!cur.type_options.length) throw Error('SUBMIT_PAGE_CHANGED: the 提报类型 options not found');
+        const unknown = arg.pick_types.filter((t) => !cur.type_options.includes(t));
+        if (unknown.length) throw Error(`SUBMIT_OPTION_NOT_FOUND: 提报类型 has no 「${unknown.join(' | ')}」; options: ${cur.type_options.join(' | ')}`);
+        // React rerenders after each toggle; find each option again rather than pressing stale nodes.
+        for (const label of cur.type_options) {
+          const box = need(pickTypeBoxes().find((b) => text(b) === label), `the 提报类型 option ${label}`);
+          if (box.classList.contains('category-check-active') !== arg.pick_types.includes(label)) {
+            press(box);
+            await sleep(arg.settle_ms);
+          }
+        }
+        const after = readPickNomination();
+        const wanted = [...new Set(arg.pick_types)];
+        if (after.types.length !== wanted.length || wanted.some((t) => !after.types.includes(t))) {
+          throw Error(`SUBMIT_PICK_TYPES_NOT_APPLIED: 提报类型 shows 「${after.types.join(' | ')}」, expected 「${wanted.join(' | ')}」`);
+        }
+      }
+      if (arg.pick_highlight !== undefined) {
+        const cur = readPickNomination();
+        if (!cur.available) throw Error('SUBMIT_PICK_NOMINATION_UNAVAILABLE: 精选提报 section is not present on this page');
+        if (!cur.checked) throw Error('SUBMIT_PICK_HIGHLIGHT_UNAVAILABLE: 亮点 requires 精选提报 checked; pass pick_nomination=true');
+        const input = need(pickNominationWrapper().querySelector('.innovation-category textarea'), 'the 精选提报 亮点 textarea');
+        type(input, arg.pick_highlight);
+        await sleep(arg.settle_ms);
+        const after = readPickNomination();
+        if (after.highlight !== arg.pick_highlight) throw Error(`SUBMIT_PICK_HIGHLIGHT_NOT_APPLIED: 亮点 kept 「${after.highlight}」 of 「${arg.pick_highlight}」 (page limit: 50)`);
+      }
+      const nomination = readPickNomination();
+      if (nomination.checked && nomination.type_options.length && !nomination.types.length) {
+        throw Error(`SUBMIT_PICK_TYPES_REQUIRED: 请选择提报类型; pass pick_types with at least one of: ${nomination.type_options.join(' | ')}`);
+      }
       const inspiration = shownText(binder('灵感绑定'));
-      return { inspiration: arg.inspiration === '暂不绑定' && inspiration === '选择收藏的灵感或热点' ? '暂不绑定' : inspiration, task: shownText(binder('任务绑定')), pick_nomination: readPickNomination(), sections: sections(), errors: errors() };
+      return { inspiration: arg.inspiration === '暂不绑定' && inspiration === '选择收藏的灵感或热点' ? '暂不绑定' : inspiration, task: shownText(binder('任务绑定')), pick_nomination: nomination, sections: sections(), errors: errors() };
     }
 
     case 'review': {

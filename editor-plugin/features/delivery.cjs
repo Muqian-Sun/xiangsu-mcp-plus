@@ -126,7 +126,7 @@ async function nextStep(run) {
 
 // Fills the submit page and stops on its 提交审核 step. Fields left undefined keep what the page shows
 // (the editor passes the project's bound inspiration and task, and the trigger hint of AI assets).
-async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, task, task_track, pick_nomination }) {
+async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, task, task_track, pick_nomination, pick_types, pick_highlight }) {
   await waitForForm(run);
   const basic = await run({ action: 'basic', name, trigger_hint, camera, settle_ms: PAGE_TIMING.settleMs });
   if (basic.errors.length) throw Error(`SUBMIT_FIELD_REJECTED${quote(basic.errors)}`);
@@ -139,7 +139,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
   let step = await nextStep(run);
   let bindings = null;
   if (step === STEP.settings) {
-    bindings = await run({ action: 'bind', inspiration, task, task_track, pick_nomination, settle_ms: PAGE_TIMING.settleMs, wait_ms: PAGE_TIMING.stepMs });
+    bindings = await run({ action: 'bind', inspiration, task, task_track, pick_nomination, pick_types, pick_highlight, settle_ms: PAGE_TIMING.settleMs, wait_ms: PAGE_TIMING.stepMs });
     if (inspiration !== undefined && bindings.inspiration !== inspiration) {
       throw Error(`SUBMIT_BINDING_NOT_APPLIED: 灵感绑定 shows 「${bindings.inspiration}」, not 「${inspiration}」 (an inspiration that belongs to a task is dropped when another task is picked)`);
     }
@@ -149,7 +149,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     step = await nextStep(run);
   } else if (inspiration !== undefined || task !== undefined) {
     throw Error(`SUBMIT_NO_SETTINGS_STEP: this effect's submit page has no 「${STEP.settings}」 step, so inspiration and task cannot be set`);
-  } else if (pick_nomination === true) {
+  } else if (pick_nomination === true || pick_types !== undefined || pick_highlight !== undefined) {
     throw Error(`SUBMIT_PICK_NOMINATION_UNAVAILABLE: this effect's submit page has no 「${STEP.settings}」 step`);
   }
   if (step !== STEP.review) throw Error(`SUBMIT_PAGE_CHANGED: expected the 「${STEP.review}」 step, the page moved to 「${step}」`);
@@ -173,7 +173,7 @@ async function fillSubmitPage(run, { name, trigger_hint, camera, inspiration, ta
     step,
     filled: { icons: basic.icons, name: basic.name, trigger_hint: basic.trigger_hint, camera: basic.camera },
     bindings: bindings && { inspiration: bindings.inspiration, task: bindings.task },
-    pick_nomination: bindings?.pick_nomination ?? { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null },
+    pick_nomination: bindings?.pick_nomination ?? { available: false, checked: null, remaining: null, daily_limit: null, disabled: false, text: null, types: [], type_options: [], highlight: null },
     other_sections: otherSections,
     review,
     next,
@@ -405,12 +405,18 @@ const methods = {
     return this.withQuietWindows(() => this.runSubmitPrepare(args));
   },
 
-  async runSubmitPrepare({ name, trigger_hint, camera, inspiration, task, task_track, pick_nomination } = {}) {
+  async runSubmitPrepare({ name, trigger_hint, camera, inspiration, task, task_track, pick_nomination, pick_types, pick_highlight } = {}) {
     this.ensureCompatible('submit');
     if (typeof name !== 'string' || !name) throw Error('INVALID_NAME: pass the effect name');
     if (camera !== undefined && !Object.prototype.hasOwnProperty.call(CAMERA, camera)) throw Error(`INVALID_CAMERA: ${camera}; valid: ${Object.keys(CAMERA).join(', ')}`);
     if (task_track !== undefined && task === undefined) throw Error('INVALID_TASK: task_track needs task');
     if (pick_nomination !== undefined && typeof pick_nomination !== 'boolean') throw Error('INVALID_PICK_NOMINATION: pass true or false');
+    if (pick_types !== undefined && (!Array.isArray(pick_types) || !pick_types.length || pick_types.some((t) => typeof t !== 'string' || !t.trim()))) {
+      throw Error('INVALID_PICK_TYPES: pass a non-empty array of 提报类型 display labels');
+    }
+    if (pick_types !== undefined && pick_nomination === false) throw Error('INVALID_PICK_TYPES: pick_types cannot be set with pick_nomination=false');
+    if (pick_highlight !== undefined && typeof pick_highlight !== 'string') throw Error('INVALID_PICK_HIGHLIGHT: pass the 亮点 text');
+    if (pick_highlight !== undefined && pick_nomination === false) throw Error('INVALID_PICK_HIGHLIGHT: pick_highlight cannot be set with pick_nomination=false');
     const closed_previous = await closeWindows(openWindows(SUBMIT_WINDOW));
     const check = await this.submitChecks();
     if (!check.ok) return { opened: false, check, closed_previous };
@@ -426,7 +432,7 @@ const methods = {
         await closeWindows([win]);
         return { opened: false, check, closed_previous };
       }
-      return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track, pick_nomination })) };
+      return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track, pick_nomination, pick_types, pick_highlight })) };
     } catch (e) {
       if (e.message.startsWith('PROJECT_EXPORT_FAILED:')) {
         await closeWindows([win]);
