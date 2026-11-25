@@ -23,6 +23,7 @@ const delivery = require('./features/delivery.cjs');
 const community = require('./features/community.cjs');
 const discover = require('./features/discover.cjs');
 const music = require('./features/music.cjs');
+const audioSource = require('./features/audiosource.cjs');
 const preview = require('./features/preview.cjs');
 const search = require('./features/search.cjs');
 const aicombine = require('./features/aicombine.cjs');
@@ -40,7 +41,7 @@ const assetops = require('./features/assetops.cjs');
 const templatesTimeline = require('./features/templates_timeline.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, previewinput, aivfx, customgan, imageedit, assetops, templatesTimeline, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, discover, music, audioSource, preview, search, aicombine, ai3d, arvideo, aimakeup, makeup, quiet, previewinput, aivfx, customgan, imageedit, assetops, templatesTimeline, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -83,4 +84,6 @@ module.exports = {
   AI_MAKEUP_HISTORY_PAGE: aimakeup.HISTORY_PAGE,
   CUSTOM_GAN_SELECT_COUNT: customgan.SELECT_COUNT,
   IMAGE_MATTING_PARTS: imageedit.PARTS,
+  AUDIO_SOURCE_MODES: audioSource.MODES,
+  AUDIO_SOURCE_ASSET_KINDS: Object.keys(audioSource.ASSET_TYPES),
 };

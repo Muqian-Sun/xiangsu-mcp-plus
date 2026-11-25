@@ -114,7 +114,7 @@ const REQUEST_TIMEOUT_MS = 15000;
 
 async function request(lib, what, path, opts = {}) {
   let out = await send(lib, what, path, opts);
-  if (out.code === BUSY_CODE && !opts.json && !opts.form) {
+  if (out.code === BUSY_CODE && !opts.json && !opts.form && !opts.multipart) {
     await new Promise((r) => setTimeout(r, BUSY_RETRY_MS));
     out = await send(lib, what, path, opts);
   }
@@ -122,12 +122,12 @@ async function request(lib, what, path, opts = {}) {
   return out.data;
 }
 
-async function send(lib, what, path, { query = {}, json, form, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+async function send(lib, what, path, { query = {}, json, form, multipart, timeoutMs = REQUEST_TIMEOUT_MS, sessionCookie } = {}) {
   lib.ensureCompatible('community');
   const base = lib.mod(M.urls).Domain.kBackendApiURL;
   const utils = lib.mod(M.bizUtils);
   const headers = {
-    cookie: await new (lib.mod(M.orionui).CookieManager)().getCookie(base),
+    cookie: sessionCookie ?? await new (lib.mod(M.orionui).CookieManager)().getCookie(base),
     'x-api-sign-data': utils.PlatformUtils.genSignData(),
     'user-agent': utils.UserAgentUtils.userAgentGenerator()(),
   };
@@ -137,6 +137,8 @@ async function send(lib, what, path, { query = {}, json, form, timeoutMs = REQUE
   if (json) {
     headers['content-type'] = 'application/json';
     Object.assign(init, { method: 'POST', body: JSON.stringify(json) });
+  } else if (multipart) {
+    Object.assign(init, { method: 'POST', body: multipart });
   } else if (form) {
     const body = new FormData();
     for (const [k, v] of Object.entries(form)) body.append(k, String(v));
@@ -1299,4 +1301,4 @@ const METHODS = {
   douyin_hot_detail: 'douyinHotDetail',
 };
 
-module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, DOUYIN_APP_ID, FAILED_STATUSES, request, requireId, str, first, iso, appEffectId, slimInspiration };
+module.exports = { methods, METHODS, INNOVATION_KINDS, SUBJECT_KINDS, RANK_TYPES, RANK_FILTERS, TREND_CYCLES, MESSAGE_GROUPS, MESSAGE_MAX, DOUYIN_APP_ID, FAILED_STATUSES, request, send, requireId, str, first, iso, appEffectId, slimInspiration };

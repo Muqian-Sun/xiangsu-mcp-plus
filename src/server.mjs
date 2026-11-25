@@ -33,6 +33,10 @@ import { ensurePlugin } from './plugininstall.mjs';
 import { platformRequest } from './opsdata.mjs';
 import { DEFAULT_FONT } from './editorres.mjs';
 import { PRESETS as SFX_PRESETS, PITCH_RANGE, SR as SFX_RATE, synth, writeSound } from './sfx.mjs';
+import { prepareAudioTemplate, openAudioProject } from './audiotemplate.mjs';
+import { renderAudio, AUDIO_EFFECTS } from './audioedit.mjs';
+import { validateAudioSourceAsset, saveAudioSourceTask } from './audiosource.mjs';
+import { AudioSubmissions, prepareAudioSubmission } from './audiosubmit.mjs';
 import { PHOTO_SECONDS, TYPES as PREVIEW_TYPES, addPreviewModel } from './previewmodels.mjs';
 import { setSceneLayers } from './scenelayers.mjs';
 import { DIRECT_TOOLS, isNativeDeferredClient, searchTools, withHiddenToolHints } from './tool-catalog.mjs';
@@ -42,7 +46,7 @@ import { buildImageSheet } from './imagesheet.mjs';
 import { cropBuffer, exportAudio, imageMetaFromPng, isVideoPath, probeAudio, videoContactSheet } from './mediainfo.mjs';
 import { buildH5Bundle, subsetH5Font } from './h5.mjs';
 
-const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE, CUSTOM_GAN_SELECT_COUNT, IMAGE_MATTING_PARTS } = createRequire(
+const { INNOVATION_KINDS, MAX_MENU_PREVIEW, RANK_TYPES, RANK_FILTERS, EFFECT_SEARCH_KINDS, SEARCH_MAX, SCRIPT_TAGS, SCRIPT_MAX, AI3D_FACE_NUM, AI3D_IMAGE_LIMIT, AI3D_VIDEO_LIMIT, AI3D_MAX_RUNNING, AI3D_PRESET_MODELS, AI3D_HISTORY_PAGE, AR_VIDEO_MODES, AR_VIDEO_HISTORY_PAGE, AI_MAKEUP_IMAGE_LIMIT, AI_MAKEUP_HISTORY_PAGE, CUSTOM_GAN_SELECT_COUNT, IMAGE_MATTING_PARTS, AUDIO_SOURCE_MODES, AUDIO_SOURCE_ASSET_KINDS } = createRequire(
   import.meta.url,
 )('../editor-plugin/library.cjs');
 const rankFilter = (key) => z.array(z.enum(Object.keys(RANK_FILTERS[key].options))).optional();
@@ -57,6 +61,16 @@ const target = {
   project_path: z.string().optional().describe('Target project path (omit when only one window is open).'),
   instance_id: z.string().optional().describe('Official instance_id (alternative to project_path).'),
 };
+
+const audioClip = z.strictObject({
+  file_path: z.string().min(1).describe('Absolute local audio path; native packaging requires MP3.'),
+  start_s: z.number().min(0).optional().describe('Position on the output timeline, in seconds; overlap mixes, adjacent positions splice.'),
+  trim_start_s: z.number().min(0).optional(), trim_end_s: z.number().gt(0).optional(),
+  volume: z.number().min(0).optional().describe('Linear gain; 1 keeps the original level.'),
+  speed: z.number().gt(0).optional().describe('Tempo multiplier independent of pitch.'),
+  pitch_semitones: z.number().optional(), fade_in_s: z.number().min(0).optional(), fade_out_s: z.number().min(0).optional(),
+  effect: z.enum(AUDIO_EFFECTS).optional().describe('Desktop FFmpeg convenience presets, not mobile SDK effect equivalence.'),
+});
 
 const saveTo = z.string().min(1).optional().describe('Directory (absolute path, created if missing) to save the output into for long-term keeping.');
 const refBox = z
@@ -331,6 +345,13 @@ export function createServer(deps = {}) {
     inspirationImagesDir: () => framesDir({ root: path.join(os.tmpdir(), 'xs-inspiration-images') }),
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
     writeSound,
+    prepareAudioTemplate,
+    openAudioProject,
+    renderAudio,
+    validateAudioSourceAsset,
+    saveAudioSourceTask,
+    prepareAudioSubmission,
+    audioSubmissions: new AudioSubmissions(),
     addPreviewModel,
     // Expiry timers must not keep the process alive after the client goes away.
     schedule: (fn, ms) => setTimeout(fn, ms).unref(),
@@ -500,6 +521,10 @@ export function createServer(deps = {}) {
     const pids = d.listInstances().map((s) => s.pid).sort((a, b) => a - b);
     if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpPlus plugin inside it)');
     return { pid: pids[0] };
+  };
+  const audioSourceCall = async (method, args, timeoutMs = 30000) => {
+    const { project_path, instance_id, ...params } = args;
+    return d.callPlugin(method, params, { ...(await homeWindow({ project_path, instance_id })), timeoutMs });
   };
   // Received state and bindings change outside tasks_list (task_receive, the app), so a miss or a
   // stale entry is re-read once before it is reported.
@@ -2520,6 +2545,139 @@ export function createServer(deps = {}) {
         if (!task_id) throw Error('INVALID_ARGUMENTS(ar_video): task_id is required for action=cancel');
         return plugin('ar_video_cancel')({ project_path, instance_id, task_id });
       },
+    },
+    {
+      name: 'audio_source_submit_prepare',
+      keywords: '音源 歌曲改编 原创短歌 投稿 准备 预览 audio source submission prepare',
+      description: 'Prepare an independent type-14 audio artwork submission from an audio_template_prepare manifest, PNG icon and MP4 showcase with audio. Validates package hashes/source media and embedded template, pre-reviews source tracks and showcase soundtrack, uploads resources with hash readback, and starts a template performance check. Returns the exact request/account/assets and a persistent submission_id for review. Creates no artwork. allow_project_reuse defaults false; task bindings and co-submission of a video template are not included. Optional cover_path defaults to icon_path. share_id is the native share association if already available. No phone/emulator. Actual submission is a separate audio_source_submit call; the live posting path has not been exercised in testing.',
+      shape: { ...target, manifest_path: absPath('manifest.json from audio_template_prepare'), icon_path: absPath('PNG icon'), showcase_path: absPath('MP4 showcase with audio'), cover_path: absPath('Optional PNG cover').optional(), name: z.string().trim().min(1).optional(), description: z.string().optional(), share_id: z.string().trim().min(1).optional(), allow_project_reuse: z.boolean().optional() },
+      run: async ({ project_path, instance_id, ...args }) => {
+        const win = await homeWindow({ project_path, instance_id });
+        const call = (method, params = {}, timeoutMs = 30000) => d.callPlugin(method, params, { ...win, timeoutMs });
+        const prepared = await d.prepareAudioSubmission(args, {
+          validate: d.validateAudioSourceAsset, openProject: d.openAudioProject, render: d.renderAudio,
+          context: () => call('audio_source_submit_context'),
+          review: params => call('audio_source_review', params, 60000),
+          upload: params => call('audio_source_upload', params, 120000),
+          checkStart: params => call('audio_source_check_start', params),
+          checkQuery: params => call('audio_source_check_task', params),
+        });
+        return text(d.audioSubmissions.prepare(prepared));
+      },
+    },
+    {
+      name: 'audio_source_submit',
+      keywords: '音源 歌曲改编 原创短歌 投稿 正式 提交 audio source submit publish',
+      description: 'Actually submit the named prepared type-14 audio artwork for review. This can create a real artwork: invoke only after the user explicitly requests submission of this specific prepared work. submission_id comes from audio_source_submit_prepare; name must match its reviewed name and the current account must match. Requires a passed live template performance check. A persistent attempt marker prevents resending the same preparation after timeouts/restarts; repeated calls return the stored receipt or an explicit unknown outcome. Never retries the POST. submitted means a server effect_id was returned, not that moderation/listing passed. No phone/emulator. Live artwork submission remains untested.',
+      shape: { ...target, submission_id: z.string().min(1), name: z.string().trim().min(1) },
+      run: async ({ project_path, instance_id, submission_id, name }) => {
+        const win = await homeWindow({ project_path, instance_id });
+        const account = await d.callPlugin('audio_source_submit_context', {}, win);
+        return text(await d.audioSubmissions.submit({ submission_id, name, account }, {
+          check: async record => {
+            const result = await d.callPlugin('audio_source_check_task', { job_id: record.summary.performance_job_id }, win);
+            if (!result.passed) throw Error('AUDIO_SUBMIT_CHECKS_NOT_PASSED: query audio_source_package_check and wait or fix the package; no artwork was submitted');
+          },
+          send: params => d.callPlugin('audio_source_submit', params, { ...win, timeoutMs: 90000 }),
+        }));
+      },
+    },
+    {
+      name: 'audio_source_config',
+      keywords: '音源 配置 曲风 genre audio source config',
+      description: 'Read audio-source generation availability for create/cover scenes and the available music genres. Uses a logged-in Xiangsu desktop window; no phone or emulator. Does not create an artwork.',
+      shape: { ...target },
+      run: async (a) => text(await audioSourceCall('audio_source_config', a)),
+    },
+    {
+      name: 'audio_source_generate',
+      keywords: '音源 歌曲改编 原创短歌 AI 生成 主题 歌词 audio source generate lyrics cover',
+      description: 'Start a music generation job: theme requires idea; lyrics generates a new song from supplied lyrics; cover requires reference_uri (decrypted_uri returned by audio_source_upload for your own/reference-authorized audio). Lyrics mode does not rewrite an existing song while preserving its melody. Advanced settings apply to theme/lyrics; cover uses native defaults. style is required for all modes. Query/download with audio_source_task and check individual track results. This creates an audio job, never an artwork submission. Uses desktop login, no mobile device or automatic retry.',
+      shape: { ...target, mode: z.enum(AUDIO_SOURCE_MODES), style: z.string().trim().min(1), idea: z.string().min(1).optional(), lyrics: z.string().min(1).optional(), reference_uri: z.string().min(1).optional(), settings: z.strictObject({ gender: z.enum(['', 'male', 'female']).optional(), original_maintainance: z.number().int().min(0).optional(), musical_style: z.number().int().min(0).optional(), freedom: z.number().int().min(0).optional() }).optional().describe('Native integer generation settings. Defaults match mobile. Non-default create settings were tested with 25/50/75; the backend validates other values.') },
+      // Picked bridge budget: the tested generation request has a 60 s HTTP timeout.
+      run: async (a) => text(await audioSourceCall('audio_source_generate', a, 90000)),
+    },
+    {
+      name: 'audio_source_beats',
+      keywords: '音源 歌曲 节拍 卡点 BPM beats audio source',
+      description: 'Parse musical beats using the official audio service. reference_uri is the plain decrypted_uri from audio_source_upload, not its encrypted uri or URL. Returns BPM and beat timestamps in seconds. Uses desktop login; no mobile device or artwork submission.',
+      shape: { ...target, reference_uri: z.string().min(1) },
+      run: async a => text(await audioSourceCall('audio_source_beats', a, 90000)),
+    },
+    {
+      name: 'audio_source_align',
+      keywords: '音源 歌词 对齐 逐字 时间戳 lyric alignment audio source',
+      description: 'Align supplied lyrics to an accessible audio_url with the official service, retaining copyright checks. Returns line timestamps in seconds and optionally word timestamps. Use lyrics matching your audio. Uses desktop login, no phone/emulator or artwork submission.',
+      shape: { ...target, audio_url: z.string().url(), lyrics: z.string().trim().min(1), include_words: z.boolean().optional() },
+      run: async a => text(await audioSourceCall('audio_source_align', a, 90000)),
+    },
+    {
+      name: 'audio_source_task',
+      keywords: '音源 生成 任务 查询 下载 audio source task download',
+      description: 'Query a music generation job. usable=true requires a completed job and every track to be Success with a URL; completed jobs with Failed tracks are not usable. save_to downloads usable MP3s plus lyrics/metadata to a new local child directory, probes the real MP3s and returns paths/hashes. Running/failed/incomplete jobs return an explicit download status instead of files. include_lyrics defaults false to keep responses small. No artwork submission.',
+      shape: { ...target, task_id: z.string().min(1), include_lyrics: z.boolean().optional(), save_to: absPath('保存目录').optional() },
+      run: async ({ save_to, include_lyrics = false, ...a }) => {
+        const result = await audioSourceCall('audio_source_task', { ...a, include_lyrics: include_lyrics || !!save_to });
+        if (save_to) result.download = await d.saveAudioSourceTask(result, save_to);
+        if (!include_lyrics) result.tracks = result.tracks.map(({ lyrics, ...track }) => track);
+        return text(withRefs(result, d.refs));
+      },
+    },
+    {
+      name: 'audio_source_upload',
+      keywords: '音源 上传 音频 图标 展示视频 工程 模板 audio source upload',
+      description: 'Upload an audio-source preparation asset using the official desktop uploader, then verify the CDN readback SHA-256. kind=audio (MP3, default), icon (PNG), showcase (MP4 with audio), template/project (ZIP). Returns encrypted uri, decrypted_uri and URL. Cover generation uses the audio decrypted_uri; package checks use encrypted template/icon uri. Audio review is separate (audio_source_review). Uploading creates an asset, never an artwork. No simulator or phone.',
+      shape: { ...target, file_path: absPath('文件路径'), kind: z.enum(AUDIO_SOURCE_ASSET_KINDS).optional() },
+      run: async (a) => {
+        const media = await d.validateAudioSourceAsset({ file_path: a.file_path, kind: a.kind ?? 'audio' });
+        // Picked bridge budget for the upload SDK plus a verified 30 s CDN readback request.
+        return text({ ...(await audioSourceCall('audio_source_upload', a, 120000)), media });
+      },
+    },
+    {
+      name: 'audio_source_review',
+      keywords: '音源 音频 预审 检查 audio source review',
+      description: 'Pre-review a local MP3 through the verified audio review endpoint. Does not upload a reusable resource or create/submit an artwork. A passed review has no resource URI; use audio_source_upload separately. Requires desktop login, no phone or emulator.',
+      shape: { ...target, file_path: absPath('音频路径') },
+      run: async (a) => {
+        await d.validateAudioSourceAsset({ file_path: a.file_path, kind: 'audio' });
+        return text(await audioSourceCall('audio_source_review', a, 60000));
+      },
+    },
+    {
+      name: 'audio_source_package_check',
+      keywords: '音源 模板 包 性能 预检 audio source package performance check',
+      description: 'Template performance precheck only: start with name and encrypted template_uri/icon_uri from audio_source_upload; cover_uri defaults to icon_uri. Query with job_id. Uses the native audio flow ArtworkType=2 performance check and creates no artwork. The service can pass a template missing its audio file, so passed does not prove media/source integrity; use audio_template_prepare for local package integrity. No submission or mobile device.',
+      shape: { ...target, action: z.enum(['start', 'query']), name: z.string().min(1).optional(), template_uri: z.string().min(1).optional(), icon_uri: z.string().min(1).optional(), cover_uri: z.string().min(1).optional(), job_id: z.string().min(1).optional() },
+      run: async ({ action, ...a }) => {
+        if (action === 'start') {
+          if (a.job_id !== undefined) throw Error('AUDIO_SOURCE_CHECK_ARGUMENT_CONFLICT: job_id applies to query');
+          return text(await audioSourceCall('audio_source_check_start', a));
+        }
+        if (['name', 'template_uri', 'icon_uri', 'cover_uri'].some(key => a[key] !== undefined)) throw Error('AUDIO_SOURCE_CHECK_ARGUMENT_CONFLICT: template fields apply to start');
+        return text(await audioSourceCall('audio_source_check_task', a));
+      },
+    },
+    {
+      name: 'audio_render',
+      keywords: '音源 音频 多轨 混音 拼接 音量 变速 变调 淡入 淡出 降噪 回声 audio render mix pitch tempo fade',
+      description: 'Render local audio clips to MP3/WAV with trims, timeline offsets, mixing, linear gain, independent speed/pitch, fades and explicit FFmpeg effects. start_s sets each clip position: overlap mixes; adjacent positions splice. Runs locally using desktop FFmpeg, no editor session/mobile device. Effects use FFmpeg rather than the mobile SDK. Does not upload or submit. Pitch, fades and effects are baked into output audio; use that output as a native project clip.',
+      shape: { clips: z.array(audioClip).min(1), export_path: absPath('Output .mp3 or .wav') },
+      run: async args => text(await d.renderAudio(args)),
+    },
+    {
+      name: 'audio_project_open',
+      keywords: '音源 工程 打开 续编 草稿 多轨 audio source project open edit',
+      description: 'Open a native audio-source cloud-draft ZIP (type 14), validate and decode its media, and return editable clips with extracted absolute paths, trim/gain/speed/timeline positions. Edit these clips, render with audio_render and save a new source/template using audio_template_prepare. Supports basic NLE audio timelines; unsupported native filters fail explicitly. Does not claim official App UI verification or execute native SDK validation on every file. No mobile device, upload or submission.',
+      shape: { project_zip: absPath('AudioProject.zip'), out_dir: outDir },
+      run: async args => text(await d.openAudioProject(args)),
+    },
+    {
+      name: 'audio_template_prepare',
+      keywords: '音源 原生 工程 模板 打包 audio native template package',
+      description: 'Build native AudioTemplate (artwork type 14) template and cloud-draft ZIPs from a single MP3 or MP3 clips with timeline offsets, trims, gain and speed. Accepts edited audio_project_open clips to save a continued project. Render pitch/fades/effects with audio_render first. Runs locally without a phone, emulator, editor session or network using installed desktop FFmpeg. Preserves source MP3 bytes. Returns AudioTemplate.zip, AudioProject.zip and a manifest. Single/two-track source samples have native SDK restore/save/reopen coverage; SDK media rendering and official App UI reopening are unverified. Compatibility target: 像塑 17.8.0. No upload or submission. Each output still needs its own validation.',
+      shape: { audio_path: absPath('Single MP3 input; supply audio_path or clips.').optional(), clips: z.array(audioClip).min(1).optional().describe('Editable MP3 clips, including audio_project_open results. Native gain, speed, trim and timeline positions are preserved. Render pitch/fades/effects first.'), out_dir: outDir, name: z.string().trim().min(1).optional() },
+      run: async (args) => text(await d.prepareAudioTemplate(args)),
     },
     {
       name: 'sfx_synth',
